@@ -1979,17 +1979,39 @@ function nearestLevel(value) {
     return best;
 }
 
+function findMaxDivergence(curve) {
+    const blSmoothed = smoothPhaseValues(curve.baseline, PHASE_SMOOTH_PASSES);
+    const dsSmoothed = smoothPhaseValues(curve.desired, PHASE_SMOOTH_PASSES);
+    let best = null;
+    const len = Math.min(blSmoothed.length, dsSmoothed.length);
+    for (let j = 0; j < len; j++) {
+        const diff = dsSmoothed[j].value - blSmoothed[j].value;
+        if (!best || Math.abs(diff) > Math.abs(best.diff)) {
+            best = { hour: dsSmoothed[j].hour, value: dsSmoothed[j].value, diff };
+        }
+    }
+    return best;
+}
+
 function placePeakDescriptors(group, curvesData, pointsKey, baseDelay) {
-    // For baseline: pick the worst point (trough) so user empathises with their condition
-    // For target: pick the best point (peak) so user sees what we're striving for
+    // Baseline: worst point (trough) — user empathises with their condition
+    // Target: max divergence from baseline — where the stack helps the most
     const useWorst = pointsKey === 'baseline';
 
     const items = [];
     for (let i = 0; i < curvesData.length; i++) {
         const curve = curvesData[i];
         if (!curve.levels) continue;
-        const pts = curve[pointsKey];
-        const keyPoint = useWorst ? findCurveTrough(pts) : findCurvePeak(pts);
+
+        let keyPoint;
+        if (useWorst) {
+            keyPoint = findCurveTrough(curve[pointsKey]);
+        } else {
+            // Place target label at max divergence point
+            const div = findMaxDivergence(curve);
+            keyPoint = div || findCurvePeak(curve[pointsKey]);
+        }
+
         const level = nearestLevel(keyPoint.value);
         const descriptor = curve.levels[String(level)];
         if (!descriptor) continue;
@@ -2121,32 +2143,33 @@ async function morphToDesiredCurves(curvesData) {
     arrowGroup.innerHTML = '';
 
     // Compute one arrow per curve at the point of maximum divergence
-    // Use smoothed values (same as phasePointsToPath applies internally)
     const allArrows = [];
     for (let i = 0; i < curvesData.length; i++) {
         const curve = curvesData[i];
+        const div = findMaxDivergence(curve);
+        if (!div || Math.abs(div.diff) < 5) continue;
+        // Get baseline value at the same hour
         const blSmoothed = smoothPhaseValues(curve.baseline, PHASE_SMOOTH_PASSES);
-        const dsSmoothed = smoothPhaseValues(curve.desired, PHASE_SMOOTH_PASSES);
-
-        let maxDivergence = null;
-        const len = Math.min(blSmoothed.length, dsSmoothed.length);
-        for (let j = 0; j < len; j++) {
-            const diff = dsSmoothed[j].value - blSmoothed[j].value;
-            if (!maxDivergence || Math.abs(diff) > Math.abs(maxDivergence.diff)) {
-                maxDivergence = { hour: blSmoothed[j].hour, baseVal: blSmoothed[j].value, desiredVal: dsSmoothed[j].value, diff };
-            }
-        }
-        if (maxDivergence && Math.abs(maxDivergence.diff) > 5) {
-            allArrows.push({ curve, arrow: maxDivergence });
-        }
+        const match = blSmoothed.reduce((a, b) => Math.abs(b.hour - div.hour) < Math.abs(a.hour - div.hour) ? b : a);
+        allArrows.push({ curve, arrow: { hour: div.hour, baseVal: match.value, desiredVal: div.value, diff: div.diff } });
     }
 
-    // Phase 1: Grow one arrow per curve from baseline → desired (800ms)
+    // Phase 1: Grow elegant arrows from baseline → desired (900ms)
     for (const { curve, arrow } of allArrows) {
         const x = phaseChartX(arrow.hour * 60);
         const y1 = phaseChartY(arrow.baseVal);
         const y2 = phaseChartY(arrow.desiredVal);
 
+        // Subtle glow behind the arrow shaft
+        const glowLine = svgEl('line', {
+            x1: x.toFixed(1), y1: y1.toFixed(1),
+            x2: x.toFixed(1), y2: y1.toFixed(1),
+            stroke: curve.color, 'stroke-width': '4', 'stroke-opacity': '0',
+            'stroke-linecap': 'round', fill: 'none', 'pointer-events': 'none',
+        });
+        arrowGroup.appendChild(glowLine);
+
+        // Main arrow shaft
         const arrowLine = svgEl('line', {
             x1: x.toFixed(1), y1: y1.toFixed(1),
             x2: x.toFixed(1), y2: y1.toFixed(1),
@@ -2154,15 +2177,18 @@ async function morphToDesiredCurves(curvesData) {
         });
         arrowGroup.appendChild(arrowLine);
 
-        // Animate with rAF for precise SVG attribute control
+        // Animate both shaft and glow
         const startTime = performance.now();
-        const animDur = 800;
-        arrowLine.setAttribute('opacity', '0.6');
+        const animDur = 900;
         (function animateArrow() {
             const t = Math.min(1, (performance.now() - startTime) / animDur);
             const ease = 1 - Math.pow(1 - t, 3);
-            arrowLine.setAttribute('opacity', String(0.6 * Math.min(1, t * 2.5)));
-            arrowLine.setAttribute('y2', (y1 + (y2 - y1) * ease).toFixed(1));
+            const curY = y1 + (y2 - y1) * ease;
+            const opacity = 0.7 * Math.min(1, t * 2.5);
+            arrowLine.setAttribute('opacity', String(opacity));
+            arrowLine.setAttribute('y2', curY.toFixed(1));
+            glowLine.setAttribute('stroke-opacity', String(0.15 * Math.min(1, t * 2.5)));
+            glowLine.setAttribute('y2', curY.toFixed(1));
             if (t < 1) requestAnimationFrame(animateArrow);
         })();
     }

@@ -1160,10 +1160,12 @@ body.phase-engaged .top-controls {
 
 /* Mission arrows from baseline → desired */
 .mission-arrow {
-    stroke-width: 1.7;
-    stroke-opacity: 0.72;
+    stroke-width: 1.5;
+    stroke-opacity: 0.8;
+    stroke-linecap: round;
     fill: none;
     marker-end: url(#arrowhead);
+    filter: drop-shadow(0 0 3px currentColor);
 }
 
 /* Y-axis tick hover descriptors */
