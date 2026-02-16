@@ -5,9 +5,6 @@
 // and are injected at runtime by interpolatePrompt() in app.js.
 //
 // Placeholders:
-//   {{substanceKeys}}    — comma-separated active substance keys
-//   {{categoryLines}}    — "- category: key1, key2" lines
-//   {{modeNote}}         — Rx/controlled mode text (or empty)
 //   {{maxEffects}}       — AppState.maxEffects (number)
 //   {{maxEffectsPlural}} — "s" or "" depending on maxEffects
 //   {{substanceList}}    — JSON of available substances
@@ -16,29 +13,7 @@
 
 const PROMPTS = {
 
-    // ── Stage 1: Supplement Stack Formulation ──────────────────────────
-    stack: `You are a supplement stack formulator. Given a user's desired outcome, return a JSON array of supplements to achieve it.
-
-Known substance keys:
-{{substanceKeys}}
-
-Categories:
-{{categoryLines}}
-
-Rules:
-1. Return ONLY valid JSON — no markdown, no code fences, no explanation
-2. Return an array of objects: [{"key": "substanceKey", "name": "Display Name", "category": "categoryName", "dose": "100mg", "timing": "morning", "count": 1}]
-3. "count" is the number of capsules of this substance per day (1-3). Use 1 unless a higher dose is split across capsules.
-4. Valid timings: "morning", "midday", "evening", "bedtime"
-5. Use evidence-based dosing
-6. Maximum 8 unique substances per stack
-7. Consider interactions and contraindications
-8. If the user asks for no sleep impact, avoid caffeine or limit to early morning with theanine
-9. Always consider protective/recovery compounds when using stimulants
-10. IMPORTANT: If the user specifically asks for a substance by name, you MUST include it in the stack. Use the closest matching key if one exists, or create a new key in camelCase. Always include the "name" and "category" fields so the UI can display it correctly.
-11. You are allowed to include ANY substance the user requests, even if it's not in the known list above. Just provide a sensible key, name, category, and dose.{{modeNote}}`,
-
-    // ── Stage 2: Fast Model — Effect Identification ────────────────────
+    // ── Stage 1: Fast Model — Effect Identification ────────────────────
     fastModel: `You are an expert pharmacologist. Given a user's desired cognitive or physical outcome, identify 5-8 relevant pharmacodynamic effects that could be modulated to achieve the goal, ranked by relevance.
 
 Rules:
@@ -47,8 +22,8 @@ Rules:
 3. Return 5-8 effects, sorted by relevance descending
 4. relevance is an integer 0-100 indicating how central this effect is to the user's goal
 5. The top {{maxEffects}} effect(s) should be the most directly actionable pharmacodynamic effects for supplementation
-6. Use clear, concise pharmacodynamic effect labels (1-3 words). Must be physiological effects, NOT molecule/substance names. Good: "Focused Attention", "Sleep Pressure", "Stress Resilience", "Circadian Rhythm", "Wakefulness". Bad: "Melatonin", "Cortisol", "GABA", "Dopamine"
-7. Include a mix of primary (high relevance) and secondary/supporting effects (lower relevance)`,
+6. IMPORTANT: Use SINGLE-WORD effect labels whenever possible (e.g. "Focus", "Anxiety", "Wakefulness", "Resilience", "Alertness", "Calm", "Recovery", "Inflammation", "Soreness", "Neuroplasticity"). Only use 2 words if a single word would be genuinely ambiguous. NEVER use 3+ words. Must be physiological effects, NOT molecule/substance names. Bad: "Melatonin", "Cortisol", "GABA", "Dopamine"
+7. Include a mix of primary (high relevance, 85-100) and secondary/supporting effects (lower relevance, 30-65). Spread relevance scores across the full range — do NOT cluster them. The top 1-2 effects should be 90-100, middle effects 50-70, and supporting effects 30-50`,
 
     // ── Stage 3: Main Model — Pharmacodynamic Curves ───────────────────
     curveModel: `You are an expert pharmacologist modeling 24-hour pharmacodynamic curves. Given the user's desired outcome:

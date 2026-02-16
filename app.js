@@ -282,6 +282,18 @@ const PhaseState = {
 
 const PHASE_STEPS = ['baseline-shown', 'curves-drawn', 'lx-rendered'];
 
+// Effect divider state (split-screen for 2-effect mode)
+const DividerState = {
+    active: false,
+    x: 480,             // SVG x-coord, default = center (maps to ~6pm)
+    fadeWidth: 50,       // crossfade zone width in SVG pixels
+    minOpacity: 0.12,    // ghost opacity on the "wrong" side
+    elements: null,      // { group, line, glow, diamond, hitArea }
+    masks: null,         // { leftGrad, rightGrad }
+    dragging: false,
+    dragCleanup: null,
+};
+
 // ============================================
 // 3b. PROMPT TEMPLATE INTERPOLATION
 // ============================================
@@ -327,6 +339,299 @@ function chartTheme() {
         orbitalRing2:   'rgba(200, 150, 255, 0.4)',
         arrowhead:      'rgba(255, 255, 255, 0.7)',
     };
+}
+
+// ============================================
+// 3c. EFFECT DIVIDER (split-screen for 2-effect mode)
+// ============================================
+
+/** Get or create a per-effect sub-group within a parent SVG group */
+function getEffectSubGroup(parentGroup, effectIdx) {
+    const id = `${parentGroup.id}-e${effectIdx}`;
+    let sub = parentGroup.querySelector(`#${id}`);
+    if (!sub) {
+        sub = svgEl('g', { id });
+        if (DividerState.active) {
+            sub.setAttribute('mask',
+                effectIdx === 0 ? 'url(#divider-mask-left)' : 'url(#divider-mask-right)');
+        }
+        parentGroup.appendChild(sub);
+    }
+    return sub;
+}
+
+/** Install SVG mask + gradient pairs into <defs> for the 2-effect divider */
+function installDividerMasks() {
+    const svg = document.getElementById('phase-chart-svg');
+    const defs = svg.querySelector('defs');
+    const minOp = DividerState.minOpacity;
+
+    // Left gradient: opaque on left, fades to dim at divider
+    const leftGrad = svgEl('linearGradient', {
+        id: 'divider-grad-left', gradientUnits: 'userSpaceOnUse',
+        x1: '0', y1: '0', x2: String(PHASE_CHART.viewW), y2: '0',
+    });
+    leftGrad.appendChild(svgEl('stop', { offset: '0', 'stop-color': 'white', 'stop-opacity': '1' }));
+    leftGrad.appendChild(svgEl('stop', { offset: '0.45', 'stop-color': 'white', 'stop-opacity': '1' }));
+    leftGrad.appendChild(svgEl('stop', { offset: '0.55', 'stop-color': 'white', 'stop-opacity': String(minOp) }));
+    leftGrad.appendChild(svgEl('stop', { offset: '1', 'stop-color': 'white', 'stop-opacity': String(minOp) }));
+    defs.appendChild(leftGrad);
+
+    // Right gradient: dim on left, fades to opaque at divider
+    const rightGrad = svgEl('linearGradient', {
+        id: 'divider-grad-right', gradientUnits: 'userSpaceOnUse',
+        x1: '0', y1: '0', x2: String(PHASE_CHART.viewW), y2: '0',
+    });
+    rightGrad.appendChild(svgEl('stop', { offset: '0', 'stop-color': 'white', 'stop-opacity': String(minOp) }));
+    rightGrad.appendChild(svgEl('stop', { offset: '0.45', 'stop-color': 'white', 'stop-opacity': String(minOp) }));
+    rightGrad.appendChild(svgEl('stop', { offset: '0.55', 'stop-color': 'white', 'stop-opacity': '1' }));
+    rightGrad.appendChild(svgEl('stop', { offset: '1', 'stop-color': 'white', 'stop-opacity': '1' }));
+    defs.appendChild(rightGrad);
+
+    // Left mask
+    const leftMask = svgEl('mask', {
+        id: 'divider-mask-left', maskUnits: 'userSpaceOnUse',
+        x: '0', y: '0', width: String(PHASE_CHART.viewW), height: '600',
+    });
+    leftMask.appendChild(svgEl('rect', {
+        x: '0', y: '0', width: String(PHASE_CHART.viewW), height: '600',
+        fill: 'url(#divider-grad-left)',
+    }));
+    defs.appendChild(leftMask);
+
+    // Right mask
+    const rightMask = svgEl('mask', {
+        id: 'divider-mask-right', maskUnits: 'userSpaceOnUse',
+        x: '0', y: '0', width: String(PHASE_CHART.viewW), height: '600',
+    });
+    rightMask.appendChild(svgEl('rect', {
+        x: '0', y: '0', width: String(PHASE_CHART.viewW), height: '600',
+        fill: 'url(#divider-grad-right)',
+    }));
+    defs.appendChild(rightMask);
+
+    DividerState.masks = { leftGrad, rightGrad };
+}
+
+/** Update mask gradient stop offsets based on divider x position */
+function updateDividerMasks(x) {
+    if (!DividerState.masks) return;
+    const { leftGrad, rightGrad } = DividerState.masks;
+    const halfFade = DividerState.fadeWidth / 2;
+    const viewW = PHASE_CHART.viewW;
+
+    const fadeStart = Math.max(0, (x - halfFade) / viewW);
+    const fadeEnd = Math.min(1, (x + halfFade) / viewW);
+
+    // Left gradient: 1,1 → minOp,minOp
+    const ls = leftGrad.children;
+    ls[1].setAttribute('offset', String(fadeStart));
+    ls[2].setAttribute('offset', String(fadeEnd));
+
+    // Right gradient: minOp,minOp → 1,1
+    const rs = rightGrad.children;
+    rs[1].setAttribute('offset', String(fadeStart));
+    rs[2].setAttribute('offset', String(fadeEnd));
+}
+
+/** Create the visual divider line + drag handle */
+function createDividerVisual() {
+    const svg = document.getElementById('phase-chart-svg');
+    const tooltipOverlay = document.getElementById('phase-tooltip-overlay');
+    const t = chartTheme();
+    const x = DividerState.x;
+    const plotTop = PHASE_CHART.padT;
+    const plotH = PHASE_CHART.plotH;
+
+    const group = svgEl('g', { id: 'effect-divider' });
+
+    // Subtle glow backdrop
+    const glow = svgEl('rect', {
+        x: String(x - 8), y: String(plotTop),
+        width: '16', height: String(plotH),
+        fill: t.scanGlow, rx: '8', 'pointer-events': 'none',
+    });
+    group.appendChild(glow);
+
+    // Thin divider line
+    const line = svgEl('rect', {
+        x: String(x - 0.75), y: String(plotTop),
+        width: '1.5', height: String(plotH),
+        fill: t.axisLine, 'fill-opacity': '0.35',
+        rx: '0.75', 'pointer-events': 'none', class: 'divider-line',
+    });
+    group.appendChild(line);
+
+    // Diamond handle at vertical center
+    const cy = plotTop + plotH / 2;
+    const diamond = svgEl('polygon', {
+        points: `${x},${cy - 7} ${x + 4.5},${cy} ${x},${cy + 7} ${x - 4.5},${cy}`,
+        fill: 'rgba(200, 210, 230, 0.2)', stroke: t.axisLine,
+        'stroke-width': '0.75', 'stroke-opacity': '0.45',
+        'pointer-events': 'none',
+    });
+    group.appendChild(diamond);
+
+    // Invisible hit area for drag
+    const hitArea = svgEl('rect', {
+        x: String(x - 15), y: String(plotTop),
+        width: '30', height: String(plotH),
+        fill: 'transparent', cursor: 'col-resize',
+        'pointer-events': 'all',
+        class: 'divider-hit-area',
+    });
+    group.appendChild(hitArea);
+
+    svg.insertBefore(group, tooltipOverlay);
+    DividerState.elements = { group, line, glow, diamond, hitArea };
+}
+
+/** Move all divider visual elements and update masks */
+function updateDividerPosition(x) {
+    const { line, glow, diamond, hitArea } = DividerState.elements;
+    const plotTop = PHASE_CHART.padT;
+    const plotH = PHASE_CHART.plotH;
+    const cy = plotTop + plotH / 2;
+
+    line.setAttribute('x', String(x - 0.75));
+    glow.setAttribute('x', String(x - 8));
+    hitArea.setAttribute('x', String(x - 15));
+    diamond.setAttribute('points',
+        `${x},${cy - 7} ${x + 4.5},${cy} ${x},${cy + 7} ${x - 4.5},${cy}`);
+
+    updateDividerMasks(x);
+
+    // Fade Y-axis labels based on divider position
+    const leftAxis = document.getElementById('phase-y-axis-left');
+    const rightAxis = document.getElementById('phase-y-axis-right');
+    if (leftAxis && rightAxis) {
+        const norm = (x - PHASE_CHART.padL) / PHASE_CHART.plotW; // 0=far left, 1=far right
+        leftAxis.style.transition = 'opacity 150ms ease';
+        rightAxis.style.transition = 'opacity 150ms ease';
+        leftAxis.style.opacity = String(0.3 + 0.7 * Math.min(1, norm * 2));
+        rightAxis.style.opacity = String(0.3 + 0.7 * Math.min(1, (1 - norm) * 2));
+    }
+}
+
+/** Attach drag handlers for the divider */
+function setupDividerDrag() {
+    const { hitArea } = DividerState.elements;
+    const svg = document.getElementById('phase-chart-svg');
+    const minX = PHASE_CHART.padL;
+    const maxX = PHASE_CHART.padL + PHASE_CHART.plotW;
+
+    function onDown(e) {
+        e.preventDefault();
+        DividerState.dragging = true;
+        DividerState.elements.line.setAttribute('fill-opacity', '0.55');
+    }
+
+    function onMove(e) {
+        if (!DividerState.dragging) return;
+        e.preventDefault();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const m = svg.getScreenCTM();
+        if (!m) return;
+        const svgX = (clientX - m.e) / m.a;
+        const clampedX = Math.max(minX, Math.min(maxX, svgX));
+        DividerState.x = clampedX;
+        updateDividerPosition(clampedX);
+    }
+
+    function onUp() {
+        if (!DividerState.dragging) return;
+        DividerState.dragging = false;
+        DividerState.elements.line.setAttribute('fill-opacity', '0.35');
+    }
+
+    hitArea.addEventListener('mousedown', onDown);
+    hitArea.addEventListener('touchstart', onDown, { passive: false });
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('touchend', onUp);
+
+    DividerState.dragCleanup = () => {
+        hitArea.removeEventListener('mousedown', onDown);
+        hitArea.removeEventListener('touchstart', onDown);
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('touchmove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.removeEventListener('touchend', onUp);
+    };
+}
+
+/** Apply divider masks to any existing sub-groups */
+function applyDividerMasksToExistingGroups() {
+    if (!DividerState.active) return;
+    const groupIds = [
+        'phase-baseline-curves', 'phase-desired-curves',
+        'phase-lx-curves', 'phase-mission-arrows',
+    ];
+    for (const gid of groupIds) {
+        const g = document.getElementById(gid);
+        if (!g) continue;
+        for (let ei = 0; ei < 2; ei++) {
+            const sub = g.querySelector(`#${gid}-e${ei}`);
+            if (sub) {
+                sub.setAttribute('mask',
+                    ei === 0 ? 'url(#divider-mask-left)' : 'url(#divider-mask-right)');
+            }
+        }
+    }
+}
+
+/** Activate the 2-effect divider if conditions are met */
+function activateDivider(curvesData) {
+    if (AppState.maxEffects < 2 || !curvesData || curvesData.length < 2) return;
+
+    DividerState.active = true;
+    DividerState.x = PHASE_CHART.padL + PHASE_CHART.plotW / 2; // center = ~6pm
+
+    installDividerMasks();
+    applyDividerMasksToExistingGroups();
+    createDividerVisual();
+    setupDividerDrag();
+    updateDividerPosition(DividerState.x);
+
+    // Fade in
+    DividerState.elements.group.style.opacity = '0';
+    DividerState.elements.group.animate(
+        [{ opacity: 0 }, { opacity: 1 }],
+        { duration: 600, fill: 'forwards' }
+    );
+}
+
+/** Clean up divider on chart reset */
+function cleanupDivider() {
+    if (DividerState.dragCleanup) DividerState.dragCleanup();
+    DividerState.dragCleanup = null;
+
+    const el = document.getElementById('effect-divider');
+    if (el) el.remove();
+
+    const svg = document.getElementById('phase-chart-svg');
+    if (svg) {
+        const defs = svg.querySelector('defs');
+        if (defs) {
+            ['divider-mask-left', 'divider-mask-right',
+             'divider-grad-left', 'divider-grad-right'].forEach(id => {
+                const node = defs.querySelector(`#${id}`);
+                if (node) node.remove();
+            });
+        }
+    }
+
+    // Reset Y-axis opacity
+    const leftAxis = document.getElementById('phase-y-axis-left');
+    const rightAxis = document.getElementById('phase-y-axis-right');
+    if (leftAxis) leftAxis.style.opacity = '';
+    if (rightAxis) rightAxis.style.opacity = '';
+
+    DividerState.active = false;
+    DividerState.elements = null;
+    DividerState.masks = null;
+    DividerState.dragging = false;
 }
 
 // ============================================
@@ -605,205 +910,7 @@ function buildCenterHub() {
 }
 
 // ============================================
-// 8. DYNAMIC SYSTEM PROMPT BUILDER
-// ============================================
-
-function buildSystemPrompt() {
-    const active = getActiveSubstances();
-    const keyList = Object.keys(active);
-
-    const byCategory = {};
-    for (const [key, sub] of Object.entries(active)) {
-        if (!byCategory[sub.category]) byCategory[sub.category] = [];
-        byCategory[sub.category].push(key);
-    }
-
-    const categoryLines = Object.entries(byCategory)
-        .map(([cat, keys]) => `- ${cat}: ${keys.join(', ')}`)
-        .join('\n');
-
-    let modeNote = '';
-    if (AppState.includeRx) {
-        modeNote += '\nRx MODE ENABLED: The user has opted in to prescription substances. You MAY include Rx substances like modafinil, armodafinil, methylphenidate, amphetamine, etc. when they fit the desired outcome. Note interactions and that these require a prescription.';
-    }
-    if (AppState.includeControlled) {
-        modeNote += '\nCONTROLLED SUBSTANCE MODE ENABLED: The user has opted in to controlled substances for research/therapeutic context. You MAY include substances like psilocybin (microdose), LSD (microdose), ketamine, MDMA, THC, CBD, etc. Use therapeutic/microdose protocols when applicable. Note legal status.';
-    }
-
-    return interpolatePrompt(PROMPTS.stack, {
-        substanceKeys: keyList.join(', '),
-        categoryLines,
-        modeNote,
-    });
-}
-
-// ============================================
-// 9. MULTI-LLM API CALLERS
-// ============================================
-
-async function callLLM(prompt) {
-    const llm = AppState.selectedLLM;
-    const key = AppState.apiKeys[llm];
-
-    if (!key) {
-        throw new Error(`No API key configured for ${llm}. Add your key in Settings.`);
-    }
-
-    try {
-        let rawStack;
-        switch (llm) {
-            case 'anthropic': rawStack = await callAnthropic(prompt, key); break;
-            case 'openai':    rawStack = await callOpenAI(prompt, key); break;
-            case 'grok':      rawStack = await callGrok(prompt, key); break;
-            case 'gemini':    rawStack = await callGemini(prompt, key); break;
-            default:          rawStack = await callAnthropic(prompt, key);
-        }
-
-        if (!rawStack || rawStack.length === 0) {
-            throw new Error('LLM returned an empty stack. Please try a different prompt.');
-        }
-
-        // Resolve substances — allow dynamic entries
-        const stack = rawStack.map(item => {
-            const key = item.key;
-            resolveSubstance(key, item);
-            return {
-                key,
-                dose: item.dose || '',
-                timing: ['morning', 'midday', 'evening', 'bedtime'].includes(item.timing)
-                    ? item.timing : 'morning',
-                count: Math.min(3, Math.max(1, parseInt(item.count) || 1)),
-            };
-        });
-
-        return sortStack(stack);
-    } catch (err) {
-        if (err instanceof Error) throw err;
-        throw new Error('API call failed: ' + String(err));
-    }
-}
-
-function parseJSONResponse(text) {
-    let jsonStr = text.trim();
-    const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (fenceMatch) jsonStr = fenceMatch[1].trim();
-    // Also handle case where LLM wraps in extra text
-    const bracketMatch = jsonStr.match(/\[[\s\S]*\]/);
-    if (bracketMatch) jsonStr = bracketMatch[0];
-    return JSON.parse(jsonStr);
-}
-
-async function callAnthropic(prompt, apiKey) {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-            'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-            model: 'claude-opus-4-6',
-            max_tokens: 1024,
-            system: buildSystemPrompt(),
-            messages: [{ role: 'user', content: prompt }],
-        }),
-    });
-
-    if (!response.ok) {
-        const err = await response.text();
-        console.warn('Anthropic API error:', err);
-        return null;
-    }
-
-    const data = await response.json();
-    return parseJSONResponse(data.content[0].text);
-}
-
-async function callOpenAI(prompt, apiKey) {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-            model: 'gpt-4o',
-            max_tokens: 1024,
-            messages: [
-                { role: 'system', content: buildSystemPrompt() },
-                { role: 'user', content: prompt },
-            ],
-        }),
-    });
-
-    if (!response.ok) {
-        const err = await response.text();
-        console.warn('OpenAI API error:', err);
-        return null;
-    }
-
-    const data = await response.json();
-    return parseJSONResponse(data.choices[0].message.content);
-}
-
-async function callGrok(prompt, apiKey) {
-    const response = await fetch('https://api.x.ai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-            model: 'grok-3',
-            max_tokens: 1024,
-            messages: [
-                { role: 'system', content: buildSystemPrompt() },
-                { role: 'user', content: prompt },
-            ],
-        }),
-    });
-
-    if (!response.ok) {
-        const err = await response.text();
-        console.warn('Grok API error:', err);
-        return null;
-    }
-
-    const data = await response.json();
-    return parseJSONResponse(data.choices[0].message.content);
-}
-
-async function callGemini(prompt, apiKey) {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            systemInstruction: { parts: [{ text: buildSystemPrompt() }] },
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { maxOutputTokens: 1024 },
-        }),
-    });
-
-    if (!response.ok) {
-        const err = await response.text();
-        console.warn('Gemini API error:', err);
-        return null;
-    }
-
-    const data = await response.json();
-    const text = data.candidates[0].content.parts[0].text;
-    return parseJSONResponse(text);
-}
-
-function sortStack(stack) {
-    const timingOrder = { morning: 0, midday: 1, evening: 2, bedtime: 3 };
-    stack.sort((a, b) => timingOrder[a.timing] - timingOrder[b.timing]);
-    return stack;
-}
-
-// ============================================
-// 9b. LLM DEBUG LOG
+// 9. LLM DEBUG LOG
 // ============================================
 
 const DebugLog = {
@@ -1653,16 +1760,33 @@ function highlightCurve(activeIdx, active) {
     for (const id of allGroupIds) {
         const g = document.getElementById(id);
         if (!g) continue;
-        for (const child of g.children) {
-            const stroke = child.getAttribute('stroke');
-            const fill = child.getAttribute('fill');
-            const belongsToActive = stroke === activeColor || fill === activeColor;
 
-            if (active) {
-                child.style.transition = transitionStyle;
-                child.style.filter = belongsToActive ? boostFilter : dimFilter;
-            } else {
-                child.style.filter = '';
+        // If per-effect sub-groups exist, apply filter at the sub-group level
+        const sub0 = g.querySelector(`#${id}-e0`);
+        if (sub0 && PhaseState.curvesData && PhaseState.curvesData.length >= 2) {
+            for (let ei = 0; ei < PhaseState.curvesData.length; ei++) {
+                const sub = g.querySelector(`#${id}-e${ei}`);
+                if (!sub) continue;
+                if (active) {
+                    sub.style.transition = transitionStyle;
+                    sub.style.filter = (ei === activeIdx) ? boostFilter : dimFilter;
+                } else {
+                    sub.style.filter = '';
+                }
+            }
+        } else {
+            // Fallback: original per-child color matching (1-effect mode)
+            for (const child of g.children) {
+                const stroke = child.getAttribute('stroke');
+                const fill = child.getAttribute('fill');
+                const belongsToActive = stroke === activeColor || fill === activeColor;
+
+                if (active) {
+                    child.style.transition = transitionStyle;
+                    child.style.filter = belongsToActive ? boostFilter : dimFilter;
+                } else {
+                    child.style.filter = '';
+                }
             }
         }
     }
@@ -1996,6 +2120,31 @@ const WORD_CLOUD_PALETTE = [
 
 let _wordCloudPositions = []; // stored bboxes for dismiss animation
 let _orbitalRingsState = null;
+let _wordCloudFloatId = null;
+
+function startWordCloudFloat() {
+    stopWordCloudFloat();
+    const t0 = performance.now();
+    function tick() {
+        const t = (performance.now() - t0) / 1000;
+        for (const pos of _wordCloudPositions) {
+            const phase = pos.x * 0.037 + pos.y * 0.029;
+            const dx = Math.sin(t * 0.5 + phase) * 3.5;
+            const dy = Math.cos(t * 0.4 + phase * 1.3) * 2.5;
+            pos.el.setAttribute('x', (pos.x + dx).toFixed(1));
+            pos.el.setAttribute('y', (pos.y + dy).toFixed(1));
+        }
+        _wordCloudFloatId = requestAnimationFrame(tick);
+    }
+    _wordCloudFloatId = requestAnimationFrame(tick);
+}
+
+function stopWordCloudFloat() {
+    if (_wordCloudFloatId) {
+        cancelAnimationFrame(_wordCloudFloatId);
+        _wordCloudFloatId = null;
+    }
+}
 
 // ---- Orbital Rings — encircle word cloud, morph into baseline curves ----
 
@@ -2003,42 +2152,42 @@ function startOrbitalRings(cx, cy) {
     const group = document.getElementById('phase-word-cloud');
     if (!group) return null;
 
-    const NPTS = 60;
-    const RX1 = 200, RY1 = 110;
-    const RX2 = 215, RY2 = 120;
-    const TILT1 = 14 * Math.PI / 180;
-    const TILT2 = -14 * Math.PI / 180;
+    const NPTS = 72;
+    const singleRing = AppState.maxEffects === 1;
+    const R1 = singleRing ? 148 : 140;
+    const R2 = 158;
 
     const ot = chartTheme();
     const ring1 = svgEl('path', {
         fill: 'none', stroke: ot.orbitalRing1,
         'stroke-width': '1.5', class: 'orbital-ring', opacity: '0',
     });
-    const ring2 = svgEl('path', {
-        fill: 'none', stroke: ot.orbitalRing2,
-        'stroke-width': '1.5', class: 'orbital-ring', opacity: '0',
-    });
-
-    group.insertBefore(ring2, group.firstChild);
     group.insertBefore(ring1, group.firstChild);
-
     ring1.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 800, fill: 'forwards' });
-    ring2.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 800, fill: 'forwards', delay: 120 });
+
+    let ring2 = null;
+    if (!singleRing) {
+        ring2 = svgEl('path', {
+            fill: 'none', stroke: ot.orbitalRing2,
+            'stroke-width': '1.5', class: 'orbital-ring', opacity: '0',
+        });
+        group.insertBefore(ring2, group.firstChild);
+        ring2.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 800, fill: 'forwards', delay: 120 });
+    }
 
     let running = true;
     let animId;
 
-    function computeD(t, rx, ry, tilt, phase) {
-        const cosT = Math.cos(tilt), sinT = Math.sin(tilt);
+    function computeD(t, r, phase) {
+        const breathe = 1 + 0.012 * Math.sin(t * 1.2 + phase);
         let d = '';
         for (let i = 0; i <= NPTS; i++) {
             const angle = (i / NPTS) * Math.PI * 2;
-            const wobble = 1 + 0.035 * Math.sin(angle * 3 + t * 1.8 + phase)
-                             + 0.02 * Math.sin(angle * 5 + t * 1.1);
-            const ex = rx * wobble * Math.cos(angle + t * 0.2 + phase * 0.5);
-            const ey = ry * wobble * Math.sin(angle + t * 0.2 + phase * 0.5);
-            const px = cx + ex * cosT - ey * sinT;
-            const py = cy + ex * sinT + ey * cosT;
+            const wobble = 1 + 0.025 * Math.sin(angle * 2 + t * 0.8 + phase)
+                             + 0.015 * Math.sin(angle * 3 + t * 1.3);
+            const rEff = r * breathe * wobble;
+            const px = cx + rEff * Math.cos(angle);
+            const py = cy + rEff * Math.sin(angle);
             d += (i === 0 ? 'M' : 'L') + px.toFixed(1) + ',' + py.toFixed(1);
         }
         return d + 'Z';
@@ -2048,14 +2197,14 @@ function startOrbitalRings(cx, cy) {
     function tick() {
         if (!running) return;
         const t = (performance.now() - t0) / 1000;
-        ring1.setAttribute('d', computeD(t, RX1, RY1, TILT1, 0));
-        ring2.setAttribute('d', computeD(t, RX2, RY2, TILT2, Math.PI));
+        ring1.setAttribute('d', computeD(t, R1, 0));
+        if (ring2) ring2.setAttribute('d', computeD(t, R2, Math.PI));
         animId = requestAnimationFrame(tick);
     }
     tick();
 
     _orbitalRingsState = {
-        ring1, ring2, cx, cy, NPTS, RX1, RY1, RX2, RY2, TILT1, TILT2,
+        ring1, ring2, singleRing, cx, cy, NPTS, R1, R2,
         stop() { running = false; if (animId) cancelAnimationFrame(animId); },
         getLastT() { return (performance.now() - t0) / 1000; },
     };
@@ -2069,8 +2218,8 @@ function stopOrbitalRings() {
 }
 
 /**
- * Morph the two orbital rings into the two baseline curves.
- * Each ring "breaks apart" — the ellipse unfurls into a curve shape.
+ * Morph orbital ring(s) into baseline curve(s).
+ * Each ring "breaks apart" — the circle unfurls into a curve shape.
  * Top half of ring maps to the curve, bottom half collapses up to merge.
  */
 async function morphRingsToCurves(curvesData) {
@@ -2079,37 +2228,35 @@ async function morphRingsToCurves(curvesData) {
     rings.stop();
 
     const lastT = rings.getLastT();
-    const N = 50; // sample points for morph interpolation
+    const N = 50;
     const duration = 1400;
 
-    // Sample ring points at frozen position (top half left→right, bottom half right→left)
-    function sampleRing(rx, ry, tilt, phase) {
-        const cosT = Math.cos(tilt), sinT = Math.sin(tilt);
+    // Sample circular ring at frozen breathing position
+    function sampleRing(r, phase) {
+        const breathe = 1 + 0.012 * Math.sin(lastT * 1.2 + phase);
         const pts = [];
         // Top half: angle π → 0 (left to right across the top)
         for (let i = 0; i < N; i++) {
             const frac = i / (N - 1);
             const angle = Math.PI * (1 - frac);
-            const wobble = 1 + 0.035 * Math.sin(angle * 3 + lastT * 1.8 + phase)
-                             + 0.02 * Math.sin(angle * 5 + lastT * 1.1);
-            const ex = rx * wobble * Math.cos(angle + lastT * 0.2 + phase * 0.5);
-            const ey = ry * wobble * Math.sin(angle + lastT * 0.2 + phase * 0.5);
+            const wobble = 1 + 0.025 * Math.sin(angle * 2 + lastT * 0.8 + phase)
+                             + 0.015 * Math.sin(angle * 3 + lastT * 1.3);
+            const rEff = r * breathe * wobble;
             pts.push({
-                x: rings.cx + ex * cosT - ey * sinT,
-                y: rings.cy + ex * sinT + ey * cosT,
+                x: rings.cx + rEff * Math.cos(angle),
+                y: rings.cy + rEff * Math.sin(angle),
             });
         }
-        // Bottom half: angle 0 → -π (right to left across the bottom, maps to curve right→left)
+        // Bottom half: angle 0 → -π (collapses onto curve)
         for (let i = 0; i < N; i++) {
             const frac = i / (N - 1);
             const angle = -Math.PI * frac;
-            const wobble = 1 + 0.035 * Math.sin(angle * 3 + lastT * 1.8 + phase)
-                             + 0.02 * Math.sin(angle * 5 + lastT * 1.1);
-            const ex = rx * wobble * Math.cos(angle + lastT * 0.2 + phase * 0.5);
-            const ey = ry * wobble * Math.sin(angle + lastT * 0.2 + phase * 0.5);
+            const wobble = 1 + 0.025 * Math.sin(angle * 2 + lastT * 0.8 + phase)
+                             + 0.015 * Math.sin(angle * 3 + lastT * 1.3);
+            const rEff = r * breathe * wobble;
             pts.push({
-                x: rings.cx + ex * cosT - ey * sinT,
-                y: rings.cy + ex * sinT + ey * cosT,
+                x: rings.cx + rEff * Math.cos(angle),
+                y: rings.cy + rEff * Math.sin(angle),
             });
         }
         return pts; // 2*N points
@@ -2135,14 +2282,18 @@ async function morphRingsToCurves(curvesData) {
         return [...forward, ...reversed]; // 2*N points
     }
 
-    const src1 = sampleRing(rings.RX1, rings.RY1, rings.TILT1, 0);
+    const src1 = sampleRing(rings.R1, 0);
     const tgt1 = sampleCurveTarget(0);
-    const src2 = sampleRing(rings.RX2, rings.RY2, rings.TILT2, Math.PI);
-    const tgt2 = curvesData.length > 1 ? sampleCurveTarget(1) : sampleCurveTarget(0);
 
-    if (!tgt1 || !tgt2) {
+    let src2 = null, tgt2 = null;
+    if (rings.ring2) {
+        src2 = sampleRing(rings.R2, Math.PI);
+        tgt2 = curvesData.length > 1 ? sampleCurveTarget(1) : sampleCurveTarget(0);
+    }
+
+    if (!tgt1) {
         rings.ring1.remove();
-        rings.ring2.remove();
+        if (rings.ring2) rings.ring2.remove();
         _orbitalRingsState = null;
         return;
     }
@@ -2168,18 +2319,21 @@ async function morphRingsToCurves(curvesData) {
                 return d;
             }
 
-            rings.ring1.setAttribute('d', buildMorphPath(src1, tgt1));
-            rings.ring2.setAttribute('d', buildMorphPath(src2, tgt2));
-
             // Transition colors and opacity
             const strokeOp = 0.28 + p * 0.35;
             const strokeW = 1.2 + p * 0.6;
+
+            rings.ring1.setAttribute('d', buildMorphPath(src1, tgt1));
             rings.ring1.setAttribute('stroke', color1);
             rings.ring1.setAttribute('stroke-opacity', strokeOp.toFixed(2));
             rings.ring1.setAttribute('stroke-width', strokeW.toFixed(1));
-            rings.ring2.setAttribute('stroke', color2);
-            rings.ring2.setAttribute('stroke-opacity', strokeOp.toFixed(2));
-            rings.ring2.setAttribute('stroke-width', strokeW.toFixed(1));
+
+            if (rings.ring2 && src2 && tgt2) {
+                rings.ring2.setAttribute('d', buildMorphPath(src2, tgt2));
+                rings.ring2.setAttribute('stroke', color2);
+                rings.ring2.setAttribute('stroke-opacity', strokeOp.toFixed(2));
+                rings.ring2.setAttribute('stroke-width', strokeW.toFixed(1));
+            }
 
             if (rawP < 1) {
                 requestAnimationFrame(tick);
@@ -2192,7 +2346,7 @@ async function morphRingsToCurves(curvesData) {
 
     // Clean up ring elements
     rings.ring1.remove();
-    rings.ring2.remove();
+    if (rings.ring2) rings.ring2.remove();
     _orbitalRingsState = null;
 }
 
@@ -2207,48 +2361,79 @@ function renderWordCloud(effects) {
         const cx = PHASE_CHART.padL + PHASE_CHART.plotW / 2;
         const cy = PHASE_CHART.padT + PHASE_CHART.plotH / 2;
 
+        // Match ring radii so words pack tightly inside the innermost ring
+        const singleRing = AppState.maxEffects === 1;
+        const innerRingR = singleRing ? 148 : 140;
+        const cloudRadius = innerRingR - 10;
+
         // Sort by relevance descending
         const sorted = [...effects].sort((a, b) => b.relevance - a.relevance);
         const maxRel = sorted[0].relevance || 100;
 
-        // Compact circular packing — small, elegant text clustered tightly
-        const placed = []; // { x, y, w, h } bounding boxes
-        const PAD = 4; // tight padding between words
-
+        // Phase 1: Create invisible text elements and measure via getBBox
+        const measured = [];
         for (let i = 0; i < sorted.length; i++) {
             const eff = sorted[i];
-            // Small, compact font range: 8-13px
-            const fontSize = 8 + (eff.relevance / 100) * 5;
+            const relFrac = eff.relevance / maxRel; // 0..1 relative to top
+            const fontSize = 9 + relFrac * 11; // 9px (low) to 20px (top)
+            const fontWeight = relFrac > 0.7 ? '700' : relFrac > 0.4 ? '600' : '400';
+            // Variable letter-spacing: large words tighter, small words slightly open
+            const letterSpacing = relFrac > 0.7 ? '-0.04em' : relFrac > 0.4 ? '-0.02em' : '0.01em';
             const color = WORD_CLOUD_PALETTE[i % WORD_CLOUD_PALETTE.length];
-            const opacity = 0.55 + (eff.relevance / maxRel) * 0.45;
+            const opacity = 0.5 + relFrac * 0.5;
 
-            const estW = eff.name.length * fontSize * 0.52;
-            const estH = fontSize * 1.3;
+            const textEl = svgEl('text', {
+                x: '0', y: '0',
+                fill: color,
+                'font-size': fontSize.toFixed(1),
+                'font-weight': fontWeight,
+                'letter-spacing': letterSpacing,
+                class: 'word-cloud-word',
+                opacity: '0',
+                'data-effect-name': eff.name,
+                'data-relevance': String(eff.relevance),
+                'data-target-opacity': opacity.toFixed(2),
+            });
+            textEl.textContent = eff.name;
+            group.appendChild(textEl);
 
+            // Measure actual rendered size via SVG getBBox
+            const bbox = textEl.getBBox();
+            const actualW = bbox.width;
+            const actualH = bbox.height;
+
+            measured.push({ eff, fontSize, color, opacity, textEl, w: actualW, h: actualH });
+        }
+
+        // Phase 2: Compute layout — tight circular packing via fine spiral search
+        const placed = []; // { x, y, w, h } bounding boxes
+        const PAD = 4;
+        const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5)); // 137.5°
+
+        for (let i = 0; i < measured.length; i++) {
+            const m = measured[i];
             let bestX = cx, bestY = cy;
 
             if (i === 0) {
-                // Center word
                 bestX = cx;
                 bestY = cy;
             } else {
-                // Tight spiral placement — small radius increments for compact cluster
                 let found = false;
-                let angle = (i * 2.4); // golden angle offset per word
-                for (let attempt = 0; attempt < 80; attempt++) {
-                    const r = 12 + attempt * 5;
+                // Fine spiral: try many angles at each radius for tight circular packing
+                for (let r = 4; r <= cloudRadius; r += 1.5) {
+                    const angle = i * GOLDEN_ANGLE + r * 0.12;
                     const tx = cx + Math.cos(angle) * r;
-                    const ty = cy + Math.sin(angle) * r * 0.7; // slight ellipse
+                    const ty = cy + Math.sin(angle) * r;
 
-                    // Bounds check
-                    if (tx - estW / 2 < PHASE_CHART.padL + 10 || tx + estW / 2 > PHASE_CHART.padL + PHASE_CHART.plotW - 10) { angle += 0.5; continue; }
-                    if (ty - estH / 2 < PHASE_CHART.padT + 10 || ty + estH / 2 > PHASE_CHART.padT + PHASE_CHART.plotH - 10) { angle += 0.5; continue; }
+                    // Circular boundary — keep word bbox inside the ring
+                    const dist = Math.sqrt((tx - cx) ** 2 + (ty - cy) ** 2);
+                    if (dist + Math.max(m.w, m.h) / 2 > cloudRadius) continue;
 
                     const collides = placed.some(p =>
-                        tx - estW / 2 - PAD < p.x + p.w / 2 &&
-                        tx + estW / 2 + PAD > p.x - p.w / 2 &&
-                        ty - estH / 2 - PAD < p.y + p.h / 2 &&
-                        ty + estH / 2 + PAD > p.y - p.h / 2
+                        tx - m.w / 2 - PAD < p.x + p.w / 2 &&
+                        tx + m.w / 2 + PAD > p.x - p.w / 2 &&
+                        ty - m.h / 2 - PAD < p.y + p.h / 2 &&
+                        ty + m.h / 2 + PAD > p.y - p.h / 2
                     );
                     if (!collides) {
                         bestX = tx;
@@ -2256,59 +2441,64 @@ function renderWordCloud(effects) {
                         found = true;
                         break;
                     }
-                    angle += 0.5;
                 }
                 if (!found) {
-                    const fallbackAngle = (i / sorted.length) * Math.PI * 2;
-                    bestX = cx + Math.cos(fallbackAngle) * 60;
-                    bestY = cy + Math.sin(fallbackAngle) * 40;
+                    const fallbackAngle = i * GOLDEN_ANGLE;
+                    const fallbackR = cloudRadius * 0.6;
+                    bestX = cx + Math.cos(fallbackAngle) * fallbackR;
+                    bestY = cy + Math.sin(fallbackAngle) * fallbackR;
                 }
             }
 
-            placed.push({ x: bestX, y: bestY, w: estW, h: estH });
+            placed.push({ x: bestX, y: bestY, w: m.w, h: m.h });
 
-            const textEl = svgEl('text', {
-                x: bestX.toFixed(1),
-                y: bestY.toFixed(1),
-                fill: color,
-                'font-size': fontSize.toFixed(1),
-                class: 'word-cloud-word',
-                opacity: '0',
-                'data-effect-name': eff.name,
-                'data-relevance': String(eff.relevance),
-                'data-cx': bestX.toFixed(1),
-                'data-cy': bestY.toFixed(1),
-                'data-target-opacity': opacity.toFixed(2),
-            });
-            textEl.textContent = eff.name;
-            group.appendChild(textEl);
+            m.textEl.setAttribute('x', bestX.toFixed(1));
+            m.textEl.setAttribute('y', bestY.toFixed(1));
+            m.textEl.setAttribute('data-cx', bestX.toFixed(1));
+            m.textEl.setAttribute('data-cy', bestY.toFixed(1));
 
             _wordCloudPositions.push({
-                el: textEl, x: bestX, y: bestY, w: estW, h: estH,
-                name: eff.name, relevance: eff.relevance,
+                el: m.textEl, x: bestX, y: bestY, w: m.w, h: m.h,
+                name: m.eff.name, relevance: m.eff.relevance,
             });
         }
 
-        // Staggered reveal — gentle fade-in, no scale transform for clean look
-        const stagger = 250;
-        const animDur = 350;
+        // Phase 3: Words spring from center to position with stagger, then float
+        const stagger = 180;
+        const slideDur = 500;
         const words = group.querySelectorAll('.word-cloud-word');
+        const totalEntranceDur = words.length * stagger + slideDur;
 
         words.forEach((word, idx) => {
             const targetOp = parseFloat(word.getAttribute('data-target-opacity'));
+            const finalX = parseFloat(word.getAttribute('x'));
+            const finalY = parseFloat(word.getAttribute('y'));
+
+            // Start at center
+            word.setAttribute('x', cx.toFixed(1));
+            word.setAttribute('y', cy.toFixed(1));
+
             setTimeout(() => {
-                word.animate([
-                    { opacity: 0 },
-                    { opacity: targetOp },
-                ], {
-                    duration: animDur,
-                    easing: 'ease-out',
-                    fill: 'forwards',
-                });
+                const t0 = performance.now();
+                (function slide() {
+                    const t = Math.min(1, (performance.now() - t0) / slideDur);
+                    const c1 = 1.70158;
+                    const c3 = c1 + 1;
+                    const ease = 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+
+                    word.setAttribute('x', (cx + (finalX - cx) * ease).toFixed(1));
+                    word.setAttribute('y', (cy + (finalY - cy) * ease).toFixed(1));
+                    word.setAttribute('opacity', (targetOp * Math.min(1, t * 2.5)).toFixed(2));
+
+                    if (t < 1) requestAnimationFrame(slide);
+                })();
             }, idx * stagger);
         });
 
-        setTimeout(resolve, words.length * stagger + animDur);
+        // Start gentle float after entrance settles
+        setTimeout(() => startWordCloudFloat(), totalEntranceDur + 100);
+
+        setTimeout(resolve, totalEntranceDur);
     });
 }
 
@@ -2316,6 +2506,8 @@ function dismissWordCloud(mainEffectNames, mainColors) {
     return new Promise(resolve => {
         const group = document.getElementById('phase-word-cloud');
         const words = Array.from(group.querySelectorAll('.word-cloud-word'));
+
+        stopWordCloudFloat();
 
         if (words.length === 0) { resolve(); return; }
 
@@ -2368,60 +2560,61 @@ function dismissWordCloud(mainEffectNames, mainColors) {
             }
         }
 
-        // Animate winners: crossfade text if needed, then fly to Y-axis
-        const flyDuration = 800;
+        // Winner words: fly to Y-axis label position (top-left / top-right)
+        const flyDuration = 700;
         const cx = PHASE_CHART.padL + PHASE_CHART.plotW / 2;
+        const cy = PHASE_CHART.padT + PHASE_CHART.plotH / 2;
 
         for (const w of winners) {
             const pos = _wordCloudPositions[w.wordIdx];
             const el = pos.el;
             const mainName = mainEffectNames[w.mainIdx];
             const isLeft = w.mainIdx === 0;
+            // Match buildSingleYAxis label position: inside plot area, top corner
             const targetX = isLeft
-                ? PHASE_CHART.padL - 5
-                : PHASE_CHART.padL + PHASE_CHART.plotW + 5;
-            const targetY = PHASE_CHART.padT + PHASE_CHART.plotH / 2;
+                ? PHASE_CHART.padL + 6
+                : PHASE_CHART.padL + PHASE_CHART.plotW - 6;
+            const targetY = PHASE_CHART.padT + 14;
 
             // Crossfade text if names differ
             if (pos.name.toLowerCase().trim() !== mainName.toLowerCase().trim()) {
-                // Fade out old text, change, fade in
-                el.animate([{ opacity: parseFloat(el.style.opacity || 0.8) }, { opacity: 0 }], {
-                    duration: 200, fill: 'forwards',
+                el.animate([{ opacity: parseFloat(el.getAttribute('opacity') || 0.8) }, { opacity: 0 }], {
+                    duration: 150, fill: 'forwards',
                 });
                 setTimeout(() => {
                     el.textContent = mainName;
                     el.setAttribute('font-size', '13');
                     el.setAttribute('fill', mainColors[w.mainIdx] || WORD_CLOUD_PALETTE[0]);
+                    el.setAttribute('text-anchor', isLeft ? 'start' : 'end');
                     el.animate([{ opacity: 0 }, { opacity: 0.9 }], {
-                        duration: 200, fill: 'forwards',
+                        duration: 150, fill: 'forwards',
                     });
-                }, 200);
+                }, 150);
             }
 
-            // Fly to axis position
+            // Fly to axis label position, shrink font, then fade
             const startX = pos.x;
             const startY = pos.y;
+            const startFontSize = parseFloat(el.getAttribute('font-size'));
+            const targetFontSize = 11;
             const startTime = performance.now();
-            const delay = 350; // wait for crossfade
+            const delay = 300;
 
             (function animateFly() {
                 const elapsed = performance.now() - startTime;
                 if (elapsed < delay) { requestAnimationFrame(animateFly); return; }
                 const t = Math.min(1, (elapsed - delay) / flyDuration);
-                const ease = 1 - Math.pow(1 - t, 3); // ease-out-cubic
+                const ease = 1 - Math.pow(1 - t, 3);
 
-                const curX = startX + (targetX - startX) * ease;
-                const curY = startY + (targetY - startY) * ease;
-                const curScale = 1 - ease * 0.3; // shrink slightly
-
-                el.setAttribute('x', curX.toFixed(1));
-                el.setAttribute('y', curY.toFixed(1));
-                el.setAttribute('transform', `scale(${curScale.toFixed(2)})`);
+                el.setAttribute('x', (startX + (targetX - startX) * ease).toFixed(1));
+                el.setAttribute('y', (startY + (targetY - startY) * ease).toFixed(1));
+                el.setAttribute('font-size', (startFontSize + (targetFontSize - startFontSize) * ease).toFixed(1));
+                el.setAttribute('font-weight', '500');
+                el.setAttribute('letter-spacing', '0.04em');
 
                 if (t >= 1) {
-                    // Fade out (axis label will replace it)
                     el.animate([{ opacity: 0.9 }, { opacity: 0 }], {
-                        duration: 150, fill: 'forwards',
+                        duration: 120, fill: 'forwards',
                     });
                 } else {
                     requestAnimationFrame(animateFly);
@@ -2429,41 +2622,37 @@ function dismissWordCloud(mainEffectNames, mainColors) {
             })();
         }
 
-        // Scatter all non-winner words
-        const scatterDuration = 600;
-        words.forEach((word, idx) => {
+        // Non-winners: simultaneous radial burst outward from center + fast fade
+        const burstDuration = 350;
+        words.forEach(word => {
             const isWinner = winners.some(w => _wordCloudPositions[w.wordIdx].el === word);
             if (isWinner) return;
 
-            const angle = Math.random() * Math.PI * 2;
-            const distance = 200 + Math.random() * 300;
-            const dx = Math.cos(angle) * distance;
-            const dy = Math.sin(angle) * distance;
-            const staggerDelay = (idx - winners.length) * 50;
+            const curX = parseFloat(word.getAttribute('x'));
+            const curY = parseFloat(word.getAttribute('y'));
+            // Radial direction away from center
+            let dx = curX - cx;
+            let dy = curY - cy;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            const burstDist = 250 + Math.random() * 100;
+            dx = (dx / dist) * burstDist;
+            dy = (dy / dist) * burstDist;
 
-            setTimeout(() => {
-                const currentX = parseFloat(word.getAttribute('x'));
-                const currentY = parseFloat(word.getAttribute('y'));
-                const startTime = performance.now();
+            const t0 = performance.now();
+            (function burst() {
+                const t = Math.min(1, (performance.now() - t0) / burstDuration);
+                const ease = 1 - Math.pow(1 - t, 2); // ease-out-quad: fast start
 
-                (function scatter() {
-                    const t = Math.min(1, (performance.now() - startTime) / scatterDuration);
-                    const ease = t * t; // ease-in (accelerating out)
+                word.setAttribute('x', (curX + dx * ease).toFixed(1));
+                word.setAttribute('y', (curY + dy * ease).toFixed(1));
+                word.setAttribute('opacity', Math.max(0, 1 - t * 2).toFixed(2));
 
-                    word.setAttribute('x', (currentX + dx * ease).toFixed(1));
-                    word.setAttribute('y', (currentY + dy * ease).toFixed(1));
-                    word.setAttribute('opacity', (1 - ease).toFixed(2));
-
-                    if (t < 1) requestAnimationFrame(scatter);
-                })();
-            }, staggerDelay);
+                if (t < 1) requestAnimationFrame(burst);
+            })();
         });
 
-        // Resolve and clear after all animations
-        const totalTime = Math.max(
-            flyDuration + 350 + 150, // winners: delay + fly + fadeout
-            scatterDuration + words.length * 50 // scatter: stagger + duration
-        );
+        // Resolve after longest animation
+        const totalTime = Math.max(flyDuration + 300 + 120, burstDuration);
         setTimeout(() => {
             group.innerHTML = '';
             _wordCloudPositions = [];
@@ -2676,7 +2865,7 @@ function placePeakDescriptors(group, curvesData, pointsKey, baseDelay) {
         if (!descriptor) continue;
         const px = phaseChartX(keyPoint.hour * 60);
         const py = phaseChartY(keyPoint.value);
-        items.push({ curve, descriptor, px, py, peakVal: keyPoint.value });
+        items.push({ curve, curveIdx: i, descriptor, px, py, peakVal: keyPoint.value });
     }
     if (items.length === 0) return;
 
@@ -2714,7 +2903,7 @@ function placePeakDescriptors(group, curvesData, pointsKey, baseDelay) {
     // Create and animate labels with backdrop for readability over curves
     const dt = chartTheme();
     for (let i = 0; i < items.length; i++) {
-        const { curve, descriptor, px, labelY } = items[i];
+        const { curve, curveIdx, descriptor, px, labelY } = items[i];
         const delayMs = baseDelay + i * 200;
 
         // Estimate text dimensions for backdrop pill
@@ -2724,7 +2913,10 @@ function placePeakDescriptors(group, curvesData, pointsKey, baseDelay) {
         const pillH = 16 + pillPadY * 2;
 
         // Container group for backdrop + text
-        const labelGroup = svgEl('g', { class: 'peak-descriptor', opacity: '0' });
+        const labelGroup = svgEl('g', {
+            class: 'peak-descriptor', opacity: '0',
+            'data-effect-idx': String(curveIdx),
+        });
 
         // Backdrop pill
         const backdrop = svgEl('rect', {
@@ -2747,7 +2939,11 @@ function placePeakDescriptors(group, curvesData, pointsKey, baseDelay) {
         });
         label.textContent = descriptor;
         labelGroup.appendChild(label);
-        group.appendChild(labelGroup);
+        // Append to per-effect sub-group if divider is active, otherwise to parent
+        const targetGroup = (DividerState.active && curvesData.length >= 2)
+            ? getEffectSubGroup(group, curveIdx)
+            : group;
+        targetGroup.appendChild(labelGroup);
 
         const startTime = performance.now();
         (function fadeIn() {
@@ -2771,19 +2967,21 @@ async function renderBaselineCurves(curvesData) {
         const pathD = phasePointsToPath(curve.baseline);
         if (!pathD) continue;
 
+        const sub = getEffectSubGroup(group, i);
+
         // Area fill
         const fillPath = svgEl('path', {
             d: phasePointsToFillPath(curve.baseline),
             fill: curve.color, 'fill-opacity': '0', // animate in
         });
-        group.appendChild(fillPath);
+        sub.appendChild(fillPath);
 
         // Dashed stroke
         const strokePath = svgEl('path', {
             d: pathD, fill: 'none', stroke: curve.color,
             class: 'phase-baseline-path', opacity: '0',
         });
-        group.appendChild(strokePath);
+        sub.appendChild(strokePath);
 
         // Animate fade-in
         strokePath.animate([{ opacity: 0 }, { opacity: 0.5 }], { duration: 800, fill: 'forwards' });
@@ -2794,6 +2992,9 @@ async function renderBaselineCurves(curvesData) {
 
     // Place peak descriptors at each baseline curve's peak (batch for collision avoidance)
     placePeakDescriptors(group, curvesData, 'baseline', 400);
+
+    // Activate split-screen divider for 2-effect mode
+    activateDivider(curvesData);
 }
 
 /** Instant baseline curves — no animation, used after ring→curve morph */
@@ -2806,20 +3007,25 @@ function renderBaselineCurvesInstant(curvesData) {
         const pathD = phasePointsToPath(curve.baseline);
         if (!pathD) continue;
 
+        const sub = getEffectSubGroup(group, i);
+
         const fillPath = svgEl('path', {
             d: phasePointsToFillPath(curve.baseline),
             fill: curve.color, 'fill-opacity': '0.04',
         });
-        group.appendChild(fillPath);
+        sub.appendChild(fillPath);
 
         const strokePath = svgEl('path', {
             d: pathD, fill: 'none', stroke: curve.color,
             class: 'phase-baseline-path', opacity: '0.5',
         });
-        group.appendChild(strokePath);
+        sub.appendChild(strokePath);
     }
 
     placePeakDescriptors(group, curvesData, 'baseline', 0);
+
+    // Activate split-screen divider for 2-effect mode
+    activateDivider(curvesData);
 }
 
 // ---- Phase Chart: Morph baseline → desired with arrows ----
@@ -2839,11 +3045,12 @@ async function morphToDesiredCurves(curvesData) {
         // Get baseline value at the same hour
         const blSmoothed = smoothPhaseValues(curve.baseline, PHASE_SMOOTH_PASSES);
         const match = blSmoothed.reduce((a, b) => Math.abs(b.hour - div.hour) < Math.abs(a.hour - div.hour) ? b : a);
-        allArrows.push({ curve, arrow: { hour: div.hour, baseVal: match.value, desiredVal: div.value, diff: div.diff } });
+        allArrows.push({ curve, idx: i, arrow: { hour: div.hour, baseVal: match.value, desiredVal: div.value, diff: div.diff } });
     }
 
     // Phase 1: Grow elegant arrows from baseline → desired (900ms)
-    for (const { curve, arrow } of allArrows) {
+    for (const { curve, idx, arrow } of allArrows) {
+        const arrowSub = getEffectSubGroup(arrowGroup, idx);
         const x = phaseChartX(arrow.hour * 60);
         const y1 = phaseChartY(arrow.baseVal);
         const y2 = phaseChartY(arrow.desiredVal);
@@ -2855,7 +3062,7 @@ async function morphToDesiredCurves(curvesData) {
             stroke: curve.color, 'stroke-width': '4', 'stroke-opacity': '0',
             'stroke-linecap': 'round', fill: 'none', 'pointer-events': 'none',
         });
-        arrowGroup.appendChild(glowLine);
+        arrowSub.appendChild(glowLine);
 
         // Main arrow shaft
         const arrowLine = svgEl('line', {
@@ -2863,7 +3070,7 @@ async function morphToDesiredCurves(curvesData) {
             x2: x.toFixed(1), y2: y1.toFixed(1),
             stroke: curve.color, class: 'mission-arrow', opacity: '0',
         });
-        arrowGroup.appendChild(arrowLine);
+        arrowSub.appendChild(arrowLine);
 
         // Animate both shaft and glow
         const startTime = performance.now();
@@ -2898,13 +3105,15 @@ async function morphToDesiredCurves(curvesData) {
 
         if (!basePathD || !desiredPathD) continue;
 
+        const desiredSub = getEffectSubGroup(desiredGroup, i);
+
         // Desired fill
         const fillPath = svgEl('path', {
             d: baseFillD,
             fill: curve.color, 'fill-opacity': '0',
             class: 'phase-desired-fill',
         });
-        desiredGroup.appendChild(fillPath);
+        desiredSub.appendChild(fillPath);
         fillPath.animate([{ fillOpacity: 0 }, { fillOpacity: 0.08 }], { duration: morphDuration, fill: 'forwards' });
 
         // Desired stroke — starts at baseline path, morphs to desired
@@ -2912,7 +3121,7 @@ async function morphToDesiredCurves(curvesData) {
             d: basePathD, fill: 'none', stroke: curve.color,
             class: 'phase-desired-path', opacity: '0',
         });
-        desiredGroup.appendChild(strokePath);
+        desiredSub.appendChild(strokePath);
         strokePath.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, fill: 'forwards' });
 
         // Interpolate smoothed points for morph (matches rendered curve positions)
@@ -2983,6 +3192,7 @@ function clearPromptError() {
 
 // ---- Phase Chart: Reset ----
 function resetPhaseChart() {
+    cleanupDivider();
     ['phase-x-axis', 'phase-y-axis-left', 'phase-y-axis-right', 'phase-grid',
      'phase-scan-line', 'phase-word-cloud', 'phase-baseline-curves', 'phase-desired-curves',
      'phase-lx-curves', 'phase-lx-markers', 'phase-substance-timeline',
@@ -4505,50 +4715,6 @@ async function handlePromptSubmit(e) {
     document.getElementById('prompt-submit').disabled = false;
 }
 
-// Old handlePromptSubmit for cartridge flow (preserved for future use)
-async function handlePromptSubmitCartridge(e) {
-    e.preventDefault();
-
-    const input = document.getElementById('prompt-input');
-    const prompt = input.value.trim();
-    if (!prompt || AppState.isAnimating || AppState.isLoading) return;
-
-    clearPromptError();
-    document.getElementById('prompt-hint').style.opacity = '0';
-
-    AppState.isLoading = true;
-    showLoading();
-
-    resetSimulation();
-
-    if (AppState.filledSlots.size > 0) {
-        hideChartPanel();
-        await animateEjectSequence();
-    }
-
-    try {
-        const stack = await callLLM(prompt);
-        AppState.currentStack = stack;
-        buildEffectChart(stack);
-        showChartPanel();
-        await sleep(400);
-        const layout = computeCartridgeLayout(stack);
-        CartridgeConfig.recalculate(layout.capsulesPerLayer);
-        CartridgeConfig.capsuleGroups = layout.capsuleGroups;
-        rebuildCapsuleLayers();
-        hideLoading();
-        await sleep(200);
-        await animateFillSequence(stack);
-        await sleep(300);
-        showPlayButton();
-    } catch (err) {
-        hideLoading();
-        showPromptError(err instanceof Error ? err.message : String(err));
-    }
-
-    AppState.isLoading = false;
-}
-
 function initDebugPanel() {
     const debugBtn = document.getElementById('debug-btn');
     const debugPanel = document.getElementById('debug-panel');
@@ -4707,6 +4873,12 @@ function refreshChartTheme() {
     document.querySelectorAll('.peak-descriptor rect').forEach(r => {
         r.setAttribute('fill', t.tooltipBg);
     });
+    // Update divider visual if active
+    if (DividerState.elements) {
+        DividerState.elements.line.setAttribute('fill', t.axisLine);
+        DividerState.elements.glow.setAttribute('fill', t.scanGlow);
+        DividerState.elements.diamond.setAttribute('stroke', t.axisLine);
+    }
 }
 
 function initThemeToggle() {
@@ -5138,13 +5310,15 @@ function renderLxCurves(lxCurves, curvesData) {
 
         if (lx.points.length < 2) continue;
 
+        const sub = getEffectSubGroup(group, i);
+
         // Area fill
         const fillD = phasePointsToFillPath(lx.points, false);
         if (fillD) {
             const fillPath = svgEl('path', {
                 d: fillD, fill: color, class: 'phase-lx-fill', opacity: '0',
             });
-            group.appendChild(fillPath);
+            sub.appendChild(fillPath);
             fillPath.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 800, fill: 'forwards' });
         }
 
@@ -5154,7 +5328,7 @@ function renderLxCurves(lxCurves, curvesData) {
             const strokePath = svgEl('path', {
                 d: strokeD, stroke: color, class: 'phase-lx-path', opacity: '0',
             });
-            group.appendChild(strokePath);
+            sub.appendChild(strokePath);
             strokePath.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 800, fill: 'forwards' });
         }
     }
@@ -5658,11 +5832,13 @@ function transmuteDesiredCurves(transmute) {
         desiredGroup.querySelectorAll('.phase-desired-path').forEach(p => {
             p.removeAttribute('stroke-dasharray');
         });
-        // Move peak descriptors back from overlay to desired group
+        // Move peak descriptors back from overlay to their correct sub-group (or parent)
         const overlay = document.getElementById('phase-tooltip-overlay');
         overlay.querySelectorAll('.peak-descriptor[data-origin="phase-desired-curves"]').forEach(pd => {
             pd.removeAttribute('data-origin');
-            desiredGroup.appendChild(pd);
+            const ei = pd.getAttribute('data-effect-idx');
+            const sub = ei != null ? desiredGroup.querySelector(`#phase-desired-curves-e${ei}`) : null;
+            (sub || desiredGroup).appendChild(pd);
         });
         desiredGroup.style.transition = 'filter 400ms ease';
         desiredGroup.style.filter = '';

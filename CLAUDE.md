@@ -148,7 +148,6 @@ Prompts are externalized in `prompts.js` using `{{placeholder}}` syntax, interpo
 
 | Template | Purpose | Key Placeholders |
 |----------|---------|------------------|
-| `PROMPTS.stack` | Legacy stack formulation | `{{substanceKeys}}`, `{{categoryLines}}`, `{{modeNote}}` |
 | `PROMPTS.fastModel` | Stage 1: effect identification | `{{maxEffects}}` |
 | `PROMPTS.curveModel` | Stage 2: baseline/desired curves | `{{maxEffects}}`, `{{maxEffectsPlural}}` |
 | `PROMPTS.intervention` | Stage 3: substance selection | `{{substanceList}}`, `{{curveSummary}}` |
@@ -441,6 +440,8 @@ The original cartridge system remains in code but is not active in the current U
 - **Split-View Layout** — cartridge left, chart right
 
 The cartridge section is hidden (`#cartridge-section.hidden`) and its initialization is commented out. The simulation engine, wheel rotation, and capsule animation code remain intact for potential future use.
+
+The legacy stack LLM pipeline has been removed: `PROMPTS.stack`, `buildSystemPrompt()`, `callLLM()`, `parseJSONResponse()`, per-provider callers (`callAnthropic/OpenAI/Grok/Gemini` for stack), `sortStack()`, and `handlePromptSubmitCartridge()`. The active 3-stage pipeline (`callFastModel` → `callMainModelForCurves` → `callInterventionModel`) is unaffected.
 
 ---
 
