@@ -255,6 +255,7 @@ const AppState = {
     effectCurves: null,
     includeRx: false,
     includeControlled: false,
+    maxEffects: parseInt(localStorage.getItem('cortex_max_effects')) || 2,
     selectedLLM: localStorage.getItem('cortex_llm') || 'anthropic',
     apiKeys: {
         anthropic: localStorage.getItem('cortex_key_anthropic') || CONFIG_KEYS.anthropic || '',
@@ -268,9 +269,65 @@ const AppState = {
 const PhaseState = {
     isProcessing: false,
     effects: [],
+    wordCloudEffects: [],       // [{name, relevance}, ...] from fast model
     curvesData: null,
-    phase: 'idle',  // 'idle' | 'loading' | 'axes-revealed' | 'scanning' | 'curves-drawn'
+    phase: 'idle',  // 'idle' | 'loading' | 'scanning' | 'word-cloud' | 'word-cloud-dismiss' | 'axes-revealed' | 'baseline-shown' | 'curves-drawn' | 'lx-sequential' | 'lx-rendered'
+    interventionPromise: null,
+    interventionResult: null,
+    lxCurves: null,
+    incrementalSnapshots: null, // array from computeIncrementalLxOverlay
+    maxPhaseReached: -1,  // highest completed phase index (0/1/2)
+    viewingPhase: -1,     // currently displayed phase index
 };
+
+const PHASE_STEPS = ['baseline-shown', 'curves-drawn', 'lx-rendered'];
+
+// ============================================
+// 3b. PROMPT TEMPLATE INTERPOLATION
+// ============================================
+
+function interpolatePrompt(template, vars) {
+    return template.replace(/\{\{(\w+)\}\}/g, (_, key) =>
+        vars[key] !== undefined ? vars[key] : `{{${key}}}`
+    );
+}
+
+function chartTheme() {
+    const light = document.body.classList.contains('light-mode');
+    return light ? {
+        grid:           'rgba(100, 130, 170, 0.22)',
+        axisBoundary:   'rgba(80, 110, 150, 0.30)',
+        axisLine:       'rgba(80, 110, 150, 0.55)',
+        tickAnchor:     'rgba(80, 110, 150, 0.45)',
+        tickNormal:     'rgba(80, 110, 150, 0.28)',
+        labelAnchor:    'rgba(40, 60, 90, 0.75)',
+        labelNormal:    'rgba(40, 60, 90, 0.50)',
+        yTick:          'rgba(80, 110, 150, 0.40)',
+        yLabel:         'rgba(40, 60, 90, 0.80)',
+        yLabelDefault:  'rgba(30, 50, 80, 0.92)',
+        tooltipBg:      'rgba(240, 243, 247, 0.88)',
+        scanGlow:       'rgba(80, 100, 180, 0.10)',
+        orbitalRing1:   'rgba(50, 100, 200, 0.4)',
+        orbitalRing2:   'rgba(120, 70, 200, 0.4)',
+        arrowhead:      'rgba(30, 50, 80, 0.7)',
+    } : {
+        grid:           'rgba(145, 175, 214, 0.17)',
+        axisBoundary:   'rgba(174, 201, 237, 0.25)',
+        axisLine:       'rgba(174, 201, 237, 0.58)',
+        tickAnchor:     'rgba(174, 201, 237, 0.35)',
+        tickNormal:     'rgba(174, 201, 237, 0.2)',
+        labelAnchor:    'rgba(167, 191, 223, 0.7)',
+        labelNormal:    'rgba(167, 191, 223, 0.45)',
+        yTick:          'rgba(174, 201, 237, 0.35)',
+        yLabel:         'rgba(167, 191, 223, 0.76)',
+        yLabelDefault:  'rgba(171, 214, 255, 0.92)',
+        tooltipBg:      'rgba(13, 17, 23, 0.8)',
+        scanGlow:       'rgba(160, 160, 255, 0.08)',
+        orbitalRing1:   'rgba(130, 170, 255, 0.4)',
+        orbitalRing2:   'rgba(200, 150, 255, 0.4)',
+        arrowhead:      'rgba(255, 255, 255, 0.7)',
+    };
+}
 
 // ============================================
 // 4. DYNAMIC SUBSTANCE RESOLUTION
@@ -573,26 +630,11 @@ function buildSystemPrompt() {
         modeNote += '\nCONTROLLED SUBSTANCE MODE ENABLED: The user has opted in to controlled substances for research/therapeutic context. You MAY include substances like psilocybin (microdose), LSD (microdose), ketamine, MDMA, THC, CBD, etc. Use therapeutic/microdose protocols when applicable. Note legal status.';
     }
 
-    return `You are a supplement stack formulator. Given a user's desired outcome, return a JSON array of supplements to achieve it.
-
-Known substance keys:
-${keyList.join(', ')}
-
-Categories:
-${categoryLines}
-
-Rules:
-1. Return ONLY valid JSON — no markdown, no code fences, no explanation
-2. Return an array of objects: [{"key": "substanceKey", "name": "Display Name", "category": "categoryName", "dose": "100mg", "timing": "morning", "count": 1}]
-3. "count" is the number of capsules of this substance per day (1-3). Use 1 unless a higher dose is split across capsules.
-4. Valid timings: "morning", "midday", "evening", "bedtime"
-5. Use evidence-based dosing
-6. Maximum 8 unique substances per stack
-7. Consider interactions and contraindications
-8. If the user asks for no sleep impact, avoid caffeine or limit to early morning with theanine
-9. Always consider protective/recovery compounds when using stimulants
-10. IMPORTANT: If the user specifically asks for a substance by name, you MUST include it in the stack. Use the closest matching key if one exists, or create a new key in camelCase. Always include the "name" and "category" fields so the UI can display it correctly.
-11. You are allowed to include ANY substance the user requests, even if it's not in the known list above. Just provide a sensible key, name, category, and dose.${modeNote}`;
+    return interpolatePrompt(PROMPTS.stack, {
+        substanceKeys: keyList.join(', '),
+        categoryLines,
+        modeNote,
+    });
 }
 
 // ============================================
@@ -1059,14 +1101,9 @@ async function callGeminiGeneric(userPrompt, apiKey, model, systemPrompt, maxTok
 // ============================================
 
 function buildFastModelSystemPrompt() {
-    return `You are an expert pharmacologist. Given a user's desired cognitive or physical outcome, identify the 1-2 most relevant pharmacodynamic effects that would need to be modulated.
-
-Rules:
-1. Return ONLY valid JSON — no markdown, no code fences, no explanation
-2. Format: {"effects": ["Effect Name 1", "Effect Name 2"]}
-3. Maximum 2 effects
-4. Use clear, concise pharmacodynamic effect labels (1-3 words). Must be physiological effects, NOT molecule/substance names. Good: "Focused Attention", "Sleep Pressure", "Stress Resilience", "Circadian Rhythm", "Wakefulness". Bad: "Melatonin", "Cortisol", "GABA", "Dopamine"
-5. If the objective clearly maps to a single effect, return only 1`;
+    return interpolatePrompt(PROMPTS.fastModel, {
+        maxEffects: AppState.maxEffects,
+    });
 }
 
 async function callFastModel(prompt) {
@@ -1131,35 +1168,10 @@ async function callFastModel(prompt) {
 // ============================================
 
 function buildCurveModelSystemPrompt() {
-    return `You are an expert pharmacologist modeling 24-hour pharmacodynamic curves. Given the user's desired outcome:
-
-1. Identify the 1-2 most relevant pharmacodynamic effects to model
-2. For each effect, provide a baseline curve (no supplementation/medication/controlled substances, natural circadian rhythms) and a desired/target curve (with optimal supplementation/medication/controlled substances)
-3. For each effect, provide 5 short descriptors (max 4 words each) for the 0%, 25%, 50%, 75%, 100% intensity levels so the user can gauge whether the baseline is accurate
-
-Rules:
-1. Return ONLY valid JSON — no markdown, no code fences
-2. Format:
-{
-  "curves": [
-    {
-      "effect": "Effect Name",
-      "color": "#hex",
-      "levels": {"0": "No activity", "25": "Mild", "50": "Moderate", "75": "Strong", "100": "Peak"},
-      "baseline": [{"hour": 6, "value": 20}, {"hour": 7, "value": 25}, ...],
-      "desired": [{"hour": 6, "value": 20}, {"hour": 7, "value": 30}, ...]
-    }
-  ]
-}
-3. Provide datapoints for every hour from 6 to 30 (25 points per curve). Hours 24-30 represent the next day (i.e., hour 24=midnight, 25=1am, 26=2am, ..., 30=6am)
-4. Values: 0-100 scale (0 = minimal activity, 100 = maximal)
-5. Baseline: reflect natural circadian/ultradian rhythms (e.g. cortisol peaks morning, melatonin peaks night)
-6. Desired: show the improvement the user wants — e.g. enhanced attention during work, deeper sleep at night, etc.
-7. Colors: distinct, visible on dark background (#0a0a0f). Use muted but vibrant tones like #60a5fa, #c084fc, #4ade80, #fb7185
-8. Maximum 2 effect curves
-9. Be physiologically realistic
-10. Effect names MUST be pharmacodynamic effects (not molecules or substances). Use short (1-3 words) physiological descriptors — e.g. "Sleep Pressure", "Focused Attention", "Stress Resilience", "Circadian Rhythm". NEVER use substance names like "Melatonin", "Cortisol", "GABA" as effect labels. Never combine concepts with "/" or "and"
-11. Level descriptors must be experiential and specific to the effect — e.g. for Focused Attention: "0": "No focus", "25": "Easily distracted", "50": "Steady awareness", "75": "Deep concentration", "100": "Flow state"`;
+    return interpolatePrompt(PROMPTS.curveModel, {
+        maxEffects: AppState.maxEffects,
+        maxEffectsPlural: AppState.maxEffects === 1 ? '' : 's',
+    });
 }
 
 async function callMainModelForCurves(prompt) {
@@ -1565,49 +1577,95 @@ function hideStackSummary() {
 function buildPhaseXAxis() {
     const group = document.getElementById('phase-x-axis');
     group.innerHTML = '';
+    const t = chartTheme();
 
-    // X-axis line
+    const rulerY = 12;  // top time ruler, FCP-style
+
+    // Subtle bottom boundary line for plot area
     group.appendChild(svgEl('line', {
         x1: String(PHASE_CHART.padL),
         y1: String(PHASE_CHART.padT + PHASE_CHART.plotH),
         x2: String(PHASE_CHART.padL + PHASE_CHART.plotW),
         y2: String(PHASE_CHART.padT + PHASE_CHART.plotH),
-        stroke: 'rgba(174, 201, 237, 0.58)', 'stroke-width': '1.2',
+        stroke: t.axisBoundary, 'stroke-width': '0.75',
     }));
 
-    // Hour labels + ticks every 2h (6am to 6am next day)
+    // Hour labels + ticks every 2h at the TOP (FCP time ruler)
+    // Sparse AM/PM: show suffix only at 6h anchors (6am, 12pm, 6pm, 12am)
     for (let h = PHASE_CHART.startHour; h <= PHASE_CHART.endHour; h += 2) {
         const x = phaseChartX(h * 60);
-        // Tick mark
-        group.appendChild(svgEl('line', {
-            x1: x.toFixed(1), y1: String(PHASE_CHART.padT + PHASE_CHART.plotH),
-            x2: x.toFixed(1), y2: String(PHASE_CHART.padT + PHASE_CHART.plotH + 6),
-            stroke: 'rgba(174, 201, 237, 0.4)', 'stroke-width': '1',
-        }));
-        // Label — wrap hours > 24 back to 0-based, format as am/pm
         const displayHour = h % 24;
+        const isAnchor = displayHour % 6 === 0; // 0, 6, 12, 18
+
+        // Downward tick — slightly taller at anchors
+        group.appendChild(svgEl('line', {
+            x1: x.toFixed(1), y1: String(rulerY + 4),
+            x2: x.toFixed(1), y2: String(rulerY + (isAnchor ? 12 : 9)),
+            stroke: isAnchor ? t.tickAnchor : t.tickNormal,
+            'stroke-width': '0.75',
+        }));
+
+        // Hour number
         const hour12 = displayHour === 0 ? 12 : displayHour > 12 ? displayHour - 12 : displayHour;
-        const ampm = displayHour < 12 ? 'a' : 'p';
         const label = svgEl('text', {
-            x: x.toFixed(1), y: String(PHASE_CHART.padT + PHASE_CHART.plotH + 22),
-            fill: 'rgba(167, 191, 223, 0.88)',
+            x: x.toFixed(1), y: String(rulerY),
+            fill: isAnchor ? t.labelAnchor : t.labelNormal,
             'font-family': "'IBM Plex Mono', monospace",
-            'font-size': '9', 'text-anchor': 'middle',
+            'font-size': '8', 'text-anchor': 'middle',
         });
-        label.textContent = `${hour12}${ampm}`;
+
+        if (isAnchor) {
+            // Anchor labels: "6am", "12pm" etc. — suffix in smaller tspan
+            const ampm = displayHour < 12 || displayHour === 0 ? 'am' : 'pm';
+            const numSpan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+            numSpan.textContent = String(hour12);
+            const suffixSpan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+            suffixSpan.textContent = ampm;
+            suffixSpan.setAttribute('font-size', '6');
+            suffixSpan.setAttribute('fill-opacity', '0.7');
+            label.appendChild(numSpan);
+            label.appendChild(suffixSpan);
+        } else {
+            label.textContent = String(hour12);
+        }
+
         group.appendChild(label);
     }
 
-    // "Time" label
-    const xLabel = svgEl('text', {
-        x: String(PHASE_CHART.padL + PHASE_CHART.plotW / 2),
-        y: String(PHASE_CHART.viewH - 8),
-        fill: 'rgba(159, 217, 255, 0.96)',
-        'font-family': "'Space Grotesk', sans-serif",
-        'font-size': '12', 'font-weight': '600', 'letter-spacing': '0.18em', 'text-anchor': 'middle',
-    });
-    xLabel.textContent = 'Time';
-    group.appendChild(xLabel);
+}
+
+// ---- Phase Chart: Curve highlight on Y-axis hover ----
+// Uses CSS filter (not opacity) because Web Animations API fill:'forwards'
+// overrides inline style.opacity in the cascade.
+function highlightCurve(activeIdx, active) {
+    if (!PhaseState.curvesData || PhaseState.curvesData.length < 2) return;
+    const activeColor = PhaseState.curvesData[activeIdx].color;
+
+    const dimFilter = 'saturate(0.1) brightness(0.25)';
+    const boostFilter = 'brightness(1.15) drop-shadow(0 0 6px currentColor)';
+    const transitionStyle = 'filter 200ms ease';
+
+    const allGroupIds = [
+        'phase-baseline-curves', 'phase-desired-curves', 'phase-lx-curves',
+        'phase-mission-arrows', 'phase-lx-markers',
+    ];
+
+    for (const id of allGroupIds) {
+        const g = document.getElementById(id);
+        if (!g) continue;
+        for (const child of g.children) {
+            const stroke = child.getAttribute('stroke');
+            const fill = child.getAttribute('fill');
+            const belongsToActive = stroke === activeColor || fill === activeColor;
+
+            if (active) {
+                child.style.transition = transitionStyle;
+                child.style.filter = belongsToActive ? boostFilter : dimFilter;
+            } else {
+                child.style.filter = '';
+            }
+        }
+    }
 }
 
 // ---- Phase Chart: Y-Axes ----
@@ -1622,45 +1680,55 @@ function buildPhaseYAxes(effects, colors, curvesData) {
     const cols = colors || [];
     const leftLevels = curvesData && curvesData[0] && curvesData[0].levels ? curvesData[0].levels : null;
     const rightLevels = curvesData && curvesData[1] && curvesData[1].levels ? curvesData[1].levels : null;
-    if (effects.length >= 1) buildSingleYAxis(leftGroup, effects[0], 'left', cols[0], leftLevels);
-    if (effects.length >= 2) buildSingleYAxis(rightGroup, effects[1], 'right', cols[1], rightLevels);
+    if (effects.length >= 1) buildSingleYAxis(leftGroup, effects[0], 'left', cols[0], leftLevels, 0, effects.length);
+    if (effects.length >= 2) buildSingleYAxis(rightGroup, effects[1], 'right', cols[1], rightLevels, 1, effects.length);
 }
 
-function buildSingleYAxis(group, effectLabel, side, color, levels) {
+function buildSingleYAxis(group, effectLabel, side, color, levels, curveIndex, totalCurves) {
     const x = side === 'left' ? PHASE_CHART.padL : PHASE_CHART.padL + PHASE_CHART.plotW;
     const tickDir = side === 'left' ? -6 : 6;
     const textAnchor = side === 'left' ? 'end' : 'start';
     const labelOffset = side === 'left' ? -10 : 10;
-    const labelColor = color || 'rgba(171, 214, 255, 0.92)';
+    const t = chartTheme();
+    const labelColor = color || t.yLabelDefault;
 
     // Axis line
     group.appendChild(svgEl('line', {
         x1: String(x), y1: String(PHASE_CHART.padT),
         x2: String(x), y2: String(PHASE_CHART.padT + PHASE_CHART.plotH),
-        stroke: 'rgba(174, 201, 237, 0.58)', 'stroke-width': '1.2',
+        stroke: t.axisLine, 'stroke-width': '1.2',
     }));
 
+    // Collect tick data for magnetic hit areas
+    const ticks = [];
+    for (let v = 0; v <= 100; v += 25) ticks.push(v);
+
     // Tick marks + labels every 25% (including 0)
-    for (let v = 0; v <= 100; v += 25) {
+    const tickElements = []; // { v, y, numLabel, descriptor, guideLine, tipGroup }
+    for (let ti = 0; ti < ticks.length; ti++) {
+        const v = ticks[ti];
         const y = phaseChartY(v);
         group.appendChild(svgEl('line', {
             x1: String(x), y1: y.toFixed(1),
             x2: String(x + tickDir), y2: y.toFixed(1),
-            stroke: 'rgba(174, 201, 237, 0.35)', 'stroke-width': '1',
+            stroke: t.yTick, 'stroke-width': '1',
         }));
 
         const numLabel = svgEl('text', {
             x: String(x + labelOffset), y: (y + 3).toFixed(1),
-            fill: 'rgba(167, 191, 223, 0.76)',
+            fill: t.yLabel,
             'font-family': "'IBM Plex Mono', monospace",
             'font-size': '10', 'text-anchor': textAnchor,
         });
         numLabel.textContent = String(v);
         group.appendChild(numLabel);
 
+        const entry = { v, y, numLabel, descriptor: null, guideLine: null, tipGroup: null };
+
         // Hover descriptor tooltip + guide line (rendered in topmost overlay)
         if (levels && levels[String(v)]) {
             const descriptor = levels[String(v)];
+            entry.descriptor = descriptor;
             const overlay = document.getElementById('phase-tooltip-overlay');
             // Position descriptor inside the chart area
             const tooltipAnchor = side === 'left' ? 'start' : 'end';
@@ -1675,18 +1743,7 @@ function buildSingleYAxis(group, effectLabel, side, color, levels) {
                 class: 'tick-guide-line', 'pointer-events': 'none',
             });
             overlay.appendChild(guideLine);
-
-            // Invisible hit area for hover (in overlay so it's above curves)
-            const hitArea = svgEl('rect', {
-                x: String(side === 'left' ? x - 40 : x),
-                y: String(y - 12),
-                width: '40', height: '24',
-                fill: 'transparent',
-                class: 'tick-hover-area',
-                'pointer-events': 'all',
-                cursor: 'default',
-            });
-            overlay.appendChild(hitArea);
+            entry.guideLine = guideLine;
 
             // Tooltip group with dark backdrop (hidden by default)
             const tipGroup = svgEl('g', { class: 'tick-tooltip', opacity: '0', 'pointer-events': 'none' });
@@ -1706,7 +1763,7 @@ function buildSingleYAxis(group, effectLabel, side, color, levels) {
                 width: tipPillW.toFixed(1),
                 height: tipPillH.toFixed(1),
                 rx: '5', ry: '5',
-                fill: 'rgba(13, 17, 23, 0.8)',
+                fill: t.tooltipBg,
             });
             tipGroup.appendChild(tipBackdrop);
 
@@ -1722,42 +1779,111 @@ function buildSingleYAxis(group, effectLabel, side, color, levels) {
             tipGroup.appendChild(textEl);
 
             overlay.appendChild(tipGroup);
+            entry.tipGroup = tipGroup;
+        }
 
-            // Hover events — show descriptor, guide line, hide number
-            let guideAnim = null;
-            hitArea.addEventListener('mouseenter', () => {
-                tipGroup.setAttribute('opacity', '1');
-                numLabel.setAttribute('opacity', '0');
-                // Animate guide line in from the axis side
+        tickElements.push(entry);
+    }
+
+    // Build magnetic hit areas that span the full gap between ticks (no dead zones)
+    const overlay = document.getElementById('phase-tooltip-overlay');
+    const axisTop = PHASE_CHART.padT;
+    const axisBot = PHASE_CHART.padT + PHASE_CHART.plotH;
+    // Note: tick y values are inverted (higher value = lower y pixel)
+    // ticks are 0,25,50,75,100 but y pixels go from axisBot (v=0) to axisTop (v=100)
+
+    for (let ti = 0; ti < tickElements.length; ti++) {
+        const entry = tickElements[ti];
+
+        // Compute the vertical range this tick "owns" (midpoints to neighbors, clamped to axis)
+        let hitTop, hitBot;
+        if (ti === tickElements.length - 1) {
+            // Topmost tick (v=100, lowest y pixel) — extend to axis top
+            hitTop = axisTop;
+        } else {
+            hitTop = (entry.y + tickElements[ti + 1].y) / 2;
+        }
+        if (ti === 0) {
+            // Bottommost tick (v=0, highest y pixel) — extend to axis bottom
+            hitBot = axisBot;
+        } else {
+            hitBot = (entry.y + tickElements[ti - 1].y) / 2;
+        }
+
+        const hitHeight = hitBot - hitTop;
+        const hitArea = svgEl('rect', {
+            x: String(side === 'left' ? x - 40 : x),
+            y: hitTop.toFixed(1),
+            width: '40', height: hitHeight.toFixed(1),
+            fill: 'transparent',
+            class: 'tick-hover-area',
+            'pointer-events': 'all',
+            cursor: 'default',
+        });
+        overlay.appendChild(hitArea);
+
+        // Hover events — emphasize number, show descriptor, guide line, dim other curves
+        let guideAnim = null;
+        hitArea.addEventListener('mouseenter', () => {
+            // Emphasize the number with curve color
+            entry.numLabel.setAttribute('fill', labelColor);
+            entry.numLabel.setAttribute('font-weight', '600');
+            entry.numLabel.style.filter = `drop-shadow(0 0 3px ${labelColor})`;
+            entry.numLabel.style.transition = 'filter 150ms ease';
+
+            if (entry.tipGroup) {
+                entry.tipGroup.setAttribute('opacity', '1');
+            }
+
+            // Animate guide line in from the axis side
+            if (entry.guideLine) {
                 const startX = side === 'left' ? PHASE_CHART.padL : PHASE_CHART.padL + PHASE_CHART.plotW;
                 const endX = side === 'left' ? PHASE_CHART.padL + PHASE_CHART.plotW : PHASE_CHART.padL;
-                guideLine.setAttribute('x1', String(startX));
-                guideLine.setAttribute('x2', String(startX));
-                guideLine.setAttribute('stroke-opacity', '0.35');
+                entry.guideLine.setAttribute('x1', String(startX));
+                entry.guideLine.setAttribute('x2', String(startX));
+                entry.guideLine.setAttribute('stroke-opacity', '0.35');
                 const animStart = performance.now();
                 guideAnim = (function growLine() {
                     const t = Math.min(1, (performance.now() - animStart) / 350);
                     const ease = 1 - Math.pow(1 - t, 3);
-                    guideLine.setAttribute('x2', String(startX + (endX - startX) * ease));
+                    entry.guideLine.setAttribute('x2', String(startX + (endX - startX) * ease));
                     if (t < 1) requestAnimationFrame(growLine);
                     return growLine;
                 })();
-            });
-            hitArea.addEventListener('mouseleave', () => {
-                tipGroup.setAttribute('opacity', '0');
-                numLabel.setAttribute('opacity', '1');
-                guideLine.setAttribute('stroke-opacity', '0');
-                guideAnim = null;
-            });
-        }
+            }
+
+            // Dim the OTHER curve to make this one pop
+            if (totalCurves >= 2) {
+                highlightCurve(curveIndex, true);
+            }
+        });
+        hitArea.addEventListener('mouseleave', () => {
+            // Restore number to default
+            entry.numLabel.setAttribute('fill', 'rgba(167, 191, 223, 0.76)');
+            entry.numLabel.setAttribute('font-weight', '400');
+            entry.numLabel.style.filter = '';
+
+            if (entry.tipGroup) {
+                entry.tipGroup.setAttribute('opacity', '0');
+            }
+            if (entry.guideLine) {
+                entry.guideLine.setAttribute('stroke-opacity', '0');
+            }
+            guideAnim = null;
+
+            // Restore all curves
+            if (totalCurves >= 2) {
+                highlightCurve(curveIndex, false);
+            }
+        });
     }
 
-    // Horizontal effect label at top of axis
+    // Effect label inside plot area, top corner
     const labelAnchor = side === 'left' ? 'start' : 'end';
-    const labelX = side === 'left' ? PHASE_CHART.padL : PHASE_CHART.padL + PHASE_CHART.plotW;
+    const labelX = side === 'left' ? PHASE_CHART.padL + 6 : PHASE_CHART.padL + PHASE_CHART.plotW - 6;
     const yLabel = svgEl('text', {
-        x: String(labelX), y: String(PHASE_CHART.padT - 14),
-        fill: labelColor,
+        x: String(labelX), y: String(PHASE_CHART.padT + 14),
+        fill: labelColor, 'fill-opacity': '0.85',
         'font-family': "'Space Grotesk', sans-serif",
         'font-size': '11', 'font-weight': '500', 'letter-spacing': '0.04em',
         'text-anchor': labelAnchor,
@@ -1770,13 +1896,14 @@ function buildSingleYAxis(group, effectLabel, side, color, levels) {
 function buildPhaseGrid() {
     const group = document.getElementById('phase-grid');
     group.innerHTML = '';
+    const t = chartTheme();
 
     for (let h = PHASE_CHART.startHour; h <= PHASE_CHART.endHour; h += 2) {
         const x = phaseChartX(h * 60);
         group.appendChild(svgEl('line', {
             x1: x.toFixed(1), y1: String(PHASE_CHART.padT),
             x2: x.toFixed(1), y2: String(PHASE_CHART.padT + PHASE_CHART.plotH),
-            stroke: 'rgba(145, 175, 214, 0.17)', 'stroke-width': '1',
+            stroke: t.grid, 'stroke-width': '1',
         }));
     }
     for (let v = 25; v <= 100; v += 25) {
@@ -1784,7 +1911,7 @@ function buildPhaseGrid() {
         group.appendChild(svgEl('line', {
             x1: String(PHASE_CHART.padL), y1: y.toFixed(1),
             x2: String(PHASE_CHART.padL + PHASE_CHART.plotW), y2: y.toFixed(1),
-            stroke: 'rgba(145, 175, 214, 0.17)', 'stroke-width': '1',
+            stroke: t.grid, 'stroke-width': '1',
         }));
     }
 }
@@ -1799,11 +1926,12 @@ function startScanLine() {
     const startX = PHASE_CHART.padL;
 
     // Glow behind line
+    const t = chartTheme();
     const glow = svgEl('rect', {
         id: 'scan-line-glow',
         x: String(startX - 4), y: String(PHASE_CHART.padT),
         width: '10', height: String(PHASE_CHART.plotH),
-        fill: 'rgba(160,160,255,0.08)', rx: '5',
+        fill: t.scanGlow, rx: '5',
     });
     group.appendChild(glow);
 
@@ -1849,6 +1977,499 @@ function stopScanLine() {
         const group = document.getElementById('phase-scan-line');
         if (group) group.innerHTML = '';
     }, 450);
+}
+
+// ============================================
+// 12b. WORD CLOUD — Effect Visualization
+// ============================================
+
+const WORD_CLOUD_PALETTE = [
+    'rgba(110, 200, 255, 0.85)',
+    'rgba(168, 130, 255, 0.80)',
+    'rgba(110, 231, 200, 0.75)',
+    'rgba(255, 180, 100, 0.75)',
+    'rgba(200, 160, 255, 0.70)',
+    'rgba(100, 220, 180, 0.70)',
+    'rgba(255, 150, 130, 0.70)',
+    'rgba(180, 200, 255, 0.75)',
+];
+
+let _wordCloudPositions = []; // stored bboxes for dismiss animation
+let _orbitalRingsState = null;
+
+// ---- Orbital Rings — encircle word cloud, morph into baseline curves ----
+
+function startOrbitalRings(cx, cy) {
+    const group = document.getElementById('phase-word-cloud');
+    if (!group) return null;
+
+    const NPTS = 60;
+    const RX1 = 200, RY1 = 110;
+    const RX2 = 215, RY2 = 120;
+    const TILT1 = 14 * Math.PI / 180;
+    const TILT2 = -14 * Math.PI / 180;
+
+    const ot = chartTheme();
+    const ring1 = svgEl('path', {
+        fill: 'none', stroke: ot.orbitalRing1,
+        'stroke-width': '1.5', class: 'orbital-ring', opacity: '0',
+    });
+    const ring2 = svgEl('path', {
+        fill: 'none', stroke: ot.orbitalRing2,
+        'stroke-width': '1.5', class: 'orbital-ring', opacity: '0',
+    });
+
+    group.insertBefore(ring2, group.firstChild);
+    group.insertBefore(ring1, group.firstChild);
+
+    ring1.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 800, fill: 'forwards' });
+    ring2.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 800, fill: 'forwards', delay: 120 });
+
+    let running = true;
+    let animId;
+
+    function computeD(t, rx, ry, tilt, phase) {
+        const cosT = Math.cos(tilt), sinT = Math.sin(tilt);
+        let d = '';
+        for (let i = 0; i <= NPTS; i++) {
+            const angle = (i / NPTS) * Math.PI * 2;
+            const wobble = 1 + 0.035 * Math.sin(angle * 3 + t * 1.8 + phase)
+                             + 0.02 * Math.sin(angle * 5 + t * 1.1);
+            const ex = rx * wobble * Math.cos(angle + t * 0.2 + phase * 0.5);
+            const ey = ry * wobble * Math.sin(angle + t * 0.2 + phase * 0.5);
+            const px = cx + ex * cosT - ey * sinT;
+            const py = cy + ex * sinT + ey * cosT;
+            d += (i === 0 ? 'M' : 'L') + px.toFixed(1) + ',' + py.toFixed(1);
+        }
+        return d + 'Z';
+    }
+
+    const t0 = performance.now();
+    function tick() {
+        if (!running) return;
+        const t = (performance.now() - t0) / 1000;
+        ring1.setAttribute('d', computeD(t, RX1, RY1, TILT1, 0));
+        ring2.setAttribute('d', computeD(t, RX2, RY2, TILT2, Math.PI));
+        animId = requestAnimationFrame(tick);
+    }
+    tick();
+
+    _orbitalRingsState = {
+        ring1, ring2, cx, cy, NPTS, RX1, RY1, RX2, RY2, TILT1, TILT2,
+        stop() { running = false; if (animId) cancelAnimationFrame(animId); },
+        getLastT() { return (performance.now() - t0) / 1000; },
+    };
+    return _orbitalRingsState;
+}
+
+function stopOrbitalRings() {
+    if (_orbitalRingsState) {
+        _orbitalRingsState.stop();
+    }
+}
+
+/**
+ * Morph the two orbital rings into the two baseline curves.
+ * Each ring "breaks apart" — the ellipse unfurls into a curve shape.
+ * Top half of ring maps to the curve, bottom half collapses up to merge.
+ */
+async function morphRingsToCurves(curvesData) {
+    if (!_orbitalRingsState) return;
+    const rings = _orbitalRingsState;
+    rings.stop();
+
+    const lastT = rings.getLastT();
+    const N = 50; // sample points for morph interpolation
+    const duration = 1400;
+
+    // Sample ring points at frozen position (top half left→right, bottom half right→left)
+    function sampleRing(rx, ry, tilt, phase) {
+        const cosT = Math.cos(tilt), sinT = Math.sin(tilt);
+        const pts = [];
+        // Top half: angle π → 0 (left to right across the top)
+        for (let i = 0; i < N; i++) {
+            const frac = i / (N - 1);
+            const angle = Math.PI * (1 - frac);
+            const wobble = 1 + 0.035 * Math.sin(angle * 3 + lastT * 1.8 + phase)
+                             + 0.02 * Math.sin(angle * 5 + lastT * 1.1);
+            const ex = rx * wobble * Math.cos(angle + lastT * 0.2 + phase * 0.5);
+            const ey = ry * wobble * Math.sin(angle + lastT * 0.2 + phase * 0.5);
+            pts.push({
+                x: rings.cx + ex * cosT - ey * sinT,
+                y: rings.cy + ex * sinT + ey * cosT,
+            });
+        }
+        // Bottom half: angle 0 → -π (right to left across the bottom, maps to curve right→left)
+        for (let i = 0; i < N; i++) {
+            const frac = i / (N - 1);
+            const angle = -Math.PI * frac;
+            const wobble = 1 + 0.035 * Math.sin(angle * 3 + lastT * 1.8 + phase)
+                             + 0.02 * Math.sin(angle * 5 + lastT * 1.1);
+            const ex = rx * wobble * Math.cos(angle + lastT * 0.2 + phase * 0.5);
+            const ey = ry * wobble * Math.sin(angle + lastT * 0.2 + phase * 0.5);
+            pts.push({
+                x: rings.cx + ex * cosT - ey * sinT,
+                y: rings.cy + ex * sinT + ey * cosT,
+            });
+        }
+        return pts; // 2*N points
+    }
+
+    // Sample target baseline curve positions (top half maps forward, bottom half maps reversed)
+    function sampleCurveTarget(curveIdx) {
+        const baseline = curvesData[curveIdx]?.baseline;
+        if (!baseline) return null;
+        const smoothed = smoothPhaseValues(baseline, PHASE_SMOOTH_PASSES);
+        const forward = [];
+        for (let i = 0; i < N; i++) {
+            const frac = i / (N - 1);
+            const hour = PHASE_CHART.startHour + frac * (PHASE_CHART.endHour - PHASE_CHART.startHour);
+            const value = interpolatePointsAtTime(smoothed, hour);
+            forward.push({ x: phaseChartX(hour * 60), y: phaseChartY(value) });
+        }
+        // Bottom half collapses onto the curve (same points, reversed order)
+        const reversed = [];
+        for (let i = N - 1; i >= 0; i--) {
+            reversed.push({ x: forward[i].x, y: forward[i].y });
+        }
+        return [...forward, ...reversed]; // 2*N points
+    }
+
+    const src1 = sampleRing(rings.RX1, rings.RY1, rings.TILT1, 0);
+    const tgt1 = sampleCurveTarget(0);
+    const src2 = sampleRing(rings.RX2, rings.RY2, rings.TILT2, Math.PI);
+    const tgt2 = curvesData.length > 1 ? sampleCurveTarget(1) : sampleCurveTarget(0);
+
+    if (!tgt1 || !tgt2) {
+        rings.ring1.remove();
+        rings.ring2.remove();
+        _orbitalRingsState = null;
+        return;
+    }
+
+    const color1 = curvesData[0].color;
+    const color2 = curvesData.length > 1 ? curvesData[1].color : color1;
+
+    await new Promise(resolve => {
+        const start = performance.now();
+
+        function tick(now) {
+            const rawP = Math.min(1, (now - start) / duration);
+            // Smooth ease-in-out
+            const p = rawP < 0.5 ? 2 * rawP * rawP : 1 - Math.pow(-2 * rawP + 2, 2) / 2;
+
+            function buildMorphPath(src, tgt) {
+                let d = '';
+                for (let i = 0; i < src.length; i++) {
+                    const x = src[i].x + (tgt[i].x - src[i].x) * p;
+                    const y = src[i].y + (tgt[i].y - src[i].y) * p;
+                    d += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+                }
+                return d;
+            }
+
+            rings.ring1.setAttribute('d', buildMorphPath(src1, tgt1));
+            rings.ring2.setAttribute('d', buildMorphPath(src2, tgt2));
+
+            // Transition colors and opacity
+            const strokeOp = 0.28 + p * 0.35;
+            const strokeW = 1.2 + p * 0.6;
+            rings.ring1.setAttribute('stroke', color1);
+            rings.ring1.setAttribute('stroke-opacity', strokeOp.toFixed(2));
+            rings.ring1.setAttribute('stroke-width', strokeW.toFixed(1));
+            rings.ring2.setAttribute('stroke', color2);
+            rings.ring2.setAttribute('stroke-opacity', strokeOp.toFixed(2));
+            rings.ring2.setAttribute('stroke-width', strokeW.toFixed(1));
+
+            if (rawP < 1) {
+                requestAnimationFrame(tick);
+            } else {
+                resolve();
+            }
+        }
+        requestAnimationFrame(tick);
+    });
+
+    // Clean up ring elements
+    rings.ring1.remove();
+    rings.ring2.remove();
+    _orbitalRingsState = null;
+}
+
+function renderWordCloud(effects) {
+    return new Promise(resolve => {
+        const group = document.getElementById('phase-word-cloud');
+        group.innerHTML = '';
+        _wordCloudPositions = [];
+
+        if (!effects || effects.length === 0) { resolve(); return; }
+
+        const cx = PHASE_CHART.padL + PHASE_CHART.plotW / 2;
+        const cy = PHASE_CHART.padT + PHASE_CHART.plotH / 2;
+
+        // Sort by relevance descending
+        const sorted = [...effects].sort((a, b) => b.relevance - a.relevance);
+        const maxRel = sorted[0].relevance || 100;
+
+        // Compact circular packing — small, elegant text clustered tightly
+        const placed = []; // { x, y, w, h } bounding boxes
+        const PAD = 4; // tight padding between words
+
+        for (let i = 0; i < sorted.length; i++) {
+            const eff = sorted[i];
+            // Small, compact font range: 8-13px
+            const fontSize = 8 + (eff.relevance / 100) * 5;
+            const color = WORD_CLOUD_PALETTE[i % WORD_CLOUD_PALETTE.length];
+            const opacity = 0.55 + (eff.relevance / maxRel) * 0.45;
+
+            const estW = eff.name.length * fontSize * 0.52;
+            const estH = fontSize * 1.3;
+
+            let bestX = cx, bestY = cy;
+
+            if (i === 0) {
+                // Center word
+                bestX = cx;
+                bestY = cy;
+            } else {
+                // Tight spiral placement — small radius increments for compact cluster
+                let found = false;
+                let angle = (i * 2.4); // golden angle offset per word
+                for (let attempt = 0; attempt < 80; attempt++) {
+                    const r = 12 + attempt * 5;
+                    const tx = cx + Math.cos(angle) * r;
+                    const ty = cy + Math.sin(angle) * r * 0.7; // slight ellipse
+
+                    // Bounds check
+                    if (tx - estW / 2 < PHASE_CHART.padL + 10 || tx + estW / 2 > PHASE_CHART.padL + PHASE_CHART.plotW - 10) { angle += 0.5; continue; }
+                    if (ty - estH / 2 < PHASE_CHART.padT + 10 || ty + estH / 2 > PHASE_CHART.padT + PHASE_CHART.plotH - 10) { angle += 0.5; continue; }
+
+                    const collides = placed.some(p =>
+                        tx - estW / 2 - PAD < p.x + p.w / 2 &&
+                        tx + estW / 2 + PAD > p.x - p.w / 2 &&
+                        ty - estH / 2 - PAD < p.y + p.h / 2 &&
+                        ty + estH / 2 + PAD > p.y - p.h / 2
+                    );
+                    if (!collides) {
+                        bestX = tx;
+                        bestY = ty;
+                        found = true;
+                        break;
+                    }
+                    angle += 0.5;
+                }
+                if (!found) {
+                    const fallbackAngle = (i / sorted.length) * Math.PI * 2;
+                    bestX = cx + Math.cos(fallbackAngle) * 60;
+                    bestY = cy + Math.sin(fallbackAngle) * 40;
+                }
+            }
+
+            placed.push({ x: bestX, y: bestY, w: estW, h: estH });
+
+            const textEl = svgEl('text', {
+                x: bestX.toFixed(1),
+                y: bestY.toFixed(1),
+                fill: color,
+                'font-size': fontSize.toFixed(1),
+                class: 'word-cloud-word',
+                opacity: '0',
+                'data-effect-name': eff.name,
+                'data-relevance': String(eff.relevance),
+                'data-cx': bestX.toFixed(1),
+                'data-cy': bestY.toFixed(1),
+                'data-target-opacity': opacity.toFixed(2),
+            });
+            textEl.textContent = eff.name;
+            group.appendChild(textEl);
+
+            _wordCloudPositions.push({
+                el: textEl, x: bestX, y: bestY, w: estW, h: estH,
+                name: eff.name, relevance: eff.relevance,
+            });
+        }
+
+        // Staggered reveal — gentle fade-in, no scale transform for clean look
+        const stagger = 250;
+        const animDur = 350;
+        const words = group.querySelectorAll('.word-cloud-word');
+
+        words.forEach((word, idx) => {
+            const targetOp = parseFloat(word.getAttribute('data-target-opacity'));
+            setTimeout(() => {
+                word.animate([
+                    { opacity: 0 },
+                    { opacity: targetOp },
+                ], {
+                    duration: animDur,
+                    easing: 'ease-out',
+                    fill: 'forwards',
+                });
+            }, idx * stagger);
+        });
+
+        setTimeout(resolve, words.length * stagger + animDur);
+    });
+}
+
+function dismissWordCloud(mainEffectNames, mainColors) {
+    return new Promise(resolve => {
+        const group = document.getElementById('phase-word-cloud');
+        const words = Array.from(group.querySelectorAll('.word-cloud-word'));
+
+        if (words.length === 0) { resolve(); return; }
+
+        // Fuzzy match: find the best cloud word for each main effect
+        const winners = [];
+        const claimed = new Set();
+
+        for (let mi = 0; mi < mainEffectNames.length && mi < AppState.maxEffects; mi++) {
+            const target = mainEffectNames[mi].toLowerCase().trim();
+            let bestIdx = -1;
+            let bestScore = 0;
+
+            for (let wi = 0; wi < _wordCloudPositions.length; wi++) {
+                if (claimed.has(wi)) continue;
+                const wName = _wordCloudPositions[wi].name.toLowerCase().trim();
+
+                // Exact match
+                if (wName === target) { bestIdx = wi; bestScore = 100; break; }
+                // Includes match
+                if (wName.includes(target) || target.includes(wName)) {
+                    const score = 80;
+                    if (score > bestScore) { bestScore = score; bestIdx = wi; }
+                    continue;
+                }
+                // Partial word overlap
+                const wWords = wName.split(/\s+/);
+                const tWords = target.split(/\s+/);
+                const overlap = wWords.filter(w => tWords.some(t => t.includes(w) || w.includes(t))).length;
+                if (overlap > 0) {
+                    const score = 50 + overlap * 15;
+                    if (score > bestScore) { bestScore = score; bestIdx = wi; }
+                }
+            }
+
+            // If no match found, take highest-relevance unclaimed word
+            if (bestIdx === -1) {
+                let maxRel = -1;
+                for (let wi = 0; wi < _wordCloudPositions.length; wi++) {
+                    if (claimed.has(wi)) continue;
+                    if (_wordCloudPositions[wi].relevance > maxRel) {
+                        maxRel = _wordCloudPositions[wi].relevance;
+                        bestIdx = wi;
+                    }
+                }
+            }
+
+            if (bestIdx >= 0) {
+                claimed.add(bestIdx);
+                winners.push({ wordIdx: bestIdx, mainIdx: mi });
+            }
+        }
+
+        // Animate winners: crossfade text if needed, then fly to Y-axis
+        const flyDuration = 800;
+        const cx = PHASE_CHART.padL + PHASE_CHART.plotW / 2;
+
+        for (const w of winners) {
+            const pos = _wordCloudPositions[w.wordIdx];
+            const el = pos.el;
+            const mainName = mainEffectNames[w.mainIdx];
+            const isLeft = w.mainIdx === 0;
+            const targetX = isLeft
+                ? PHASE_CHART.padL - 5
+                : PHASE_CHART.padL + PHASE_CHART.plotW + 5;
+            const targetY = PHASE_CHART.padT + PHASE_CHART.plotH / 2;
+
+            // Crossfade text if names differ
+            if (pos.name.toLowerCase().trim() !== mainName.toLowerCase().trim()) {
+                // Fade out old text, change, fade in
+                el.animate([{ opacity: parseFloat(el.style.opacity || 0.8) }, { opacity: 0 }], {
+                    duration: 200, fill: 'forwards',
+                });
+                setTimeout(() => {
+                    el.textContent = mainName;
+                    el.setAttribute('font-size', '13');
+                    el.setAttribute('fill', mainColors[w.mainIdx] || WORD_CLOUD_PALETTE[0]);
+                    el.animate([{ opacity: 0 }, { opacity: 0.9 }], {
+                        duration: 200, fill: 'forwards',
+                    });
+                }, 200);
+            }
+
+            // Fly to axis position
+            const startX = pos.x;
+            const startY = pos.y;
+            const startTime = performance.now();
+            const delay = 350; // wait for crossfade
+
+            (function animateFly() {
+                const elapsed = performance.now() - startTime;
+                if (elapsed < delay) { requestAnimationFrame(animateFly); return; }
+                const t = Math.min(1, (elapsed - delay) / flyDuration);
+                const ease = 1 - Math.pow(1 - t, 3); // ease-out-cubic
+
+                const curX = startX + (targetX - startX) * ease;
+                const curY = startY + (targetY - startY) * ease;
+                const curScale = 1 - ease * 0.3; // shrink slightly
+
+                el.setAttribute('x', curX.toFixed(1));
+                el.setAttribute('y', curY.toFixed(1));
+                el.setAttribute('transform', `scale(${curScale.toFixed(2)})`);
+
+                if (t >= 1) {
+                    // Fade out (axis label will replace it)
+                    el.animate([{ opacity: 0.9 }, { opacity: 0 }], {
+                        duration: 150, fill: 'forwards',
+                    });
+                } else {
+                    requestAnimationFrame(animateFly);
+                }
+            })();
+        }
+
+        // Scatter all non-winner words
+        const scatterDuration = 600;
+        words.forEach((word, idx) => {
+            const isWinner = winners.some(w => _wordCloudPositions[w.wordIdx].el === word);
+            if (isWinner) return;
+
+            const angle = Math.random() * Math.PI * 2;
+            const distance = 200 + Math.random() * 300;
+            const dx = Math.cos(angle) * distance;
+            const dy = Math.sin(angle) * distance;
+            const staggerDelay = (idx - winners.length) * 50;
+
+            setTimeout(() => {
+                const currentX = parseFloat(word.getAttribute('x'));
+                const currentY = parseFloat(word.getAttribute('y'));
+                const startTime = performance.now();
+
+                (function scatter() {
+                    const t = Math.min(1, (performance.now() - startTime) / scatterDuration);
+                    const ease = t * t; // ease-in (accelerating out)
+
+                    word.setAttribute('x', (currentX + dx * ease).toFixed(1));
+                    word.setAttribute('y', (currentY + dy * ease).toFixed(1));
+                    word.setAttribute('opacity', (1 - ease).toFixed(2));
+
+                    if (t < 1) requestAnimationFrame(scatter);
+                })();
+            }, staggerDelay);
+        });
+
+        // Resolve and clear after all animations
+        const totalTime = Math.max(
+            flyDuration + 350 + 150, // winners: delay + fly + fadeout
+            scatterDuration + words.length * 50 // scatter: stagger + duration
+        );
+        setTimeout(() => {
+            group.innerHTML = '';
+            _wordCloudPositions = [];
+            resolve();
+        }, totalTime + 50);
+    });
 }
 
 // ---- Phase Chart: Curve Path Utility ----
@@ -1951,6 +2572,30 @@ function phasePointsToFillPath(points, alreadySmoothed = false) {
     return pathD + ` L ${lastX.toFixed(1)} ${baseY.toFixed(1)} L ${firstX.toFixed(1)} ${baseY.toFixed(1)} Z`;
 }
 
+/** Progressive morph: blend desired→Lx values based on playhead position */
+function buildProgressiveMorphPoints(desiredPts, lxPts, playheadHour, blendWidth) {
+    const halfBlend = blendWidth / 2;
+    const len = Math.min(desiredPts.length, lxPts.length);
+    const result = new Array(len);
+    for (let i = 0; i < len; i++) {
+        const hour = desiredPts[i].hour;
+        let t; // 0 = fully desired, 1 = fully Lx
+        if (hour <= playheadHour - halfBlend) {
+            t = 1;
+        } else if (hour >= playheadHour + halfBlend) {
+            t = 0;
+        } else {
+            const x = (playheadHour + halfBlend - hour) / blendWidth;
+            t = x * x * (3 - 2 * x); // smoothstep
+        }
+        result[i] = {
+            hour: hour,
+            value: desiredPts[i].value + (lxPts[i].value - desiredPts[i].value) * t,
+        };
+    }
+    return result;
+}
+
 // ---- Phase Chart: Peak descriptor labels with collision avoidance ----
 function findCurvePeak(points) {
     const smoothed = smoothPhaseValues(points, PHASE_SMOOTH_PASSES);
@@ -1994,22 +2639,36 @@ function findMaxDivergence(curve) {
 }
 
 function placePeakDescriptors(group, curvesData, pointsKey, baseDelay) {
-    // Baseline: worst point (trough) — user empathises with their condition
-    // Target: max divergence from baseline — where the stack helps the most
-    const useWorst = pointsKey === 'baseline';
+    // Both baseline and target labels anchor at the max divergence point —
+    // the time where the intervention matters most to the user.
+    // Baseline label: shows the baseline value at that critical time
+    // Target label: shows the target value at that critical time
+    const isBaseline = pointsKey === 'baseline';
 
     const items = [];
     for (let i = 0; i < curvesData.length; i++) {
         const curve = curvesData[i];
         if (!curve.levels) continue;
 
+        // Find the max divergence point (most impactful time)
+        const div = findMaxDivergence(curve);
         let keyPoint;
-        if (useWorst) {
-            keyPoint = findCurveTrough(curve[pointsKey]);
+        if (div) {
+            if (isBaseline) {
+                // Read the baseline value at the divergence time
+                const blSmoothed = smoothPhaseValues(curve.baseline, PHASE_SMOOTH_PASSES);
+                const match = blSmoothed.reduce((a, b) =>
+                    Math.abs(b.hour - div.hour) < Math.abs(a.hour - div.hour) ? b : a);
+                keyPoint = { hour: match.hour, value: match.value };
+            } else {
+                // Target value at divergence time (already in div)
+                keyPoint = div;
+            }
         } else {
-            // Place target label at max divergence point
-            const div = findMaxDivergence(curve);
-            keyPoint = div || findCurvePeak(curve[pointsKey]);
+            // Fallback if no divergence data
+            keyPoint = isBaseline
+                ? findCurveTrough(curve[pointsKey])
+                : findCurvePeak(curve[pointsKey]);
         }
 
         const level = nearestLevel(keyPoint.value);
@@ -2021,9 +2680,11 @@ function placePeakDescriptors(group, curvesData, pointsKey, baseDelay) {
     }
     if (items.length === 0) return;
 
-    // Default placement: above peaks (target), below troughs (baseline)
+    // Default placement: label goes on the side with more space
+    // High values (low py) → label above; Low values (high py) → label below
     for (const item of items) {
-        item.labelY = useWorst ? item.py + 18 : item.py - 14;
+        const isHighValue = item.peakVal >= 50;
+        item.labelY = isHighValue ? item.py - 14 : item.py + 18;
     }
 
     // Collision avoidance for 2 labels
@@ -2051,6 +2712,7 @@ function placePeakDescriptors(group, curvesData, pointsKey, baseDelay) {
     }
 
     // Create and animate labels with backdrop for readability over curves
+    const dt = chartTheme();
     for (let i = 0; i < items.length; i++) {
         const { curve, descriptor, px, labelY } = items[i];
         const delayMs = baseDelay + i * 200;
@@ -2064,14 +2726,14 @@ function placePeakDescriptors(group, curvesData, pointsKey, baseDelay) {
         // Container group for backdrop + text
         const labelGroup = svgEl('g', { class: 'peak-descriptor', opacity: '0' });
 
-        // Dark backdrop pill
+        // Backdrop pill
         const backdrop = svgEl('rect', {
             x: (px - pillW / 2).toFixed(1),
             y: (labelY - pillH / 2 - 2).toFixed(1),
             width: pillW.toFixed(1),
             height: pillH.toFixed(1),
             rx: '6', ry: '6',
-            fill: 'rgba(13, 17, 23, 0.75)',
+            fill: dt.tooltipBg,
         });
         labelGroup.appendChild(backdrop);
 
@@ -2132,6 +2794,32 @@ async function renderBaselineCurves(curvesData) {
 
     // Place peak descriptors at each baseline curve's peak (batch for collision avoidance)
     placePeakDescriptors(group, curvesData, 'baseline', 400);
+}
+
+/** Instant baseline curves — no animation, used after ring→curve morph */
+function renderBaselineCurvesInstant(curvesData) {
+    const group = document.getElementById('phase-baseline-curves');
+    group.innerHTML = '';
+
+    for (let i = 0; i < curvesData.length; i++) {
+        const curve = curvesData[i];
+        const pathD = phasePointsToPath(curve.baseline);
+        if (!pathD) continue;
+
+        const fillPath = svgEl('path', {
+            d: phasePointsToFillPath(curve.baseline),
+            fill: curve.color, 'fill-opacity': '0.04',
+        });
+        group.appendChild(fillPath);
+
+        const strokePath = svgEl('path', {
+            d: pathD, fill: 'none', stroke: curve.color,
+            class: 'phase-baseline-path', opacity: '0.5',
+        });
+        group.appendChild(strokePath);
+    }
+
+    placePeakDescriptors(group, curvesData, 'baseline', 0);
 }
 
 // ---- Phase Chart: Morph baseline → desired with arrows ----
@@ -2214,6 +2902,7 @@ async function morphToDesiredCurves(curvesData) {
         const fillPath = svgEl('path', {
             d: baseFillD,
             fill: curve.color, 'fill-opacity': '0',
+            class: 'phase-desired-fill',
         });
         desiredGroup.appendChild(fillPath);
         fillPath.animate([{ fillOpacity: 0 }, { fillOpacity: 0.08 }], { duration: morphDuration, fill: 'forwards' });
@@ -2295,7 +2984,8 @@ function clearPromptError() {
 // ---- Phase Chart: Reset ----
 function resetPhaseChart() {
     ['phase-x-axis', 'phase-y-axis-left', 'phase-y-axis-right', 'phase-grid',
-     'phase-scan-line', 'phase-baseline-curves', 'phase-desired-curves',
+     'phase-scan-line', 'phase-word-cloud', 'phase-baseline-curves', 'phase-desired-curves',
+     'phase-lx-curves', 'phase-lx-markers', 'phase-substance-timeline',
      'phase-mission-arrows', 'phase-legend'].forEach(id => {
         const el = document.getElementById(id);
         if (el) {
@@ -2308,6 +2998,277 @@ function resetPhaseChart() {
         optimizeBtn.classList.remove('visible');
         optimizeBtn.classList.add('hidden');
     }
+    const lxBtn = document.getElementById('phase-lx-btn');
+    if (lxBtn) {
+        lxBtn.classList.remove('visible');
+        lxBtn.classList.add('hidden');
+    }
+    PhaseState.interventionPromise = null;
+    PhaseState.interventionResult = null;
+    PhaseState.lxCurves = null;
+    PhaseState.wordCloudEffects = [];
+    PhaseState.incrementalSnapshots = null;
+    _wordCloudPositions = [];
+    stopOrbitalRings();
+    _orbitalRingsState = null;
+
+    // Remove any lingering substance step labels
+    document.querySelectorAll('.substance-step-label').forEach(el => el.remove());
+    document.querySelectorAll('.sequential-playhead').forEach(el => el.remove());
+
+    // Clean up morph playhead and drag state
+    cleanupMorphDrag();
+
+    // Reset phase step controls
+    hidePhaseStepControls();
+    PhaseState.maxPhaseReached = -1;
+    PhaseState.viewingPhase = -1;
+
+    // Clear any inline opacity/transition/filter styles left by phase stepping
+    ['phase-desired-curves', 'phase-mission-arrows', 'phase-lx-curves', 'phase-lx-markers'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.style.opacity = '';
+            el.style.transition = '';
+            el.style.filter = '';
+        }
+    });
+
+    // Clear transmutation state (dashed desired curves)
+    const desiredGroup = document.getElementById('phase-desired-curves');
+    if (desiredGroup) {
+        desiredGroup.querySelectorAll('.phase-desired-path').forEach(p => {
+            p.removeAttribute('stroke-dasharray');
+        });
+    }
+
+    // Clear substance timeline
+    const timeline = document.getElementById('phase-substance-timeline');
+    if (timeline) timeline.innerHTML = '';
+
+    // Clean up timeline defs + restore viewBox
+    const svg = document.getElementById('phase-chart-svg');
+    if (svg) {
+        svg.querySelectorAll('defs [id^="tl-grad-"], defs [id^="tl-clip-"]').forEach(el => el.remove());
+        svg.setAttribute('viewBox', '0 0 960 500');
+    }
+}
+
+// ============================================
+// 15a2. PHASE STEP CONTROLS (< > chevrons)
+// ============================================
+
+function showPhaseStepControls() {
+    const el = document.getElementById('phase-step-controls');
+    if (!el) return;
+    el.classList.remove('hidden');
+    requestAnimationFrame(() => el.classList.add('visible'));
+}
+
+function hidePhaseStepControls() {
+    const el = document.getElementById('phase-step-controls');
+    if (!el) return;
+    el.classList.remove('visible');
+    el.classList.add('hidden');
+}
+
+let _stepAnimating = false;
+let _morphDragState = null; // Holds state for the draggable before/after playhead
+
+function updateStepButtons() {
+    const backBtn = document.getElementById('phase-step-back');
+    const fwdBtn = document.getElementById('phase-step-forward');
+    if (!backBtn || !fwdBtn) return;
+    backBtn.disabled = _stepAnimating || PhaseState.viewingPhase <= 0;
+    fwdBtn.disabled = _stepAnimating || PhaseState.viewingPhase >= PhaseState.maxPhaseReached;
+}
+
+function fadeGroup(group, targetOpacity, duration) {
+    if (!group) return;
+    group.style.transition = `opacity ${duration}ms ease`;
+    group.style.opacity = String(targetOpacity);
+}
+
+// Stagger-fade children of a group from current opacity to target
+function staggerFadeChildren(group, targetOpacity, perChildMs, staggerMs) {
+    if (!group) return;
+    const children = Array.from(group.children);
+    children.forEach((child, i) => {
+        const delay = i * staggerMs;
+        child.style.transition = `opacity ${perChildMs}ms ease ${delay}ms`;
+        child.style.opacity = String(targetOpacity);
+    });
+}
+
+// Quick clip-path reveal left→right for Lx curves (compressed replay)
+function quickLxClipReveal(durationMs) {
+    const group = document.getElementById('phase-lx-curves');
+    if (!group || group.children.length === 0) return;
+
+    // Ensure children are visible first
+    group.style.opacity = '1';
+    for (const child of group.children) {
+        child.style.opacity = '';
+    }
+
+    const svg = document.getElementById('phase-chart-svg');
+    const defs = svg.querySelector('defs');
+    const clipId = 'lx-step-clip-reveal';
+
+    // Remove any leftover clip from previous step
+    const old = defs.querySelector(`#${clipId}`);
+    if (old) old.remove();
+    group.removeAttribute('clip-path');
+
+    const clipPath = svgEl('clipPath', { id: clipId });
+    const clipRect = svgEl('rect', {
+        x: String(PHASE_CHART.padL), y: '0',
+        width: '0', height: String(PHASE_CHART.viewH),
+    });
+    clipPath.appendChild(clipRect);
+    defs.appendChild(clipPath);
+    group.setAttribute('clip-path', `url(#${clipId})`);
+
+    const startTime = performance.now();
+    (function animate() {
+        const t = Math.min(1, (performance.now() - startTime) / durationMs);
+        const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        clipRect.setAttribute('width', String(PHASE_CHART.plotW * ease));
+        if (t < 1) {
+            requestAnimationFrame(animate);
+        } else {
+            group.removeAttribute('clip-path');
+            clipPath.remove();
+        }
+    })();
+}
+
+async function stepToPhase(targetIdx) {
+    const current = PhaseState.viewingPhase;
+    if (targetIdx === current) return;
+    if (targetIdx < 0 || targetIdx > PhaseState.maxPhaseReached) return;
+    if (_stepAnimating) return;
+
+    const desiredGroup = document.getElementById('phase-desired-curves');
+    const arrowGroup = document.getElementById('phase-mission-arrows');
+    const lxGroup = document.getElementById('phase-lx-curves');
+    const lxMarkers = document.getElementById('phase-lx-markers');
+    const timelineGroup = document.getElementById('phase-substance-timeline');
+    const baseGroup = document.getElementById('phase-baseline-curves');
+
+    if (targetIdx < current) {
+        // ---- Stepping BACKWARD — fast rewind via fades/morphs ----
+        _stepAnimating = true;
+        const dur = 250;
+        if (targetIdx < 2 && current >= 2) {
+            // Remove Lx layer: clear ghost AUC fills, timeline, markers, playhead
+            lxGroup.innerHTML = '';
+            fadeGroup(lxMarkers, 0, dur);
+            timelineGroup.innerHTML = '';
+            document.querySelectorAll('.substance-step-label, .sequential-playhead').forEach(el => el.remove());
+            // Restore desired curves from ghost back to solid
+            transmuteDesiredCurves(false);
+            // Restore arrows
+            arrowGroup.style.opacity = '1';
+            arrowGroup.style.filter = '';
+            Array.from(arrowGroup.children).forEach(ch => {
+                ch.style.opacity = '';
+                ch.getAnimations().forEach(a => a.cancel());
+            });
+            // Restore baseline curves to their original shape (scans morphed them)
+            const cd = PhaseState.curvesData;
+            if (cd) {
+                const bStrokes = baseGroup.querySelectorAll('.phase-baseline-path');
+                const bFills = baseGroup.querySelectorAll('path:not(.phase-baseline-path):not(.peak-descriptor)');
+                for (let ci = 0; ci < cd.length; ci++) {
+                    const origD = phasePointsToPath(cd[ci].baseline);
+                    const origFillD = phasePointsToFillPath(cd[ci].baseline);
+                    if (bStrokes[ci]) {
+                        bStrokes[ci].setAttribute('d', origD);
+                        bStrokes[ci].setAttribute('stroke-dasharray', '6 4');
+                        bStrokes[ci].setAttribute('stroke-opacity', '0.54');
+                        bStrokes[ci].setAttribute('stroke-width', '1.7');
+                    }
+                    if (bFills[ci] && origFillD) bFills[ci].setAttribute('d', origFillD);
+                }
+                // Restore baseline peak descriptors
+                baseGroup.querySelectorAll('.peak-descriptor').forEach(el => el.remove());
+                placePeakDescriptors(baseGroup, cd, 'baseline', 0);
+            }
+        }
+        if (targetIdx < 1 && current >= 1) {
+            fadeGroup(desiredGroup, 0, dur);
+            fadeGroup(arrowGroup, 0, dur);
+        }
+
+        if (targetIdx === 0) {
+            baseGroup.querySelectorAll('.peak-descriptor').forEach(el => {
+                el.style.transition = `opacity ${dur}ms ease`;
+                el.style.opacity = '0.8';
+            });
+        }
+
+        await sleep(dur + 50);
+        _stepAnimating = false;
+        PhaseState.viewingPhase = targetIdx;
+        updateStepButtons();
+
+    } else {
+        // ---- Stepping FORWARD — replay the actual animations from cached data ----
+        _stepAnimating = true;
+        updateStepButtons();
+
+        const curvesData = PhaseState.curvesData;
+        if (!curvesData) { _stepAnimating = false; return; }
+
+        if (targetIdx >= 1 && current < 1) {
+            // Phase 0→1: Replay the real morphToDesiredCurves animation
+            baseGroup.querySelectorAll('.peak-descriptor').forEach(el => {
+                el.style.transition = 'opacity 300ms ease';
+                el.style.opacity = '0';
+            });
+
+            await morphToDesiredCurves(curvesData);
+            renderPhaseLegend(curvesData, 'full');
+
+            PhaseState.viewingPhase = 1;
+            updateStepButtons();
+        }
+
+        if (targetIdx >= 2 && PhaseState.viewingPhase < 2) {
+            // Phase 1→2: Replay the full sequential substance animation
+            const snapshots = PhaseState.incrementalSnapshots;
+            const interventionData = PhaseState.interventionResult;
+            if (snapshots && interventionData) {
+                const interventions = validateInterventions(interventionData.interventions || [], curvesData);
+                await animateSequentialLxReveal(snapshots, interventions, curvesData);
+            }
+
+            PhaseState.viewingPhase = 2;
+            updateStepButtons();
+        }
+
+        _stepAnimating = false;
+        updateStepButtons();
+    }
+}
+
+function initPhaseStepControls() {
+    const backBtn = document.getElementById('phase-step-back');
+    const fwdBtn = document.getElementById('phase-step-forward');
+    if (!backBtn || !fwdBtn) return;
+
+    backBtn.addEventListener('click', () => {
+        if (PhaseState.viewingPhase > 0) {
+            stepToPhase(PhaseState.viewingPhase - 1);
+        }
+    });
+
+    fwdBtn.addEventListener('click', () => {
+        if (PhaseState.viewingPhase < PhaseState.maxPhaseReached) {
+            stepToPhase(PhaseState.viewingPhase + 1);
+        }
+    });
 }
 
 // ============================================
@@ -3346,36 +4307,38 @@ async function handlePromptSubmit(e) {
         userPrompt: prompt,
     });
 
-    // === STEP 5: Animate prompt upward + reveal X-axis ===
+    // === Animate prompt upward + reveal X-axis ===
     const promptSection = document.getElementById('prompt-section');
     promptSection.classList.remove('phase-centered');
     promptSection.classList.add('phase-top');
 
-    // Show chart container
     const chartContainer = document.getElementById('phase-chart-container');
     chartContainer.classList.add('visible');
 
-    // Build and reveal X-axis
     await sleep(350);
     buildPhaseXAxis();
     document.getElementById('phase-x-axis').classList.add('revealed');
 
-    // === STEP 2 + 4: Fire both API calls in parallel ===
+    // === Fire both API calls in parallel ===
     const fastModelPromise = callFastModel(prompt);
     const mainModelPromise = callMainModelForCurves(prompt);
 
-    // === STEP 7: Start scanning line after brief pause ===
+    // Start scanning line
     await sleep(400);
     startScanLine();
     PhaseState.phase = 'scanning';
 
-    // === STEP 6: When fast model returns, show Y-axes ===
-    let effects;
+    // === WORD CLOUD PHASE: Fast model returns 5-8 effects ===
+    let wordCloudEffects;
     try {
         const fastResult = await fastModelPromise;
-        effects = fastResult.effects || [];
-        if (effects.length === 0) throw new Error('Fast model returned no effects.');
-        if (effects.length > 2) effects = effects.slice(0, 2);
+        const rawEffects = fastResult.effects || [];
+        if (rawEffects.length === 0) throw new Error('Fast model returned no effects.');
+        // Normalize: handle both new format [{name, relevance}] and legacy ["string"]
+        wordCloudEffects = rawEffects.map(e =>
+            typeof e === 'string' ? { name: e, relevance: 80 } : e
+        );
+        if (wordCloudEffects.length > 8) wordCloudEffects = wordCloudEffects.slice(0, 8);
     } catch (err) {
         stopScanLine();
         showPromptError(err instanceof Error ? err.message : String(err));
@@ -3384,81 +4347,162 @@ async function handlePromptSubmit(e) {
         return;
     }
 
-    PhaseState.effects = effects;
-    PhaseState.phase = 'axes-revealed';
+    PhaseState.wordCloudEffects = wordCloudEffects;
 
-    buildPhaseYAxes(effects);
-    buildPhaseGrid();
-    document.getElementById('phase-y-axis-left').classList.add('revealed');
-    if (effects.length > 1) {
-        document.getElementById('phase-y-axis-right').classList.add('revealed');
+    // Show word cloud + orbital rings (skip if too few effects)
+    const cloudCx = PHASE_CHART.padL + PHASE_CHART.plotW / 2;
+    const cloudCy = PHASE_CHART.padT + PHASE_CHART.plotH / 2;
+    let hasCloud = false;
+
+    if (wordCloudEffects.length >= 3) {
+        PhaseState.phase = 'word-cloud';
+        await renderWordCloud(wordCloudEffects);
+        startOrbitalRings(cloudCx, cloudCy);
+        hasCloud = true;
     }
 
-    // === STEP 8: When main model returns, draw curves ===
+    // === MAIN MODEL RETURNS: Transition to chart ===
     let curvesResult;
     try {
         curvesResult = await mainModelPromise;
     } catch (err) {
         stopScanLine();
+        stopOrbitalRings();
+        document.getElementById('phase-word-cloud').innerHTML = '';
         showPromptError(err instanceof Error ? err.message : String(err));
         PhaseState.isProcessing = false;
         document.getElementById('prompt-submit').disabled = false;
         return;
     }
 
-    // Validate curve data
     let curvesData = curvesResult.curves || [];
     if (curvesData.length === 0) {
         stopScanLine();
+        stopOrbitalRings();
+        document.getElementById('phase-word-cloud').innerHTML = '';
         showPromptError('Main model returned no curve data.');
         PhaseState.isProcessing = false;
         document.getElementById('prompt-submit').disabled = false;
         return;
     }
 
-    // Update Y-axis labels with main model's effect names + colors
-    const mainEffects = curvesData.map(c => c.effect);
-    const mainColors = curvesData.map(c => c.color);
-    if (mainEffects.length > 0) {
-        effects = mainEffects.slice(0, 2);
-        PhaseState.effects = effects;
-        buildPhaseYAxes(effects, mainColors, curvesData);
-    }
-
     // Stop scanning line
     stopScanLine();
-    await sleep(500);
 
-    // Draw baseline curves with labels sliding in from axes
-    await renderBaselineCurves(curvesData);
-    renderPhaseLegend(curvesData, 'baseline');
-    await sleep(600);
+    // Dismiss word cloud + morph rings into baseline curves (in parallel)
+    const mainEffects = curvesData.map(c => c.effect);
+    const mainColors = curvesData.map(c => c.color);
 
-    // Show "Optimize" button
-    const optimizeBtn = document.getElementById('phase-optimize-btn');
-    optimizeBtn.classList.remove('hidden');
-    requestAnimationFrame(() => optimizeBtn.classList.add('visible'));
+    if (hasCloud) {
+        PhaseState.phase = 'word-cloud-dismiss';
+        // Build Y-axes + grid simultaneously so curves have somewhere to land
+        const effects = mainEffects.slice(0, AppState.maxEffects);
+        PhaseState.effects = effects;
+        buildPhaseYAxes(effects, mainColors, curvesData);
+        document.getElementById('phase-y-axis-left').classList.add('revealed');
+        if (effects.length > 1) {
+            document.getElementById('phase-y-axis-right').classList.add('revealed');
+        }
+        buildPhaseGrid();
+
+        await Promise.all([
+            dismissWordCloud(mainEffects, mainColors),
+            morphRingsToCurves(curvesData),
+        ]);
+
+        // Rings morphed into position — now render real baseline DOM elements (instant, no animation)
+        renderBaselineCurvesInstant(curvesData);
+        renderPhaseLegend(curvesData, 'baseline');
+    } else {
+        // No cloud — standard flow
+        const effects = mainEffects.slice(0, AppState.maxEffects);
+        PhaseState.effects = effects;
+        buildPhaseYAxes(effects, mainColors, curvesData);
+        document.getElementById('phase-y-axis-left').classList.add('revealed');
+        if (effects.length > 1) {
+            document.getElementById('phase-y-axis-right').classList.add('revealed');
+        }
+        buildPhaseGrid();
+        await sleep(300);
+        await renderBaselineCurves(curvesData);
+        renderPhaseLegend(curvesData, 'baseline');
+    }
 
     PhaseState.curvesData = curvesData;
     PhaseState.phase = 'baseline-shown';
+    PhaseState.maxPhaseReached = 0;
+    PhaseState.viewingPhase = 0;
+
+    // === SHOW OPTIMIZE BUTTON — wait for user click ===
+    // Fire intervention model in background for head start
+    PhaseState.interventionPromise = callInterventionModel(prompt, curvesData).catch(() => null);
+
+    const optimizeBtn = document.getElementById('phase-optimize-btn');
+    optimizeBtn.classList.remove('hidden');
+    optimizeBtn.style.opacity = '0';
+    optimizeBtn.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 400, fill: 'forwards' });
+
     PhaseState.isProcessing = false;
     document.getElementById('prompt-submit').disabled = false;
 
-    // Wait for user to click Optimize
+    // Wait for Optimize button click
     await new Promise(resolve => {
-        optimizeBtn.addEventListener('click', async () => {
-            optimizeBtn.classList.remove('visible');
-            await sleep(300);
-            optimizeBtn.classList.add('hidden');
-
-            // Morph baseline → desired with arrows
-            await morphToDesiredCurves(curvesData);
-            renderPhaseLegend(curvesData, 'full');
-
-            PhaseState.phase = 'curves-drawn';
+        function onOptimize() {
+            optimizeBtn.removeEventListener('click', onOptimize);
             resolve();
-        }, { once: true });
+        }
+        optimizeBtn.addEventListener('click', onOptimize);
     });
+
+    optimizeBtn.classList.add('hidden');
+    PhaseState.isProcessing = true;
+    document.getElementById('prompt-submit').disabled = true;
+
+    // Morph baseline → desired
+    await morphToDesiredCurves(curvesData);
+    renderPhaseLegend(curvesData, 'full');
+
+    PhaseState.phase = 'curves-drawn';
+    PhaseState.maxPhaseReached = 1;
+    PhaseState.viewingPhase = 1;
+    showPhaseStepControls();
+    updateStepButtons();
+
+    // === SEQUENTIAL SUBSTANCE LAYERING ===
+    // Wait for intervention model
+    let interventionData = PhaseState.interventionResult;
+    if (!interventionData && PhaseState.interventionPromise) {
+        interventionData = await PhaseState.interventionPromise;
+    }
+    if (!interventionData) {
+        interventionData = generateInterventionFallback(curvesData);
+    }
+    PhaseState.interventionResult = interventionData;
+
+    const interventions = validateInterventions(interventionData.interventions || [], curvesData);
+    if (interventions.length === 0) {
+        PhaseState.isProcessing = false;
+        document.getElementById('prompt-submit').disabled = false;
+        return;
+    }
+
+    // Compute incremental Lx overlays (one per substance step)
+    const incrementalSnapshots = computeIncrementalLxOverlay(interventions, curvesData);
+    PhaseState.incrementalSnapshots = incrementalSnapshots;
+    PhaseState.lxCurves = incrementalSnapshots[incrementalSnapshots.length - 1].lxCurves;
+
+    PhaseState.phase = 'lx-sequential';
+
+    // Animate sequential substance reveal
+    await animateSequentialLxReveal(incrementalSnapshots, interventions, curvesData);
+
+    PhaseState.phase = 'lx-rendered';
+    PhaseState.maxPhaseReached = 2;
+    PhaseState.viewingPhase = 2;
+    updateStepButtons();
+
+    PhaseState.isProcessing = false;
+    document.getElementById('prompt-submit').disabled = false;
 }
 
 // Old handlePromptSubmit for cartridge flow (preserved for future use)
@@ -3553,6 +4597,15 @@ function initSettings() {
 
     // Init LLM select
     llmSelect.value = AppState.selectedLLM;
+
+    // Init effects select
+    const effectsSelect = document.getElementById('effects-select');
+    effectsSelect.value = String(AppState.maxEffects);
+    effectsSelect.addEventListener('change', () => {
+        AppState.maxEffects = parseInt(effectsSelect.value);
+        localStorage.setItem('cortex_max_effects', effectsSelect.value);
+    });
+
     updateKeyUI();
 
     function updateKeyUI() {
@@ -3625,14 +4678,64 @@ function initToggles() {
 // 21. INITIALIZATION
 // ============================================
 
+function refreshChartTheme() {
+    const t = chartTheme();
+    // Update scan-line gradient stops for current theme
+    const grad = document.getElementById('scan-line-grad');
+    if (grad) {
+        const stops = grad.querySelectorAll('stop');
+        const light = document.body.classList.contains('light-mode');
+        const base = light ? '80,100,180' : '160,160,255';
+        if (stops.length >= 3) {
+            stops[0].setAttribute('stop-color', `rgba(${base},0)`);
+            stops[1].setAttribute('stop-color', `rgba(${base},0.6)`);
+            stops[2].setAttribute('stop-color', `rgba(${base},0)`);
+        }
+    }
+    // Re-render grid and axes if chart is populated
+    const gridGroup = document.getElementById('phase-grid');
+    if (gridGroup && gridGroup.children.length > 0) {
+        buildPhaseGrid();
+        buildPhaseXAxis();
+        if (PhaseState.curvesData && PhaseState.curvesData.length > 0) {
+            const effects = PhaseState.curvesData.map(c => c.effect);
+            const colors = PhaseState.curvesData.map(c => c.color);
+            buildPhaseYAxes(effects, colors, PhaseState.curvesData);
+        }
+    }
+    // Update peak descriptor backdrop fills
+    document.querySelectorAll('.peak-descriptor rect').forEach(r => {
+        r.setAttribute('fill', t.tooltipBg);
+    });
+}
+
+function initThemeToggle() {
+    const saved = localStorage.getItem('cortex_theme');
+    if (saved === 'light') {
+        document.body.classList.add('light-mode');
+    }
+    refreshChartTheme();
+    const btn = document.getElementById('theme-toggle-btn');
+    if (btn) {
+        btn.addEventListener('click', () => {
+            document.body.classList.toggle('light-mode');
+            const isLight = document.body.classList.contains('light-mode');
+            localStorage.setItem('cortex_theme', isLight ? 'light' : 'dark');
+            refreshChartTheme();
+        });
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     // Defer cartridge initialization — not visible in phase chart flow
     // buildCartridgeSVG();
     // initTooltip();
 
+    initThemeToggle();
     initSettings();
     initToggles();
     initDebugPanel();
+    initPhaseStepControls();
 
     document.getElementById('prompt-form').addEventListener('submit', handlePromptSubmit);
     document.getElementById('prompt-input').focus();
@@ -3640,3 +4743,1492 @@ document.addEventListener('DOMContentLoaded', () => {
     // Prompt starts centered (class already set in HTML)
     // Cartridge section starts hidden (class already set in HTML)
 });
+
+// ============================================
+// 10d. INTERVENTION MODEL (Lx pipeline)
+// ============================================
+
+function buildInterventionSystemPrompt(curvesData) {
+    // Serialize substance database for the LLM
+    const active = getActiveSubstances();
+    const substanceList = Object.entries(active).map(([key, s]) => ({
+        key,
+        name: s.name,
+        category: s.category,
+        pharma: s.pharma,
+    }));
+
+    const curveSummary = curvesData.map(c => ({
+        effect: c.effect,
+        color: c.color,
+        polarity: c.polarity || 'higher_is_better',
+        baseline: c.baseline,
+        desired: c.desired,
+    }));
+
+    return interpolatePrompt(PROMPTS.intervention, {
+        substanceList: JSON.stringify(substanceList, null, 1),
+        curveSummary: JSON.stringify(curveSummary, null, 1),
+    });
+}
+
+async function callInterventionModel(prompt, curvesData) {
+    const provider = AppState.selectedLLM;
+    const key = AppState.apiKeys[provider];
+    if (!key) return generateInterventionFallback(curvesData);
+
+    const model = MAIN_MODELS[provider];
+    const systemPrompt = buildInterventionSystemPrompt(curvesData);
+    const userPrompt = `The user's goal: "${prompt}". Analyze the baseline vs desired curves and prescribe the optimal supplement intervention protocol.`;
+
+    const debugEntry = DebugLog.addEntry({
+        stage: 'Intervention Model', stageClass: 'intervention-model',
+        model,
+        systemPrompt,
+        userPrompt,
+        loading: true,
+    });
+
+    const startTime = performance.now();
+
+    try {
+        let result;
+        switch (provider) {
+            case 'anthropic':
+                result = await callAnthropicGeneric(userPrompt, key, model, systemPrompt, 1024);
+                break;
+            case 'openai':
+                result = await callOpenAIGeneric(userPrompt, key, model, API_ENDPOINTS.openai, systemPrompt, 1024);
+                break;
+            case 'grok':
+                result = await callOpenAIGeneric(userPrompt, key, model, API_ENDPOINTS.grok, systemPrompt, 1024);
+                break;
+            case 'gemini':
+                result = await callGeminiGeneric(userPrompt, key, model, systemPrompt, 1024);
+                break;
+        }
+
+        const requestBody = result._requestBody;
+        const rawResponse = result._rawResponse;
+        delete result._requestBody;
+        delete result._rawResponse;
+
+        // Parse JSON from response text
+        let text = typeof result === 'string' ? result : (result.text || result.content || JSON.stringify(result));
+        // Strip markdown fences
+        text = text.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '').trim();
+        const parsed = JSON.parse(text);
+
+        DebugLog.updateEntry(debugEntry, {
+            loading: false,
+            requestBody,
+            rawResponse,
+            response: parsed,
+            duration: Math.round(performance.now() - startTime),
+        });
+
+        PhaseState.interventionResult = parsed;
+        return parsed;
+    } catch (err) {
+        DebugLog.updateEntry(debugEntry, {
+            loading: false,
+            error: err.message || String(err),
+            duration: Math.round(performance.now() - startTime),
+        });
+        // Fall back to algorithmic intervention
+        const fallback = generateInterventionFallback(curvesData);
+        PhaseState.interventionResult = fallback;
+        return fallback;
+    }
+}
+
+function generateInterventionFallback(curvesData) {
+    // Simple algorithmic fallback when no API key
+    const interventions = [];
+    const active = getActiveSubstances();
+
+    for (const curve of curvesData) {
+        const blSmoothed = smoothPhaseValues(curve.baseline, PHASE_SMOOTH_PASSES);
+        const dsSmoothed = smoothPhaseValues(curve.desired, PHASE_SMOOTH_PASSES);
+        const polarity = curve.polarity || 'higher_is_better';
+
+        // Find the hour of max gap
+        let maxGap = 0, gapHour = 12;
+        const len = Math.min(blSmoothed.length, dsSmoothed.length);
+        for (let j = 0; j < len; j++) {
+            const gap = dsSmoothed[j].value - blSmoothed[j].value;
+            if (Math.abs(gap) > Math.abs(maxGap)) {
+                maxGap = gap;
+                gapHour = dsSmoothed[j].hour;
+            }
+        }
+
+        // Pick substances based on gap direction and polarity
+        const needsBoost = (polarity === 'higher_is_better' && maxGap > 0) ||
+                           (polarity === 'higher_is_worse' && maxGap < 0);
+
+        if (needsBoost) {
+            // For positive effects needing boost: stimulants/nootropics
+            // For negative effects needing reduction: adaptogens/sleep
+            const cats = polarity === 'higher_is_better'
+                ? ['stimulant', 'nootropic', 'adaptogen']
+                : ['adaptogen', 'sleep'];
+
+            const candidates = Object.entries(active)
+                .filter(([, s]) => cats.includes(s.category))
+                .sort((a, b) => b[1].pharma.strength - a[1].pharma.strength)
+                .slice(0, 2);
+
+            const doseTimeMin = Math.round(gapHour * 60) - 60; // dose 1hr before peak need
+            for (const [key, sub] of candidates) {
+                interventions.push({
+                    key,
+                    dose: guessDose(sub),
+                    timeMinutes: Math.max(360, Math.min(1380, doseTimeMin)),
+                    targetEffect: curve.effect,
+                });
+            }
+        }
+    }
+
+    return { interventions, rationale: 'Algorithmic fallback — no API key configured.' };
+}
+
+function guessDose(substance) {
+    const doses = {
+        caffeine: '200mg', theanine: '400mg', rhodiola: '500mg', ashwagandha: '600mg',
+        tyrosine: '1000mg', citicoline: '500mg', alphaGPC: '600mg', lionsMane: '1000mg',
+        magnesium: '400mg', creatine: '5g', nac: '600mg', glycine: '3g',
+        melatonin: '3mg', gaba: '750mg', apigenin: '50mg', taurine: '2g',
+    };
+    return doses[substance.name?.toLowerCase()] || doses[Object.keys(doses).find(k =>
+        substance.name?.toLowerCase().includes(k))] || '500mg';
+}
+
+// ============================================
+// 20c. Lx OVERLAY COMPUTATION
+// ============================================
+
+function validateInterventions(interventions, curvesData) {
+    if (!Array.isArray(interventions)) return [];
+    const active = getActiveSubstances();
+    return interventions.filter(iv => {
+        if (!iv.key || iv.timeMinutes == null) return false;
+        const sub = active[iv.key];
+        if (!sub) return false;
+        iv.substance = sub;
+        iv.timeMinutes = Math.max(PHASE_CHART.startMin, Math.min(PHASE_CHART.endMin, iv.timeMinutes));
+
+        // Resolve targetEffect string → targetCurveIdx
+        if (curvesData && iv.targetEffect) {
+            const idx = curvesData.findIndex(c =>
+                c.effect && c.effect.toLowerCase() === iv.targetEffect.toLowerCase());
+            iv.targetCurveIdx = idx >= 0 ? idx : null;
+        }
+        if (iv.targetCurveIdx == null && curvesData) {
+            iv.targetCurveIdx = mapSubstanceToEffectAxis(iv.key, curvesData)[0] || 0;
+        }
+
+        return true;
+    });
+}
+
+function mapSubstanceToEffectAxis(substanceKey, curvesData) {
+    const active = getActiveSubstances();
+    const sub = active[substanceKey];
+    if (!sub) return [0];
+
+    const cat = sub.category;
+
+    // Map categories to curve indices based on polarity and effect type
+    const mapping = [];
+    for (let i = 0; i < curvesData.length; i++) {
+        const curve = curvesData[i];
+        const polarity = curve.polarity || 'higher_is_better';
+
+        // Stimulants & nootropics → positive effects (higher_is_better)
+        if (['stimulant', 'nootropic'].includes(cat) && polarity === 'higher_is_better') {
+            mapping.push(i);
+        }
+        // Adaptogens → both positive effects and negative effect reduction
+        else if (cat === 'adaptogen') {
+            mapping.push(i);
+        }
+        // Sleep → sedation or negative effect reduction
+        else if (cat === 'sleep' && (polarity === 'higher_is_worse' || curve.effect?.toLowerCase().includes('sleep'))) {
+            mapping.push(i);
+        }
+        // Minerals/vitamins → general support, affects all
+        else if (['mineral', 'vitamin'].includes(cat)) {
+            mapping.push(i);
+        }
+    }
+
+    return mapping.length > 0 ? mapping : [0];
+}
+
+function computeLxOverlay(interventions, curvesData) {
+    const lxCurves = curvesData.map(curve => {
+        const blSmoothed = smoothPhaseValues(curve.baseline, PHASE_SMOOTH_PASSES);
+        const dsSmoothed = smoothPhaseValues(curve.desired, PHASE_SMOOTH_PASSES);
+        const polarity = curve.polarity || 'higher_is_better';
+
+        // Compute max desired gap for scaling
+        let maxDesiredGap = 0;
+        const len = Math.min(blSmoothed.length, dsSmoothed.length);
+        for (let j = 0; j < len; j++) {
+            maxDesiredGap = Math.max(maxDesiredGap, Math.abs(dsSmoothed[j].value - blSmoothed[j].value));
+        }
+        if (maxDesiredGap < 1) maxDesiredGap = 1;
+
+        return { baseline: blSmoothed, desired: dsSmoothed, polarity, maxDesiredGap, points: [] };
+    });
+
+    // Compute raw pharmacokinetic contribution per curve
+    for (let ci = 0; ci < curvesData.length; ci++) {
+        const lx = lxCurves[ci];
+        const points = [];
+        let maxRawEffect = 0;
+
+        // Sample every 15 minutes
+        for (let j = 0; j < lx.baseline.length; j++) {
+            const hourVal = lx.baseline[j].hour;
+            const sampleMin = hourVal * 60;
+            let rawEffect = 0;
+
+            for (const iv of interventions) {
+                const targetIdx = iv.targetCurveIdx != null
+                    ? iv.targetCurveIdx
+                    : mapSubstanceToEffectAxis(iv.key, curvesData)[0] || 0;
+                if (targetIdx !== ci) continue;
+
+                const minutesSinceDose = sampleMin - iv.timeMinutes;
+                const sub = iv.substance;
+                if (!sub || !sub.pharma) continue;
+
+                rawEffect += substanceEffectAt(minutesSinceDose, sub.pharma);
+            }
+
+            maxRawEffect = Math.max(maxRawEffect, Math.abs(rawEffect));
+            points.push({ hour: hourVal, rawEffect });
+        }
+
+        // Normalize and apply to baseline
+        const scaleFactor = maxRawEffect > 0 ? lx.maxDesiredGap / maxRawEffect : 0;
+
+        lx.points = points.map((p, j) => {
+            const baseVal = lx.baseline[j].value;
+            const scaledEffect = p.rawEffect * scaleFactor;
+
+            let value;
+            if (lx.polarity === 'higher_is_worse') {
+                // Reduce negative effects
+                value = baseVal - scaledEffect;
+            } else {
+                // Boost positive effects
+                value = baseVal + scaledEffect;
+            }
+
+            return { hour: p.hour, value: Math.max(0, Math.min(100, value)) };
+        });
+    }
+
+    return lxCurves;
+}
+
+/**
+ * Compute incremental Lx curve snapshots — one per substance "step" (grouped by dose time).
+ * Uses a GLOBAL scale factor from the full intervention set so the Y-axis scale stays consistent.
+ * Returns: [ { lxCurves: [...], step: [intervention, ...] }, ... ]
+ */
+function computeIncrementalLxOverlay(interventions, curvesData) {
+    // 1. Sort by time
+    const sorted = [...interventions].sort((a, b) => a.timeMinutes - b.timeMinutes);
+
+    // 2. Each intervention is its own step (no grouping)
+    const steps = sorted.map(iv => [iv]);
+
+    // 3. Pre-compute per-curve data: smoothed baseline/desired, maxDesiredGap
+    const curveInfo = curvesData.map(curve => {
+        const blSmoothed = smoothPhaseValues(curve.baseline, PHASE_SMOOTH_PASSES);
+        const dsSmoothed = smoothPhaseValues(curve.desired, PHASE_SMOOTH_PASSES);
+        const polarity = curve.polarity || 'higher_is_better';
+        let maxDesiredGap = 0;
+        const len = Math.min(blSmoothed.length, dsSmoothed.length);
+        for (let j = 0; j < len; j++) {
+            maxDesiredGap = Math.max(maxDesiredGap, Math.abs(dsSmoothed[j].value - blSmoothed[j].value));
+        }
+        if (maxDesiredGap < 1) maxDesiredGap = 1;
+        return { blSmoothed, dsSmoothed, polarity, maxDesiredGap };
+    });
+
+    // 4. Compute GLOBAL scale factor using ALL interventions
+    const globalScaleFactors = curveInfo.map((ci, curveIdx) => {
+        let maxRawEffect = 0;
+        for (let j = 0; j < ci.blSmoothed.length; j++) {
+            const sampleMin = ci.blSmoothed[j].hour * 60;
+            let rawEffect = 0;
+            for (const iv of sorted) {
+                const targetIdx = iv.targetCurveIdx != null
+                    ? iv.targetCurveIdx
+                    : mapSubstanceToEffectAxis(iv.key, curvesData)[0] || 0;
+                if (targetIdx !== curveIdx) continue;
+                const sub = iv.substance;
+                if (!sub || !sub.pharma) continue;
+                rawEffect += substanceEffectAt(sampleMin - iv.timeMinutes, sub.pharma);
+            }
+            maxRawEffect = Math.max(maxRawEffect, Math.abs(rawEffect));
+        }
+        return maxRawEffect > 0 ? ci.maxDesiredGap / maxRawEffect : 0;
+    });
+
+    // 5. For each step, compute cumulative curves
+    const snapshots = [];
+    for (let k = 0; k < steps.length; k++) {
+        const activeInterventions = steps.slice(0, k + 1).flat();
+
+        const lxCurves = curveInfo.map((ci, curveIdx) => {
+            const points = ci.blSmoothed.map((bp, j) => {
+                const sampleMin = bp.hour * 60;
+                let rawEffect = 0;
+                for (const iv of activeInterventions) {
+                    const targetIdx = iv.targetCurveIdx != null
+                        ? iv.targetCurveIdx
+                        : mapSubstanceToEffectAxis(iv.key, curvesData)[0] || 0;
+                    if (targetIdx !== curveIdx) continue;
+                    const sub = iv.substance;
+                    if (!sub || !sub.pharma) continue;
+                    rawEffect += substanceEffectAt(sampleMin - iv.timeMinutes, sub.pharma);
+                }
+                const scaledEffect = rawEffect * globalScaleFactors[curveIdx];
+                let value;
+                if (ci.polarity === 'higher_is_worse') {
+                    value = bp.value - scaledEffect;
+                } else {
+                    value = bp.value + scaledEffect;
+                }
+                return { hour: bp.hour, value: Math.max(0, Math.min(100, value)) };
+            });
+            return {
+                baseline: ci.blSmoothed,
+                desired: ci.dsSmoothed,
+                polarity: ci.polarity,
+                maxDesiredGap: ci.maxDesiredGap,
+                points,
+            };
+        });
+
+        snapshots.push({ lxCurves, step: steps[k] });
+    }
+
+    return snapshots;
+}
+
+// ============================================
+// 20d. Lx RENDERING
+// ============================================
+
+function renderLxCurves(lxCurves, curvesData) {
+    const group = document.getElementById('phase-lx-curves');
+    group.innerHTML = '';
+
+    for (let i = 0; i < lxCurves.length; i++) {
+        const lx = lxCurves[i];
+        const color = curvesData[i].color;
+
+        if (lx.points.length < 2) continue;
+
+        // Area fill
+        const fillD = phasePointsToFillPath(lx.points, false);
+        if (fillD) {
+            const fillPath = svgEl('path', {
+                d: fillD, fill: color, class: 'phase-lx-fill', opacity: '0',
+            });
+            group.appendChild(fillPath);
+            fillPath.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 800, fill: 'forwards' });
+        }
+
+        // Stroke path
+        const strokeD = phasePointsToPath(lx.points, false);
+        if (strokeD) {
+            const strokePath = svgEl('path', {
+                d: strokeD, stroke: color, class: 'phase-lx-path', opacity: '0',
+            });
+            group.appendChild(strokePath);
+            strokePath.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 800, fill: 'forwards' });
+        }
+    }
+}
+
+/** Convert SVG-space X to hour value (inverse of phaseChartX) */
+function svgXToHour(svgX) {
+    const norm = (svgX - PHASE_CHART.padL) / PHASE_CHART.plotW;
+    return PHASE_CHART.startHour + norm * (PHASE_CHART.endHour - PHASE_CHART.startHour);
+}
+
+/** Shared: update all morph visuals (curves, dots, connectors, fills, arrows) at a given playhead hour */
+function updateMorphAtPlayhead(playheadHour, state) {
+    const { curveAnimData, blendWidth, phLine, phGlow, arrows, arrowGroup } = state;
+    const startHour = PHASE_CHART.startHour;
+    const endHour = PHASE_CHART.endHour;
+    const hourRange = endHour - startHour;
+    const progress = Math.max(0, Math.min(1, (playheadHour - startHour) / hourRange));
+    const halfBlend = blendWidth / 2;
+
+    // Move playhead visual
+    const playheadX = phaseChartX(playheadHour * 60);
+    phLine.setAttribute('x', playheadX.toFixed(1));
+    phGlow.setAttribute('x', (playheadX - 8).toFixed(1));
+
+    // Morph each curve's stroke
+    for (const cd of curveAnimData) {
+        if (!cd.strokeEl) continue;
+        const morphedPts = buildProgressiveMorphPoints(
+            cd.desiredPts, cd.lxSmoothed, playheadHour, blendWidth);
+        cd.strokeEl.setAttribute('d', phasePointsToPath(morphedPts, true));
+    }
+
+    // Ghost fills progressively
+    const fillOp = 0.08 + (0.03 - 0.08) * progress;
+    for (const cd of curveAnimData) {
+        if (cd.fillEl) cd.fillEl.setAttribute('fill-opacity', fillOp.toFixed(4));
+    }
+
+    // Fade arrows
+    const arrowOp = Math.max(0, 0.7 * (1 - progress * 1.5));
+    for (const arrow of arrows) {
+        arrow.setAttribute('opacity', arrowOp.toFixed(3));
+    }
+    if (progress >= 1) arrowGroup.style.opacity = '0';
+    else arrowGroup.style.opacity = '';
+
+    // Update dots + connector lines to track morphed curve positions
+    const dots = document.querySelectorAll('.timeline-curve-dot');
+    const connectors = document.querySelectorAll('.timeline-connector');
+
+    dots.forEach(dot => {
+        const ci = parseInt(dot.getAttribute('data-curve-idx'));
+        const tH = parseFloat(dot.getAttribute('data-time-h'));
+        const cd = curveAnimData[ci];
+        if (!cd) return;
+        let t;
+        if (tH <= playheadHour - halfBlend) t = 1;
+        else if (tH >= playheadHour + halfBlend) t = 0;
+        else { const x = (playheadHour + halfBlend - tH) / blendWidth; t = x * x * (3 - 2 * x); }
+        const dv = interpolatePointsAtTime(cd.desiredPts, tH);
+        const lv = interpolatePointsAtTime(cd.lxSmoothed, tH);
+        dot.setAttribute('cy', phaseChartY(dv + (lv - dv) * t).toFixed(1));
+    });
+
+    connectors.forEach(conn => {
+        const ci = parseInt(conn.getAttribute('data-curve-idx'));
+        const tH = parseFloat(conn.getAttribute('data-time-h'));
+        const cd = curveAnimData[ci];
+        if (!cd) return;
+        let t;
+        if (tH <= playheadHour - halfBlend) t = 1;
+        else if (tH >= playheadHour + halfBlend) t = 0;
+        else { const x = (playheadHour + halfBlend - tH) / blendWidth; t = x * x * (3 - 2 * x); }
+        const dv = interpolatePointsAtTime(cd.desiredPts, tH);
+        const lv = interpolatePointsAtTime(cd.lxSmoothed, tH);
+        conn.setAttribute('y1', phaseChartY(dv + (lv - dv) * t).toFixed(1));
+    });
+}
+
+/** Set up drag interaction on the morph playhead for before/after comparison */
+function setupPlayheadDrag(state) {
+    const { svg, playheadGroup, phLine, phGlow } = state;
+
+    // Add a wider invisible drag handle for comfortable grabbing
+    const phHandle = svgEl('rect', {
+        x: String(parseFloat(phLine.getAttribute('x')) - 14),
+        y: String(PHASE_CHART.padT),
+        width: '30', height: String(PHASE_CHART.plotH),
+        fill: 'transparent', cursor: 'col-resize',
+        class: 'morph-playhead-handle',
+    });
+    playheadGroup.appendChild(phHandle);
+
+    // Transition playhead to persistent drag style: brighter, thicker
+    phLine.setAttribute('fill', 'rgba(245, 200, 80, 0.7)');
+    phLine.setAttribute('width', '2');
+    phGlow.setAttribute('fill', 'rgba(245, 200, 80, 0.04)');
+
+    let dragging = false;
+    const ctm = () => svg.getScreenCTM();
+
+    function onDown(e) {
+        e.preventDefault();
+        dragging = true;
+        phLine.setAttribute('fill', 'rgba(245, 200, 80, 0.9)');
+        phHandle.setAttribute('cursor', 'col-resize');
+    }
+
+    function onMove(e) {
+        if (!dragging) return;
+        e.preventDefault();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const m = ctm();
+        if (!m) return;
+        const svgX = (clientX - m.e) / m.a;
+        const hour = Math.max(PHASE_CHART.startHour, Math.min(PHASE_CHART.endHour, svgXToHour(svgX)));
+        // Update handle position to track playhead
+        phHandle.setAttribute('x', String(phaseChartX(hour * 60) - 14));
+        updateMorphAtPlayhead(hour, state);
+    }
+
+    function onUp() {
+        if (!dragging) return;
+        dragging = false;
+        phLine.setAttribute('fill', 'rgba(245, 200, 80, 0.7)');
+        phHandle.setAttribute('cursor', 'col-resize');
+    }
+
+    phHandle.addEventListener('mousedown', onDown);
+    phHandle.addEventListener('touchstart', onDown, { passive: false });
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('touchend', onUp);
+
+    // Store cleanup refs
+    state.dragCleanup = () => {
+        phHandle.removeEventListener('mousedown', onDown);
+        phHandle.removeEventListener('touchstart', onDown);
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('touchmove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.removeEventListener('touchend', onUp);
+    };
+}
+
+/** Remove draggable playhead and clean up event listeners */
+function cleanupMorphDrag() {
+    if (!_morphDragState) return;
+    if (_morphDragState.dragCleanup) _morphDragState.dragCleanup();
+    const ph = document.getElementById('morph-playhead');
+    if (ph) ph.remove();
+    _morphDragState = null;
+}
+
+/** Show a draggable playhead at the right edge (for step-forward re-entry to phase 2) */
+function showDraggablePlayhead(lxCurves, curvesData) {
+    cleanupMorphDrag();
+
+    const desiredGroup = document.getElementById('phase-desired-curves');
+    const arrowGroup = document.getElementById('phase-mission-arrows');
+    const svg = document.getElementById('phase-chart-svg');
+
+    const strokePaths = desiredGroup.querySelectorAll('.phase-desired-path');
+    const fillPaths = desiredGroup.querySelectorAll('.phase-desired-fill');
+    const arrows = Array.from(arrowGroup.children);
+
+    const curveAnimData = lxCurves.map((lx, i) => ({
+        desiredPts: lx.desired,
+        lxSmoothed: smoothPhaseValues(lx.points, PHASE_SMOOTH_PASSES),
+        strokeEl: strokePaths[i] || null,
+        fillEl: fillPaths[i] || null,
+    }));
+
+    const endX = phaseChartX(PHASE_CHART.endHour * 60);
+    const playheadGroup = svgEl('g', { id: 'morph-playhead' });
+    const phGlow = svgEl('rect', {
+        x: (endX - 8).toFixed(1), y: String(PHASE_CHART.padT),
+        width: '18', height: String(PHASE_CHART.plotH),
+        fill: 'rgba(245, 200, 80, 0.04)', rx: '9', 'pointer-events': 'none',
+    });
+    playheadGroup.appendChild(phGlow);
+    const phLine = svgEl('rect', {
+        x: endX.toFixed(1), y: String(PHASE_CHART.padT),
+        width: '2', height: String(PHASE_CHART.plotH),
+        fill: 'rgba(245, 200, 80, 0.7)', rx: '0.75', 'pointer-events': 'none',
+    });
+    playheadGroup.appendChild(phLine);
+
+    const tooltipOverlay = document.getElementById('phase-tooltip-overlay');
+    svg.insertBefore(playheadGroup, tooltipOverlay);
+
+    const state = {
+        curveAnimData, blendWidth: 1.5,
+        phLine, phGlow, arrows, arrowGroup,
+        svg, playheadGroup,
+    };
+
+    _morphDragState = state;
+    setupPlayheadDrag(state);
+}
+
+/** Cinematic playhead sweep: morphs desired strokes → Lx positions left-to-right,
+ *  then leaves a draggable before/after comparison playhead */
+function animatePlayheadMorph(lxCurves, curvesData) {
+    return new Promise(resolve => {
+        cleanupMorphDrag(); // Clear any prior drag state
+
+        const desiredGroup = document.getElementById('phase-desired-curves');
+        const arrowGroup = document.getElementById('phase-mission-arrows');
+        const svg = document.getElementById('phase-chart-svg');
+
+        const strokePaths = desiredGroup.querySelectorAll('.phase-desired-path');
+        const fillPaths = desiredGroup.querySelectorAll('.phase-desired-fill');
+        const arrows = Array.from(arrowGroup.children);
+
+        const curveAnimData = lxCurves.map((lx, i) => ({
+            desiredPts: lx.desired,
+            lxSmoothed: smoothPhaseValues(lx.points, PHASE_SMOOTH_PASSES),
+            strokeEl: strokePaths[i] || null,
+            fillEl: fillPaths[i] || null,
+        }));
+
+        // Create playhead element
+        const playheadGroup = svgEl('g', { id: 'morph-playhead' });
+        const phGlow = svgEl('rect', {
+            x: String(PHASE_CHART.padL - 8), y: String(PHASE_CHART.padT),
+            width: '18', height: String(PHASE_CHART.plotH),
+            fill: 'rgba(245, 200, 80, 0.06)', rx: '9', 'pointer-events': 'none',
+        });
+        playheadGroup.appendChild(phGlow);
+        const phLine = svgEl('rect', {
+            x: String(PHASE_CHART.padL), y: String(PHASE_CHART.padT),
+            width: '1.5', height: String(PHASE_CHART.plotH),
+            fill: 'rgba(245, 200, 80, 0.55)', rx: '0.75', 'pointer-events': 'none',
+        });
+        playheadGroup.appendChild(phLine);
+
+        const tooltipOverlay = document.getElementById('phase-tooltip-overlay');
+        svg.insertBefore(playheadGroup, tooltipOverlay);
+
+        const BLEND_WIDTH = 1.5;
+        const startHour = PHASE_CHART.startHour;
+        const endHour = PHASE_CHART.endHour;
+        const hourRange = endHour - startHour;
+        const SWEEP_DURATION = 4500; // Slow cinematic sweep
+
+        const state = {
+            curveAnimData, blendWidth: BLEND_WIDTH,
+            phLine, phGlow, arrows, arrowGroup,
+            svg, playheadGroup,
+        };
+
+        const startTime = performance.now();
+
+        (function tick(now) {
+            const rawT = Math.min(1, (now - startTime) / SWEEP_DURATION);
+            const ease = rawT < 0.5 ? 4 * rawT * rawT * rawT : 1 - Math.pow(-2 * rawT + 2, 3) / 2;
+            const playheadHour = startHour + hourRange * ease;
+
+            updateMorphAtPlayhead(playheadHour, state);
+
+            if (rawT < 1) {
+                requestAnimationFrame(tick);
+            } else {
+                // Final state: fully morphed to Lx
+                updateMorphAtPlayhead(endHour, state);
+
+                // Keep playhead and make it draggable (before/after comparison)
+                _morphDragState = state;
+                setupPlayheadDrag(state);
+
+                resolve();
+            }
+        })(performance.now());
+    });
+}
+
+/** Quick morph desired→Lx (no playhead) — for step-forward navigation */
+function quickMorphDesiredToLx(lxCurves, curvesData, durationMs) {
+    return new Promise(resolve => {
+        const desiredGroup = document.getElementById('phase-desired-curves');
+        const arrowGroup = document.getElementById('phase-mission-arrows');
+        const strokePaths = desiredGroup.querySelectorAll('.phase-desired-path');
+        const fillPaths = desiredGroup.querySelectorAll('.phase-desired-fill');
+
+        const perCurve = lxCurves.map((lx, i) => ({
+            desiredPts: lx.desired,
+            lxSmoothed: smoothPhaseValues(lx.points, PHASE_SMOOTH_PASSES),
+            strokeEl: strokePaths[i] || null,
+            fillEl: fillPaths[i] || null,
+        }));
+
+        const dots = document.querySelectorAll('.timeline-curve-dot');
+        const connectors = document.querySelectorAll('.timeline-connector');
+
+        const startTime = performance.now();
+        (function tick(now) {
+            const rawT = Math.min(1, (now - startTime) / durationMs);
+            const ease = rawT < 0.5 ? 4 * rawT * rawT * rawT : 1 - Math.pow(-2 * rawT + 2, 3) / 2;
+
+            for (const pc of perCurve) {
+                if (!pc.strokeEl) continue;
+                const morphed = pc.desiredPts.map((dp, j) => ({
+                    hour: dp.hour,
+                    value: dp.value + (pc.lxSmoothed[j].value - dp.value) * ease,
+                }));
+                pc.strokeEl.setAttribute('d', phasePointsToPath(morphed, true));
+            }
+
+            const fillOp = 0.08 + (0.03 - 0.08) * ease;
+            for (const pc of perCurve) {
+                if (pc.fillEl) pc.fillEl.setAttribute('fill-opacity', fillOp.toFixed(4));
+            }
+
+            const arrowOp = Math.max(0, 0.7 * (1 - ease * 1.5));
+            Array.from(arrowGroup.children).forEach(a => a.setAttribute('opacity', arrowOp.toFixed(3)));
+
+            // Animate dots + connectors
+            dots.forEach(dot => {
+                const ci = parseInt(dot.getAttribute('data-curve-idx'));
+                const tH = parseFloat(dot.getAttribute('data-time-h'));
+                const cd = perCurve[ci];
+                if (!cd) return;
+                const dv = interpolatePointsAtTime(cd.desiredPts, tH);
+                const lv = interpolatePointsAtTime(cd.lxSmoothed, tH);
+                dot.setAttribute('cy', phaseChartY(dv + (lv - dv) * ease).toFixed(1));
+            });
+            connectors.forEach(conn => {
+                const ci = parseInt(conn.getAttribute('data-curve-idx'));
+                const tH = parseFloat(conn.getAttribute('data-time-h'));
+                const cd = perCurve[ci];
+                if (!cd) return;
+                const dv = interpolatePointsAtTime(cd.desiredPts, tH);
+                const lv = interpolatePointsAtTime(cd.lxSmoothed, tH);
+                conn.setAttribute('y1', phaseChartY(dv + (lv - dv) * ease).toFixed(1));
+            });
+
+            if (rawT < 1) {
+                requestAnimationFrame(tick);
+            } else {
+                for (const pc of perCurve) {
+                    if (pc.strokeEl) pc.strokeEl.setAttribute('d', phasePointsToPath(pc.lxSmoothed, true));
+                    if (pc.fillEl) pc.fillEl.setAttribute('fill-opacity', '0.03');
+                }
+                arrowGroup.style.opacity = '0';
+                resolve();
+            }
+        })(performance.now());
+    });
+}
+
+/** Reverse morph Lx→desired — for step-backward navigation */
+function quickMorphLxToDesired(lxCurves, curvesData, durationMs) {
+    return new Promise(resolve => {
+        cleanupMorphDrag(); // Remove draggable playhead if present
+
+        const desiredGroup = document.getElementById('phase-desired-curves');
+        const arrowGroup = document.getElementById('phase-mission-arrows');
+        const strokePaths = desiredGroup.querySelectorAll('.phase-desired-path');
+        const fillPaths = desiredGroup.querySelectorAll('.phase-desired-fill');
+
+        const perCurve = lxCurves.map((lx, i) => ({
+            desiredPts: lx.desired,
+            lxSmoothed: smoothPhaseValues(lx.points, PHASE_SMOOTH_PASSES),
+            strokeEl: strokePaths[i] || null,
+            fillEl: fillPaths[i] || null,
+        }));
+
+        const dots = document.querySelectorAll('.timeline-curve-dot');
+        const connectors = document.querySelectorAll('.timeline-connector');
+
+        arrowGroup.style.opacity = '';
+        const startTime = performance.now();
+        (function tick(now) {
+            const rawT = Math.min(1, (now - startTime) / durationMs);
+            const ease = rawT < 0.5 ? 4 * rawT * rawT * rawT : 1 - Math.pow(-2 * rawT + 2, 3) / 2;
+
+            for (const pc of perCurve) {
+                if (!pc.strokeEl) continue;
+                const morphed = pc.lxSmoothed.map((lp, j) => ({
+                    hour: lp.hour,
+                    value: lp.value + (pc.desiredPts[j].value - lp.value) * ease,
+                }));
+                pc.strokeEl.setAttribute('d', phasePointsToPath(morphed, true));
+            }
+
+            const fillOp = 0.03 + (0.08 - 0.03) * ease;
+            for (const pc of perCurve) {
+                if (pc.fillEl) pc.fillEl.setAttribute('fill-opacity', fillOp.toFixed(4));
+            }
+
+            const arrowOp = Math.min(0.7, 0.7 * ease);
+            Array.from(arrowGroup.children).forEach(a => a.setAttribute('opacity', arrowOp.toFixed(3)));
+
+            // Animate dots + connectors back to desired positions
+            dots.forEach(dot => {
+                const ci = parseInt(dot.getAttribute('data-curve-idx'));
+                const tH = parseFloat(dot.getAttribute('data-time-h'));
+                const cd = perCurve[ci];
+                if (!cd) return;
+                const dv = interpolatePointsAtTime(cd.desiredPts, tH);
+                const lv = interpolatePointsAtTime(cd.lxSmoothed, tH);
+                dot.setAttribute('cy', phaseChartY(lv + (dv - lv) * ease).toFixed(1));
+            });
+            connectors.forEach(conn => {
+                const ci = parseInt(conn.getAttribute('data-curve-idx'));
+                const tH = parseFloat(conn.getAttribute('data-time-h'));
+                const cd = perCurve[ci];
+                if (!cd) return;
+                const dv = interpolatePointsAtTime(cd.desiredPts, tH);
+                const lv = interpolatePointsAtTime(cd.lxSmoothed, tH);
+                conn.setAttribute('y1', phaseChartY(lv + (dv - lv) * ease).toFixed(1));
+            });
+
+            if (rawT < 1) {
+                requestAnimationFrame(tick);
+            } else {
+                for (const pc of perCurve) {
+                    if (pc.strokeEl) pc.strokeEl.setAttribute('d', phasePointsToPath(pc.desiredPts, true));
+                    if (pc.fillEl) pc.fillEl.setAttribute('fill-opacity', '0.08');
+                }
+                Array.from(arrowGroup.children).forEach(a => a.setAttribute('opacity', '0.7'));
+                arrowGroup.style.opacity = '';
+                resolve();
+            }
+        })(performance.now());
+    });
+}
+
+async function animateLxReveal(lxCurves, curvesData, interventions) {
+    // 1. Render substance timeline first (pills + connectors + dots at Lx target positions)
+    renderSubstanceTimeline(interventions, lxCurves, curvesData);
+
+    // 2. Stagger-reveal timeline pills
+    animateTimelineReveal(800);
+    await sleep(800);
+
+    // 3. Brief pause — visual tension (dots at targets, strokes still at desired)
+    await sleep(300);
+
+    // 4. Playhead sweep morphs desired strokes → Lx positions
+    await animatePlayheadMorph(lxCurves, curvesData);
+
+    // 5. Fade old peak descriptors, re-place at Lx peak positions
+    const desiredGroup = document.getElementById('phase-desired-curves');
+    desiredGroup.querySelectorAll('.peak-descriptor').forEach(el => {
+        el.style.transition = 'opacity 400ms ease';
+        el.style.opacity = '0';
+    });
+    await sleep(450);
+    // Re-place descriptors using Lx positions
+    const lxCurvesForLabels = curvesData.map((c, i) => ({
+        ...c,
+        desired: lxCurves[i].points,
+    }));
+    placePeakDescriptors(desiredGroup, lxCurvesForLabels, 'desired', 0);
+}
+
+// ============================================
+// 20d2. DESIRED CURVE TRANSMUTATION & SUBSTANCE TIMELINE
+// ============================================
+
+const TIMELINE_ZONE = {
+    separatorY: 454,   // thin line just below plot area
+    top: 457,          // first track starts here
+    laneH: 14,
+    laneGap: 0,        // no gap — alternating backgrounds instead
+    pillRx: 2,
+    minBarW: 40,
+    bottomPad: 4,
+};
+
+/** Toggle desired curves to dashed/dim when Lx takes over */
+function transmuteDesiredCurves(transmute) {
+    const desiredGroup = document.getElementById('phase-desired-curves');
+    const arrowGroup = document.getElementById('phase-mission-arrows');
+    if (!desiredGroup || !arrowGroup) return;
+
+    if (transmute) {
+        const isLight = document.body.classList.contains('light-mode');
+        desiredGroup.querySelectorAll('.phase-desired-path').forEach(p => {
+            p.setAttribute('stroke-dasharray', '6 4');
+        });
+        desiredGroup.style.transition = 'filter 600ms ease';
+        desiredGroup.style.filter = isLight
+            ? 'opacity(0.35) saturate(0.5)'
+            : 'brightness(0.45) saturate(0.5)';
+        arrowGroup.style.transition = 'filter 600ms ease';
+        arrowGroup.style.filter = isLight
+            ? 'opacity(0.2) saturate(0.2)'
+            : 'brightness(0.25) saturate(0.2)';
+    } else {
+        desiredGroup.querySelectorAll('.phase-desired-path').forEach(p => {
+            p.removeAttribute('stroke-dasharray');
+        });
+        desiredGroup.style.transition = 'filter 400ms ease';
+        desiredGroup.style.filter = '';
+        arrowGroup.style.transition = 'filter 400ms ease';
+        arrowGroup.style.filter = '';
+    }
+}
+
+/** Allocate swim lanes — pixel-space tight packing, no overlap */
+function allocateTimelineLanes(interventions) {
+    const sorted = [...interventions].sort((a, b) => a.timeMinutes - b.timeMinutes);
+    const plotRight = PHASE_CHART.padL + PHASE_CHART.plotW;
+    const pxGap = 3;
+    const lanes = []; // each lane = array of { pxL, pxR }
+
+    return sorted.map(iv => {
+        const sub = iv.substance;
+        const dur = (sub && sub.pharma) ? sub.pharma.duration : 240;
+        const startMin = iv.timeMinutes;
+        const endMin = startMin + dur;
+
+        const pxL = phaseChartX(startMin);
+        const x2raw = phaseChartX(Math.min(endMin, PHASE_CHART.endMin));
+        const pxR = pxL + Math.min(Math.max(TIMELINE_ZONE.minBarW, x2raw - pxL), plotRight - pxL);
+
+        // Find first lane with no pixel overlap
+        let laneIdx = 0;
+        for (; laneIdx < lanes.length; laneIdx++) {
+            const overlaps = lanes[laneIdx].some(o => pxL < o.pxR + pxGap && pxR > o.pxL - pxGap);
+            if (!overlaps) break;
+        }
+        if (!lanes[laneIdx]) lanes[laneIdx] = [];
+        lanes[laneIdx].push({ pxL, pxR });
+
+        return { iv, laneIdx, startMin, endMin, dur };
+    });
+}
+
+/** Generic linear interpolation on any {hour,value}[] array */
+function interpolatePointsAtTime(pts, timeH) {
+    if (!pts || pts.length === 0) return 50;
+    if (timeH <= pts[0].hour) return pts[0].value;
+    if (timeH >= pts[pts.length - 1].hour) return pts[pts.length - 1].value;
+    for (let i = 0; i < pts.length - 1; i++) {
+        if (timeH >= pts[i].hour && timeH <= pts[i + 1].hour) {
+            const t = (timeH - pts[i].hour) / (pts[i + 1].hour - pts[i].hour);
+            return pts[i].value + t * (pts[i + 1].value - pts[i].value);
+        }
+    }
+    return pts[pts.length - 1].value;
+}
+
+/** Linear interpolation of Lx curve value at any minute (legacy wrapper) */
+function interpolateLxValue(lxCurve, timeMinutes) {
+    return interpolatePointsAtTime(lxCurve.points, timeMinutes / 60);
+}
+
+/** Render FCP-style substance timeline below the chart */
+function renderSubstanceTimeline(interventions, lxCurves, curvesData) {
+    const group = document.getElementById('phase-substance-timeline');
+    group.innerHTML = '';
+    if (!interventions || interventions.length === 0) return;
+
+    const svg = document.getElementById('phase-chart-svg');
+    const defs = svg.querySelector('defs');
+
+    // Clean up old timeline clip-paths and gradients
+    defs.querySelectorAll('[id^="tl-clip-"], [id^="tl-grad-"]').forEach(el => el.remove());
+
+    // Thin separator line
+    group.appendChild(svgEl('line', {
+        x1: String(PHASE_CHART.padL), y1: String(TIMELINE_ZONE.separatorY),
+        x2: String(PHASE_CHART.padL + PHASE_CHART.plotW), y2: String(TIMELINE_ZONE.separatorY),
+        class: 'timeline-separator',
+    }));
+
+    const allocated = allocateTimelineLanes(interventions);
+
+    // Compute layout
+    const laneCount = allocated.reduce((max, a) => Math.max(max, a.laneIdx + 1), 0);
+    const laneStep = TIMELINE_ZONE.laneH + TIMELINE_ZONE.laneGap;
+    const neededH = TIMELINE_ZONE.top + laneCount * laneStep + TIMELINE_ZONE.bottomPad;
+    const finalH = Math.max(500, neededH);
+    svg.setAttribute('viewBox', `0 0 960 ${finalH}`);
+
+    const plotRight = PHASE_CHART.padL + PHASE_CHART.plotW;
+    const plotLeft = PHASE_CHART.padL;
+
+    // Alternating track backgrounds (FCP-style lane stripes)
+    const tlTheme = chartTheme();
+    const laneStripeFill = document.body.classList.contains('light-mode')
+        ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.02)';
+    for (let i = 0; i < laneCount; i++) {
+        const y = TIMELINE_ZONE.top + i * laneStep;
+        if (i % 2 === 1) {
+            group.appendChild(svgEl('rect', {
+                x: String(plotLeft), y: y.toFixed(1),
+                width: String(PHASE_CHART.plotW), height: String(TIMELINE_ZONE.laneH),
+                fill: laneStripeFill, 'pointer-events': 'none',
+            }));
+        }
+    }
+
+    // Render connector lines + bars
+    const plotTop = PHASE_CHART.padT;
+    const plotBot = PHASE_CHART.padT + PHASE_CHART.plotH;
+
+    allocated.forEach((item, idx) => {
+        const { iv, laneIdx, startMin, endMin } = item;
+        const sub = iv.substance;
+        const color = sub ? sub.color : 'rgba(245,180,60,0.7)';
+
+        const x1 = phaseChartX(startMin);
+        const x2raw = phaseChartX(Math.min(endMin, PHASE_CHART.endMin));
+        const barW = Math.min(Math.max(TIMELINE_ZONE.minBarW, x2raw - x1), plotRight - x1);
+        const y = TIMELINE_ZONE.top + laneIdx * laneStep;
+        const h = TIMELINE_ZONE.laneH;
+        const rx = TIMELINE_ZONE.pillRx;
+
+        const pillG = svgEl('g', { class: 'timeline-pill-group', opacity: '0' });
+
+        // Connector line from bar up to the targeted curve
+        const targetIdx = iv.targetCurveIdx != null ? iv.targetCurveIdx : 0;
+        const hasLxData = lxCurves && lxCurves[targetIdx];
+        const curveColor = (curvesData && curvesData[targetIdx] && curvesData[targetIdx].color) || color;
+
+        // Place dot/connector at DESIRED curve position initially (curves haven't morphed yet)
+        const timeH = iv.timeMinutes / 60;
+        let connectorTopY = plotBot; // fallback: bottom of chart
+        if (hasLxData) {
+            const desiredVal = interpolatePointsAtTime(lxCurves[targetIdx].desired, timeH);
+            connectorTopY = phaseChartY(desiredVal);
+        }
+
+        // Dashed connector line from bar to curve
+        pillG.appendChild(svgEl('line', {
+            x1: x1.toFixed(1), y1: connectorTopY.toFixed(1),
+            x2: x1.toFixed(1), y2: String(y),
+            stroke: curveColor, 'stroke-opacity': '0.25', 'stroke-width': '0.75',
+            'stroke-dasharray': '2 3',
+            class: 'timeline-connector', 'pointer-events': 'none',
+            'data-curve-idx': String(targetIdx),
+            'data-time-h': timeH.toFixed(4),
+        }));
+
+        // Dot on curve at administration point
+        if (hasLxData) {
+            pillG.appendChild(svgEl('circle', {
+                cx: x1.toFixed(1), cy: connectorTopY.toFixed(1), r: '3',
+                fill: curveColor, 'fill-opacity': '0.65',
+                stroke: curveColor, 'stroke-opacity': '0.9', 'stroke-width': '0.5',
+                class: 'timeline-curve-dot', 'pointer-events': 'none',
+                'data-curve-idx': String(targetIdx),
+                'data-time-h': timeH.toFixed(4),
+            }));
+        }
+
+        // Clip-path to contain label inside bar
+        const clipId = `tl-clip-${idx}`;
+        const clip = svgEl('clipPath', { id: clipId });
+        clip.appendChild(svgEl('rect', {
+            x: x1.toFixed(1), y: y.toFixed(1),
+            width: barW.toFixed(1), height: String(h),
+            rx: String(rx), ry: String(rx),
+        }));
+        defs.appendChild(clip);
+
+        // Solid colored bar with border
+        pillG.appendChild(svgEl('rect', {
+            x: x1.toFixed(1), y: y.toFixed(1),
+            width: barW.toFixed(1), height: String(h),
+            rx: String(rx), ry: String(rx),
+            fill: color, 'fill-opacity': '0.22',
+            stroke: color, 'stroke-opacity': '0.45', 'stroke-width': '0.75',
+            class: 'timeline-bar',
+        }));
+
+        // Clipped label inside bar
+        const contentG = svgEl('g', { 'clip-path': `url(#${clipId})` });
+        const name = sub ? sub.name : iv.key;
+        const dose = iv.dose || '';
+        const label = svgEl('text', {
+            x: (x1 + 5).toFixed(1),
+            y: (y + h / 2 + 3).toFixed(1),
+            class: 'timeline-bar-label',
+        });
+        label.textContent = dose ? `${name} ${dose}` : name;
+        contentG.appendChild(label);
+        pillG.appendChild(contentG);
+
+        group.appendChild(pillG);
+    });
+}
+
+/** Progressive left→right reveal for timeline pills */
+function animateTimelineReveal(duration) {
+    const group = document.getElementById('phase-substance-timeline');
+    if (!group) return;
+    const pills = group.querySelectorAll('.timeline-pill-group');
+    if (pills.length === 0) return;
+
+    pills.forEach(pill => {
+        // Get the x position of the bar (first rect child)
+        const bar = pill.querySelector('rect');
+        if (!bar) return;
+        const xPos = parseFloat(bar.getAttribute('x') || '0');
+        const xNorm = (xPos - PHASE_CHART.padL) / PHASE_CHART.plotW;
+        const delay = Math.max(0, xNorm) * duration * 0.8;
+
+        pill.setAttribute('opacity', '0');
+        pill.style.transition = '';
+        setTimeout(() => {
+            pill.animate(
+                [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'translateY(0)' }],
+                { duration: 400, fill: 'forwards', easing: 'ease-out' }
+            );
+        }, delay);
+    });
+}
+
+// ============================================
+// 20d3. SEQUENTIAL SUBSTANCE LAYERING
+// ============================================
+
+/**
+ * Animate the sequential Lx reveal — one substance (step) at a time.
+ * Each step: substance label → timeline pill → playhead sweep → pause.
+ * The "active" curve progressively modifies from baseline toward desired.
+ */
+async function animateSequentialLxReveal(snapshots, interventions, curvesData) {
+    const svg = document.getElementById('phase-chart-svg');
+    const baseGroup = document.getElementById('phase-baseline-curves');
+    const desiredGroup = document.getElementById('phase-desired-curves');
+    const arrowGroup = document.getElementById('phase-mission-arrows');
+    const timelineGroup = document.getElementById('phase-substance-timeline');
+    const lxGroup = document.getElementById('phase-lx-curves');
+
+    // Dim desired curves to ghost AUC reference
+    transmuteDesiredCurves(true);
+    await sleep(400);
+
+    // Clear any previous Lx curves
+    lxGroup.innerHTML = '';
+
+    // Prepare the timeline zone (separator + lane backgrounds) but NO pills yet
+    timelineGroup.innerHTML = '';
+    const defs = svg.querySelector('defs');
+    defs.querySelectorAll('[id^="tl-clip-"], [id^="tl-grad-"]').forEach(el => el.remove());
+
+    timelineGroup.appendChild(svgEl('line', {
+        x1: String(PHASE_CHART.padL), y1: String(TIMELINE_ZONE.separatorY),
+        x2: String(PHASE_CHART.padL + PHASE_CHART.plotW), y2: String(TIMELINE_ZONE.separatorY),
+        class: 'timeline-separator',
+    }));
+
+    const allocated = allocateTimelineLanes(interventions);
+    const laneCount = allocated.reduce((max, a) => Math.max(max, a.laneIdx + 1), 0);
+    const laneStep = TIMELINE_ZONE.laneH + TIMELINE_ZONE.laneGap;
+    const neededH = TIMELINE_ZONE.top + laneCount * laneStep + TIMELINE_ZONE.bottomPad;
+    const finalH = Math.max(500, neededH);
+    svg.setAttribute('viewBox', `0 0 960 ${finalH}`);
+
+    for (let i = 0; i < laneCount; i++) {
+        const y = TIMELINE_ZONE.top + i * laneStep;
+        if (i % 2 === 1) {
+            timelineGroup.appendChild(svgEl('rect', {
+                x: String(PHASE_CHART.padL), y: y.toFixed(1),
+                width: String(PHASE_CHART.plotW), height: String(TIMELINE_ZONE.laneH),
+                fill: 'rgba(255,255,255,0.02)', 'pointer-events': 'none',
+            }));
+        }
+    }
+
+    // Fade arrows out
+    Array.from(arrowGroup.children).forEach(a => {
+        a.animate([{ opacity: parseFloat(a.getAttribute('opacity') || '0.7') }, { opacity: 0 }], {
+            duration: 600, fill: 'forwards',
+        });
+    });
+
+    // Grab references to the existing baseline stroke and fill paths
+    const baselineStrokes = [];
+    const baselineFills = [];
+    for (let ci = 0; ci < curvesData.length; ci++) {
+        const strokes = baseGroup.querySelectorAll('.phase-baseline-path');
+        const fills = baseGroup.querySelectorAll('path:not(.phase-baseline-path):not(.peak-descriptor)');
+        baselineStrokes.push(strokes[ci] || null);
+        baselineFills.push(fills[ci] || null);
+    }
+
+    // Make baseline strokes solid for the layering phase (remove dashing, boost opacity)
+    baselineStrokes.forEach(s => {
+        if (!s) return;
+        s.style.transition = 'stroke-opacity 400ms ease';
+        s.setAttribute('stroke-dasharray', 'none');
+        s.setAttribute('stroke-opacity', '0.85');
+        s.setAttribute('stroke-width', '2.2');
+    });
+
+    // Track current smoothed points per curve (start from baseline)
+    let currentPts = curvesData.map(c => smoothPhaseValues(c.baseline, PHASE_SMOOTH_PASSES));
+
+    // Fade baseline peak descriptors
+    baseGroup.querySelectorAll('.peak-descriptor').forEach(el => {
+        el.style.transition = 'opacity 300ms ease';
+        el.style.opacity = '0';
+    });
+
+    // The baseline FILL paths stay at their original position throughout the scans,
+    // serving as the ghost AUC reference. Only the STROKES move.
+
+    const finalLxCurves = snapshots[snapshots.length - 1].lxCurves;
+    const plotBot = PHASE_CHART.padT + PHASE_CHART.plotH;
+    const plotRight = PHASE_CHART.padL + PHASE_CHART.plotW;
+
+    // Helper: render a single substance's timeline pill
+    function renderSinglePill(iv) {
+        const alloc = allocated.find(a => a.iv === iv);
+        if (!alloc) return null;
+        const { laneIdx, startMin, endMin } = alloc;
+        const sub = iv.substance;
+        const color = sub ? sub.color : 'rgba(245,180,60,0.7)';
+
+        const x1 = phaseChartX(startMin);
+        const x2raw = phaseChartX(Math.min(endMin, PHASE_CHART.endMin));
+        const barW = Math.min(Math.max(TIMELINE_ZONE.minBarW, x2raw - x1), plotRight - x1);
+        const y = TIMELINE_ZONE.top + laneIdx * laneStep;
+        const h = TIMELINE_ZONE.laneH;
+        const rx = TIMELINE_ZONE.pillRx;
+
+        const pillG = svgEl('g', { class: 'timeline-pill-group', opacity: '0' });
+
+        const targetIdx = iv.targetCurveIdx != null ? iv.targetCurveIdx : 0;
+        const hasLxData = finalLxCurves && finalLxCurves[targetIdx];
+        const curveColor = (curvesData && curvesData[targetIdx] && curvesData[targetIdx].color) || color;
+        const timeH = iv.timeMinutes / 60;
+        let connectorTopY = plotBot;
+        if (hasLxData) {
+            const desiredVal = interpolatePointsAtTime(finalLxCurves[targetIdx].desired, timeH);
+            connectorTopY = phaseChartY(desiredVal);
+        }
+
+        pillG.appendChild(svgEl('line', {
+            x1: x1.toFixed(1), y1: connectorTopY.toFixed(1),
+            x2: x1.toFixed(1), y2: String(y),
+            stroke: curveColor, 'stroke-opacity': '0.25', 'stroke-width': '0.75',
+            'stroke-dasharray': '2 3',
+            class: 'timeline-connector', 'pointer-events': 'none',
+            'data-curve-idx': String(targetIdx), 'data-time-h': timeH.toFixed(3),
+        }));
+
+        pillG.appendChild(svgEl('circle', {
+            cx: x1.toFixed(1), cy: connectorTopY.toFixed(1), r: '2.5',
+            fill: curveColor, 'fill-opacity': '0.6',
+            class: 'timeline-curve-dot', 'pointer-events': 'none',
+            'data-curve-idx': String(targetIdx), 'data-time-h': timeH.toFixed(3),
+        }));
+
+        pillG.appendChild(svgEl('rect', {
+            x: x1.toFixed(1), y: y.toFixed(1),
+            width: barW.toFixed(1), height: String(h),
+            rx: String(rx), fill: color, 'fill-opacity': '0.18',
+            stroke: color, 'stroke-opacity': '0.35', 'stroke-width': '0.75',
+        }));
+
+        const labelText = `${sub?.name || iv.key}  ${iv.dose || ''}`;
+        pillG.appendChild(svgEl('text', {
+            x: (x1 + 6).toFixed(1),
+            y: (y + h / 2 + 3.5).toFixed(1),
+            class: 'timeline-bar-label',
+            fill: color, 'font-size': '9',
+        })).textContent = labelText;
+
+        timelineGroup.appendChild(pillG);
+        return pillG;
+    }
+
+    // Iterate through each step — one substance at a time
+    for (let k = 0; k < snapshots.length; k++) {
+        const snapshot = snapshots[k];
+        const step = snapshot.step;
+        const targetPts = snapshot.lxCurves.map(lx =>
+            smoothPhaseValues(lx.points, PHASE_SMOOTH_PASSES)
+        );
+
+        // 1. Show substance label
+        const labelNames = step.map(iv => {
+            const name = iv.substance?.name || iv.key;
+            return `${name} · ${iv.dose || ''}`;
+        }).join('  +  ');
+
+        const labelEl = svgEl('text', {
+            x: (PHASE_CHART.padL + PHASE_CHART.plotW / 2).toFixed(1),
+            y: (PHASE_CHART.padT + 22).toFixed(1),
+            class: 'substance-step-label',
+            opacity: '0',
+            'letter-spacing': '0.06em',
+        });
+        labelEl.textContent = labelNames;
+        svg.appendChild(labelEl);
+
+        labelEl.animate([{ opacity: 0 }, { opacity: 1 }], {
+            duration: 200, fill: 'forwards',
+        });
+
+        // 3. Render and reveal this substance's timeline pill
+        for (let pi = 0; pi < step.length; pi++) {
+            const pill = renderSinglePill(step[pi]);
+            if (pill) {
+                setTimeout(() => {
+                    pill.animate([
+                        { opacity: 0, transform: 'translateY(4px)' },
+                        { opacity: 1, transform: 'translateY(0)' },
+                    ], { duration: 300, fill: 'forwards', easing: 'ease-out' });
+                }, pi * 100);
+            }
+        }
+
+        await sleep(350);
+
+        // 4. Playhead sweep — morph BASELINE curves in place
+        const sweepDuration = Math.max(1200, 2500 - k * 250);
+        const BLEND_WIDTH = 1.5;
+        const startHour = PHASE_CHART.startHour;
+        const endHour = PHASE_CHART.endHour;
+        const hourRange = endHour - startHour;
+
+        const playheadGroup = svgEl('g', { class: 'sequential-playhead' });
+        const phGlow = svgEl('rect', {
+            x: String(PHASE_CHART.padL - 8), y: String(PHASE_CHART.padT),
+            width: '18', height: String(PHASE_CHART.plotH),
+            fill: 'rgba(245, 200, 80, 0.06)', rx: '9', 'pointer-events': 'none',
+        });
+        playheadGroup.appendChild(phGlow);
+        const phLine = svgEl('rect', {
+            x: String(PHASE_CHART.padL), y: String(PHASE_CHART.padT),
+            width: '1.5', height: String(PHASE_CHART.plotH),
+            fill: 'rgba(245, 200, 80, 0.55)', rx: '0.75', 'pointer-events': 'none',
+        });
+        playheadGroup.appendChild(phLine);
+        svg.appendChild(playheadGroup);
+
+        const sourcePts = currentPts.map(pts => pts.map(p => ({ ...p })));
+
+        await new Promise(resolveSweep => {
+            const sweepStart = performance.now();
+
+            (function tick(now) {
+                const rawT = Math.min(1, (now - sweepStart) / sweepDuration);
+                const ease = rawT < 0.5 ? 4 * rawT * rawT * rawT : 1 - Math.pow(-2 * rawT + 2, 3) / 2;
+                const playheadHour = startHour + hourRange * ease;
+
+                const playheadX = phaseChartX(playheadHour * 60);
+                phLine.setAttribute('x', playheadX.toFixed(1));
+                phGlow.setAttribute('x', (playheadX - 8).toFixed(1));
+
+                // Morph baseline STROKES only (fills stay as original AUC ghost)
+                for (let ci = 0; ci < curvesData.length; ci++) {
+                    const morphed = buildProgressiveMorphPoints(
+                        sourcePts[ci], targetPts[ci], playheadHour, BLEND_WIDTH
+                    );
+                    const strokeD = phasePointsToPath(morphed, true);
+                    if (baselineStrokes[ci]) baselineStrokes[ci].setAttribute('d', strokeD);
+                }
+
+                if (rawT < 1) {
+                    requestAnimationFrame(tick);
+                } else {
+                    for (let ci = 0; ci < curvesData.length; ci++) {
+                        const strokeD = phasePointsToPath(targetPts[ci], true);
+                        if (baselineStrokes[ci]) baselineStrokes[ci].setAttribute('d', strokeD);
+                    }
+                    resolveSweep();
+                }
+            })(performance.now());
+        });
+
+        playheadGroup.remove();
+        currentPts = targetPts;
+
+        // 5. Fade out substance label
+        labelEl.animate([{ opacity: 1 }, { opacity: 0 }], {
+            duration: 200, fill: 'forwards',
+        });
+        setTimeout(() => labelEl.remove(), 250);
+
+        // 6. Pause between steps (skip for last)
+        if (k < snapshots.length - 1) {
+            await sleep(400);
+        }
+    }
+
+    // After all steps: update dots/connectors to final positions
+    const dots = document.querySelectorAll('.timeline-curve-dot');
+    const connectors = document.querySelectorAll('.timeline-connector');
+
+    dots.forEach(dot => {
+        const ci = parseInt(dot.getAttribute('data-curve-idx'));
+        const tH = parseFloat(dot.getAttribute('data-time-h'));
+        const lxSmoothed = smoothPhaseValues(finalLxCurves[ci]?.points || [], PHASE_SMOOTH_PASSES);
+        const val = interpolatePointsAtTime(lxSmoothed, tH);
+        dot.setAttribute('cy', phaseChartY(val).toFixed(1));
+    });
+
+    connectors.forEach(conn => {
+        const ci = parseInt(conn.getAttribute('data-curve-idx'));
+        const tH = parseFloat(conn.getAttribute('data-time-h'));
+        const lxSmoothed = smoothPhaseValues(finalLxCurves[ci]?.points || [], PHASE_SMOOTH_PASSES);
+        const val = interpolatePointsAtTime(lxSmoothed, tH);
+        conn.setAttribute('y1', phaseChartY(val).toFixed(1));
+    });
+
+    // Re-place peak descriptors at final Lx positions
+    baseGroup.querySelectorAll('.peak-descriptor').forEach(el => el.remove());
+    const lxCurvesForLabels = curvesData.map((c, i) => ({
+        ...c,
+        desired: finalLxCurves[i].points,
+    }));
+    placePeakDescriptors(baseGroup, lxCurvesForLabels, 'desired', 0);
+}
+
+// ============================================
+// 20e. Lx ORCHESTRATION
+// ============================================
+
+function showLxButton() {
+    const btn = document.getElementById('phase-lx-btn');
+    btn.classList.remove('hidden');
+    requestAnimationFrame(() => btn.classList.add('visible'));
+}
+
+function hideLxButton() {
+    const btn = document.getElementById('phase-lx-btn');
+    btn.classList.remove('visible');
+    setTimeout(() => btn.classList.add('hidden'), 500);
+}
+
+async function handleLxPhase(curvesData) {
+    // Show Lx button after 500ms delay
+    await sleep(500);
+    showLxButton();
+    PhaseState.phase = 'lx-ready';
+
+    // Wait for user to click Lx
+    await new Promise(resolve => {
+        document.getElementById('phase-lx-btn').addEventListener('click', async () => {
+            hideLxButton();
+
+            // Await intervention result (likely already cached from background call)
+            let interventionData = PhaseState.interventionResult;
+            if (!interventionData && PhaseState.interventionPromise) {
+                interventionData = await PhaseState.interventionPromise;
+            }
+            if (!interventionData) {
+                interventionData = generateInterventionFallback(curvesData);
+            }
+
+            PhaseState.interventionResult = interventionData;
+
+            // Validate interventions
+            const interventions = validateInterventions(interventionData.interventions || [], curvesData);
+            if (interventions.length === 0) {
+                resolve();
+                return;
+            }
+
+            // Compute pharmacokinetic overlay
+            const lxCurves = computeLxOverlay(interventions, curvesData);
+            PhaseState.lxCurves = lxCurves;
+
+            // Render with playhead morph reveal
+            await animateLxReveal(lxCurves, curvesData, interventions);
+
+            PhaseState.phase = 'lx-rendered';
+            PhaseState.maxPhaseReached = 2;
+            PhaseState.viewingPhase = 2;
+            updateStepButtons();
+            resolve();
+        }, { once: true });
+    });
+}

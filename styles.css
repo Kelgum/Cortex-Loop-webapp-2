@@ -49,6 +49,243 @@
     --space-xl: 40px;
 }
 
+/* ---- Light Mode Overrides ---- */
+body.light-mode {
+    --bg-base: #f0f3f7;
+    --bg-surface: #ffffff;
+    --bg-elevated: #e4e9f0;
+    --bg-hover: #d0d8e4;
+    --text-primary: #1a2333;
+    --text-secondary: #5a6a80;
+    --text-muted: #8494a7;
+    --text-accent: #0891b2;
+    --prompt-bg: rgba(255, 255, 255, 0.85);
+    --prompt-border: rgba(100, 130, 170, 0.3);
+    --prompt-focus-border: rgba(8, 145, 178, 0.5);
+    --housing-bg: #e8ecf2;
+    --housing-border: rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode::before {
+    background:
+        radial-gradient(55vw 55vw at 15% 20%, rgba(0, 199, 255, 0.08), transparent 60%),
+        radial-gradient(40vw 40vw at 80% 12%, rgba(139, 92, 246, 0.06), transparent 62%),
+        radial-gradient(45vw 45vw at 70% 85%, rgba(16, 185, 129, 0.05), transparent 62%);
+}
+
+body.light-mode::after {
+    background-image:
+        linear-gradient(rgba(0, 0, 0, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 0, 0, 0.04) 1px, transparent 1px);
+}
+
+body.light-mode .top-control-btn {
+    background: rgba(255, 255, 255, 0.7);
+    border-color: rgba(100, 130, 170, 0.25);
+    color: var(--text-muted);
+}
+
+body.light-mode .top-control-btn:hover {
+    background: rgba(255, 255, 255, 0.9);
+    border-color: rgba(8, 145, 178, 0.4);
+    color: var(--text-secondary);
+}
+
+body.light-mode .top-control-btn.active {
+    color: var(--text-accent);
+    border-color: rgba(8, 145, 178, 0.5);
+    box-shadow: 0 0 0 1px rgba(8, 145, 178, 0.15) inset, 0 8px 20px rgba(8, 145, 178, 0.12);
+}
+
+body.light-mode .debug-panel {
+    background: rgba(240, 243, 247, 0.95);
+    border-left-color: rgba(100, 130, 170, 0.2);
+    box-shadow: -12px 0 48px rgba(0, 0, 0, 0.1);
+}
+
+body.light-mode .debug-panel-header {
+    border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .debug-entry {
+    background: var(--bg-surface);
+    border-color: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .debug-entry-header {
+    border-bottom-color: rgba(0, 0, 0, 0.04);
+}
+
+body.light-mode .debug-entry-content {
+    background: var(--bg-base);
+}
+
+body.light-mode .debug-entry-content.collapsed::after {
+    background: linear-gradient(transparent, var(--bg-base));
+}
+
+body.light-mode #settings-popover {
+    background: rgba(240, 243, 247, 0.95);
+    border-color: rgba(100, 130, 170, 0.25);
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.12);
+}
+
+body.light-mode .api-key-row input {
+    background: var(--bg-surface);
+    border-color: rgba(0, 0, 0, 0.1);
+    color: var(--text-primary);
+}
+
+body.light-mode .api-key-row button {
+    background: rgba(8, 145, 178, 0.1);
+    border-color: rgba(8, 145, 178, 0.25);
+    color: var(--text-accent);
+}
+
+body.light-mode .llm-select {
+    background: var(--bg-surface);
+    border-color: rgba(0, 0, 0, 0.1);
+    color: var(--text-primary);
+}
+
+body.light-mode .llm-select option {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+}
+
+body.light-mode #prompt-submit {
+    color: #4a6a8a;
+}
+
+body.light-mode #prompt-submit:hover {
+    color: var(--text-accent);
+    background: rgba(8, 145, 178, 0.08);
+}
+
+body.light-mode #prompt-form {
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode #prompt-form:focus-within {
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.12), 0 16px 36px rgba(0, 0, 0, 0.1);
+}
+
+body.light-mode #prompt-input::placeholder {
+    color: #8494a7;
+}
+
+body.light-mode .hint-text {
+    color: #8494a7;
+}
+
+body.light-mode .cartridge-housing {
+    background: var(--housing-bg);
+    border-color: var(--housing-border);
+}
+
+body.light-mode #phase-chart-svg {
+    border-color: rgba(100, 130, 170, 0.3);
+    box-shadow: 0 26px 55px rgba(0, 0, 0, 0.12), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+    background: linear-gradient(180deg, rgba(240, 243, 247, 0.92) 0%, rgba(228, 233, 240, 0.95) 100%);
+}
+
+body.light-mode .phase-baseline-path {
+    filter: drop-shadow(0 0 5px rgba(0, 0, 0, 0.08));
+}
+
+body.light-mode .phase-desired-path {
+    filter: drop-shadow(0 0 8px rgba(8, 145, 178, 0.2));
+}
+
+/* Optimize button */
+body.light-mode .phase-optimize-btn {
+    background: rgba(8, 145, 178, 0.10);
+    border-color: rgba(8, 145, 178, 0.35);
+    color: rgba(6, 100, 130, 0.9);
+}
+
+body.light-mode .phase-optimize-btn:hover {
+    background: rgba(8, 145, 178, 0.18);
+    border-color: rgba(8, 145, 178, 0.5);
+    color: rgba(4, 80, 110, 1);
+}
+
+/* Lx button */
+body.light-mode .phase-lx-btn {
+    background: rgba(180, 120, 20, 0.10);
+    border-color: rgba(180, 120, 20, 0.35);
+    color: rgba(140, 90, 10, 0.9);
+}
+
+body.light-mode .phase-lx-btn:hover {
+    background: rgba(180, 120, 20, 0.18);
+    border-color: rgba(180, 120, 20, 0.5);
+    color: rgba(120, 70, 0, 1);
+}
+
+/* Substance timeline bar labels */
+body.light-mode .timeline-bar-label {
+    fill: rgba(30, 40, 60, 0.92);
+}
+
+/* Timeline separator */
+body.light-mode .timeline-separator {
+    stroke: rgba(80, 110, 150, 0.2);
+}
+
+/* Timeline bar — boost opacity for light bg */
+body.light-mode .timeline-bar {
+    fill-opacity: 0.30;
+    stroke-opacity: 0.55;
+}
+
+/* Dose marker labels */
+body.light-mode .lx-marker-label {
+    fill: rgba(140, 90, 10, 0.85);
+}
+
+body.light-mode #stack-summary {
+    background: var(--bg-surface);
+    border-top-color: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .phase-step-btn {
+    background: rgba(255, 255, 255, 0.7);
+    border-color: rgba(100, 130, 170, 0.25);
+}
+
+body.light-mode .phase-step-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.9);
+    border-color: rgba(8, 145, 178, 0.4);
+}
+
+body.light-mode .toggle-pill-inner {
+    border-color: rgba(0, 0, 0, 0.1);
+}
+
+body.light-mode .toggle-pill-inner:hover {
+    border-color: rgba(0, 0, 0, 0.2);
+}
+
+body.light-mode .loading-overlay {
+    background: rgba(240, 243, 247, 0.6);
+}
+
+body.light-mode .debug-mode-toggle {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+/* Theme toggle icon visibility */
+body.light-mode #theme-toggle-btn .icon-moon {
+    display: none;
+}
+
+body.light-mode #theme-toggle-btn .icon-sun {
+    display: block !important;
+}
+
 /* ---- Reset & Base ---- */
 *, *::before, *::after {
     margin: 0;
@@ -146,6 +383,57 @@ body::after {
     color: var(--text-accent);
     border-color: rgba(110, 231, 255, 0.62);
     box-shadow: 0 0 0 1px rgba(110, 231, 255, 0.18) inset, 0 8px 20px rgba(0, 199, 255, 0.18);
+}
+
+/* ---- Phase Step Controls (< > chevrons) ---- */
+.phase-step-controls {
+    position: fixed;
+    top: 54px;
+    right: 16px;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.phase-step-controls.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.phase-step-controls.hidden {
+    display: none !important;
+}
+
+.phase-step-btn {
+    background: rgba(11, 19, 31, 0.6);
+    border: 1px solid rgba(146, 186, 255, 0.18);
+    border-radius: 8px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px 6px;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.phase-step-btn:hover:not(:disabled) {
+    color: var(--text-secondary);
+    border-color: rgba(110, 231, 255, 0.45);
+    background: rgba(20, 32, 50, 0.85);
+}
+
+.phase-step-btn:disabled {
+    opacity: 0.25;
+    cursor: default;
+}
+
+.step-preview {
+    pointer-events: none !important;
 }
 
 /* ---- LLM Debug Panel ---- */
@@ -1158,6 +1446,55 @@ body.phase-engaged .top-controls {
     filter: drop-shadow(0 0 8px rgba(110, 231, 255, 0.2));
 }
 
+/* Desired fill — "memory" of desired AUC after Lx morph */
+.phase-desired-fill {
+    pointer-events: none;
+    transition: fill-opacity 200ms ease;
+}
+
+/* Ghost AUC — left behind after each substance scan */
+.lx-ghost-auc {
+    pointer-events: none;
+}
+
+/* Word Cloud */
+.word-cloud-word {
+    font-family: 'Space Grotesk', -apple-system, sans-serif;
+    font-weight: 500;
+    text-anchor: middle;
+    dominant-baseline: central;
+    pointer-events: none;
+    will-change: transform, opacity;
+}
+
+/* Orbital rings around word cloud */
+.orbital-ring {
+    pointer-events: none;
+    will-change: d, opacity;
+}
+
+/* Substance step label during sequential reveal */
+.substance-step-label {
+    font-family: 'Space Grotesk', -apple-system, sans-serif;
+    font-weight: 600;
+    font-size: 13px;
+    fill: rgba(255, 255, 255, 0.85);
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+body.light-mode .substance-step-label {
+    fill: rgba(26, 35, 51, 0.85);
+}
+
+body.light-mode .arrowhead-path {
+    stroke: rgba(30, 50, 80, 0.7);
+}
+
+body.light-mode .word-cloud-word {
+    filter: saturate(1.2);
+}
+
 /* Mission arrows from baseline → desired */
 .mission-arrow {
     stroke-width: 1.5;
@@ -1196,14 +1533,20 @@ body.phase-engaged .top-controls {
     letter-spacing: 0.02em;
 }
 
-#phase-x-axis text:last-of-type {
-    fill: #9fd9ff;
-    font-size: 13px;
-    letter-spacing: 0.12em;
-}
+/* Anchor labels (6am, 12pm, etc.) get slight emphasis via JS tspan —
+   no last-of-type override needed */
 
 #phase-scan-line {
     mix-blend-mode: screen;
+}
+
+#morph-playhead {
+    mix-blend-mode: screen;
+    pointer-events: none;
+}
+#morph-playhead .morph-playhead-handle {
+    pointer-events: all;
+    cursor: col-resize;
 }
 
 /* ---- Responsive ---- */
@@ -1281,4 +1624,130 @@ body.phase-engaged .top-controls {
         font-size: 9px;
         padding: 3px 8px;
     }
+}
+
+/* ============================================
+   Lx Button (supplement intervention trigger)
+   ============================================ */
+
+.phase-lx-btn {
+    position: absolute;
+    bottom: 28px;
+    left: 50%;
+    transform: translateX(-50%) translateY(8px);
+    background: rgba(245, 180, 60, 0.08);
+    border: 1px solid rgba(245, 180, 60, 0.25);
+    color: rgba(255, 210, 120, 0.9);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    padding: 8px 28px;
+    border-radius: 20px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.5s, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+                background 0.2s, border-color 0.2s;
+    backdrop-filter: blur(6px);
+}
+
+.phase-lx-btn.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+.phase-lx-btn:hover {
+    background: rgba(245, 180, 60, 0.15);
+    border-color: rgba(245, 180, 60, 0.4);
+    color: rgba(255, 225, 160, 1);
+}
+
+.phase-lx-btn.hidden {
+    display: none;
+}
+
+/* ============================================
+   Lx Overlay Curves & Dose Markers
+   ============================================ */
+
+.phase-lx-path {
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    fill: none;
+    filter: drop-shadow(0 0 4px currentColor);
+}
+
+.phase-lx-fill {
+    fill-opacity: 0.06;
+}
+
+.lx-marker-line {
+    stroke-dasharray: 3 4;
+    stroke-width: 1;
+    stroke-linecap: round;
+}
+
+.lx-marker-dot {
+    stroke-width: 1.5;
+}
+
+.lx-marker-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    fill: rgba(255, 210, 120, 0.85);
+}
+
+/* ============================================
+   Substance Timeline (FCP-style dose bars)
+   ============================================ */
+
+.timeline-separator {
+    stroke: rgba(146, 186, 255, 0.12);
+    stroke-width: 0.5;
+}
+
+.timeline-bar {
+    transition: filter 0.15s ease;
+}
+
+.timeline-bar:hover {
+    filter: brightness(1.5);
+}
+
+/* Dim siblings on hover — isolate individual bar */
+#phase-substance-timeline:hover .timeline-pill-group {
+    opacity: 0.35;
+    transition: opacity 0.15s ease;
+}
+#phase-substance-timeline:hover .timeline-pill-group:hover {
+    opacity: 1;
+}
+
+.timeline-connector {
+    transition: stroke-opacity 0.15s ease;
+}
+
+.timeline-pill-group:hover .timeline-connector {
+    stroke-opacity: 0.45;
+}
+
+.timeline-bar-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 7.5px;
+    letter-spacing: 0.02em;
+    fill: rgba(255, 255, 255, 0.88);
+    pointer-events: none;
+}
+
+/* ============================================
+   Debug Panel: Intervention Model stage color
+   ============================================ */
+
+.debug-entry-stage.intervention-model {
+    color: #2dd4bf;
+    border-color: rgba(45, 212, 191, 0.3);
+    background: rgba(45, 212, 191, 0.06);
 }
