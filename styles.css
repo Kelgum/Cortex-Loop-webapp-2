@@ -1736,7 +1736,7 @@ body.light-mode .word-cloud-word {
 
 .timeline-bar-label {
     font-family: 'IBM Plex Mono', monospace;
-    font-size: 7.5px;
+    font-size: 9px;
     letter-spacing: 0.02em;
     fill: rgba(255, 255, 255, 0.88);
     pointer-events: none;

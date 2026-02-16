@@ -5622,11 +5622,11 @@ async function animateLxReveal(lxCurves, curvesData, interventions) {
 const TIMELINE_ZONE = {
     separatorY: 454,   // thin line just below plot area
     top: 457,          // first track starts here
-    laneH: 14,
-    laneGap: 0,        // no gap — alternating backgrounds instead
-    pillRx: 2,
+    laneH: 20,
+    laneGap: 1,
+    pillRx: 3,
     minBarW: 40,
-    bottomPad: 4,
+    bottomPad: 6,
 };
 
 /** Toggle desired curves to dashed/dim when Lx takes over */
@@ -5640,6 +5640,12 @@ function transmuteDesiredCurves(transmute) {
         desiredGroup.querySelectorAll('.phase-desired-path').forEach(p => {
             p.setAttribute('stroke-dasharray', '6 4');
         });
+        // Move peak descriptors to overlay so they aren't dimmed by the group filter
+        const overlay = document.getElementById('phase-tooltip-overlay');
+        desiredGroup.querySelectorAll('.peak-descriptor').forEach(pd => {
+            pd.setAttribute('data-origin', 'phase-desired-curves');
+            overlay.appendChild(pd);
+        });
         desiredGroup.style.transition = 'filter 600ms ease';
         desiredGroup.style.filter = isLight
             ? 'opacity(0.35) saturate(0.5)'
@@ -5651,6 +5657,12 @@ function transmuteDesiredCurves(transmute) {
     } else {
         desiredGroup.querySelectorAll('.phase-desired-path').forEach(p => {
             p.removeAttribute('stroke-dasharray');
+        });
+        // Move peak descriptors back from overlay to desired group
+        const overlay = document.getElementById('phase-tooltip-overlay');
+        overlay.querySelectorAll('.peak-descriptor[data-origin="phase-desired-curves"]').forEach(pd => {
+            pd.removeAttribute('data-origin');
+            desiredGroup.appendChild(pd);
         });
         desiredGroup.style.transition = 'filter 400ms ease';
         desiredGroup.style.filter = '';
