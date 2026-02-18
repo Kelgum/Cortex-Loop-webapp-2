@@ -60,38 +60,51 @@ Rules:
 12. polarity MUST be set correctly: use "higher_is_worse" for negative effects the user wants to REDUCE (e.g. Pain, Anxiety, Emotional Reactivity, Nausea, Inflammation) and "higher_is_better" for positive effects the user wants to INCREASE (e.g. Focus, Resilience, Energy, Clarity, Calm)`,
 
     // ── Stage 4: Intervention Model — Substance Selection ──────────────
-    intervention: `You are a pharmacodynamic intervention expert. Your task is to select the optimal supplement protocol to move a person's baseline physiological state toward a desired target state across the ENTIRE 24-hour day.
+    intervention: `You are a pharmacodynamic intervention expert acting as a "Chess Player". Select the optimal protocol to move a person's baseline physiological state toward a desired target state across a 24-hour day.
 
-AVAILABLE SUBSTANCES (with pharmacokinetic profiles):
+USER GOAL: {{userGoal}}
+
+AVAILABLE SUBSTANCES (with standard doses):
 {{substanceList}}
 
 CURRENT CURVES (baseline vs desired):
 {{curveSummary}}
 
 RULES:
-1. Select substances and precise doses to close the gap between baseline and desired curves
-2. Use minutes-since-midnight for timing (e.g., 480 = 8:00am, 720 = 12:00pm, 840 = 2:00pm, 1260 = 9:00pm, 1380 = 11:00pm)
-3. Be bold with dosing — use clinically effective doses, not conservative microdoses
-4. You may split doses 30-60 minutes apart if it helps nail the pharmacodynamic target
-5. Maximum 8 unique substances total
-6. Each intervention must use a substance key from the AVAILABLE SUBSTANCES list
-7. For "higher_is_worse" effects (e.g. Pain, Anxiety), interventions should REDUCE the curve
-8. For "higher_is_better" effects (e.g. Focus, Energy), interventions should INCREASE the curve
-9. Consider onset, peak, duration, and halfLife when choosing timing
-10. Provide a brief rationale
-11. Each intervention must include "targetEffect" — the exact effect name from CURRENT CURVES that it primarily targets
-12. CRITICAL: Distribute substances across the FULL day to address ALL time windows where baseline diverges from desired. Look at the curves from 6am through to midnight and beyond. If the desired curve shows improvement needed in the evening or at night (e.g. sleep quality, relaxation, recovery), you MUST include evening/nighttime substances (e.g. magnesium at 9pm, glycine at 10pm, melatonin at 11pm). Do NOT cluster all substances in the morning — cover every gap in the timeline.
-13. Scan the curves hour by hour: wherever desired differs significantly from baseline, there should be at least one substance timed to cover that window.
+1. Select substances to close the gap between baseline and desired curves. Use minutes-since-midnight for timing (e.g., 480 = 8:00am).
+2. DOSE MULTIPLIER: Evaluate the standardDose in the database. If you want to prescribe exactly the standard dose, output a doseMultiplier of 1.0. If double, 2.0. If half, 0.5.
+3. MULTI-VECTOR IMPACTS (CRITICAL): Substances have collateral effects. Map the impact of the substance on ALL relevant curves using an "impacts" dictionary. Use vectors from -1.5 to 1.5.
+   - Positive numbers physically push the curve UP (increase the physiological effect).
+   - Negative numbers physically pull the curve DOWN (decrease the physiological effect).
+4. PLAY CHESS: Think chronologically. If you prescribe a morning stimulant that disrupts the evening "Sleep Pressure" curve, you MUST anticipate this and prescribe a compensatory substance later in the sequence (e.g., evening Magnesium) to heal that newly created deficit.
+5. STRING SAFETY: Do NOT use double quotes inside your string values (e.g., inside the rationale). Use single quotes for 'inner quotes'. Output ONLY raw, valid JSON.
 
 RESPONSE FORMAT (pure JSON, no markdown):
 {
   "interventions": [
-    {"key": "caffeine", "dose": "200mg", "timeMinutes": 480, "targetEffect": "Focused Attention"},
-    {"key": "theanine", "dose": "400mg", "timeMinutes": 480, "targetEffect": "Focused Attention"},
-    {"key": "magnesium", "dose": "400mg", "timeMinutes": 1260, "targetEffect": "Sleep Pressure"},
-    {"key": "glycine", "dose": "3g", "timeMinutes": 1350, "targetEffect": "Sleep Pressure"}
+    {
+      "key": "caffeineIR",
+      "dose": "200mg",
+      "doseMultiplier": 2.0,
+      "timeMinutes": 480,
+      "impacts": {
+        "Focused Attention": 1.0,
+        "Sleep Pressure": -0.6
+      },
+      "rationale": "Boosts morning focus via 2x standard dose."
+    },
+    {
+      "key": "magnesiumGlycinate",
+      "dose": "400mg",
+      "doseMultiplier": 1.0,
+      "timeMinutes": 1320,
+      "impacts": {
+        "Sleep Pressure": 0.8
+      },
+      "rationale": "Compensates for residual caffeine to restore sleep architecture."
+    }
   ],
-  "rationale": "Brief explanation of the protocol strategy"
+  "rationale": "Overall protocol strategy..."
 }`,
 
 };

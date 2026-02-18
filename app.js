@@ -54,127 +54,35 @@ const CartridgeConfig = {
 };
 
 // ============================================
-// 2. SUBSTANCE DATABASE (expanded)
+// 2. SUBSTANCE DATABASE — loaded from Substance_DB.js (SUBSTANCE_DB)
 // ============================================
+// The unified SUBSTANCE_DB is loaded via <script src="Substance_DB.js">.
+// Each entry uses: class (biology), regulatoryStatus (legality), color, standardDose,
+// dataConfidence, dataNote, pharma {onset, peak, duration, halfLife, strength, rebound}.
 
-const SUBSTANCES = {
-    // --- Stimulants ---
-    caffeine:       { name: 'Caffeine',         category: 'stimulant',  color: '#ff6b4a', pharma: { onset: 20, peak: 45, duration: 300, halfLife: 300, strength: 80, rebound: 15 } },
-    theacrine:      { name: 'Theacrine',        category: 'stimulant',  color: '#ff8c42', pharma: { onset: 30, peak: 60, duration: 360, halfLife: 360, strength: 55, rebound: 5 } },
-    dynamine:       { name: 'Dynamine',         category: 'stimulant',  color: '#ff7b55', pharma: { onset: 10, peak: 30, duration: 120, halfLife: 90, strength: 50, rebound: 8 } },
-
-    // --- Adaptogens ---
-    theanine:       { name: 'L-Theanine',       category: 'adaptogen',  color: '#a855f7', pharma: { onset: 20, peak: 50, duration: 240, halfLife: 180, strength: 50, rebound: 0 } },
-    rhodiola:       { name: 'Rhodiola',         category: 'adaptogen',  color: '#c084fc', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 240, strength: 55, rebound: 0 } },
-    bacopa:         { name: 'Bacopa',           category: 'adaptogen',  color: '#9333ea', pharma: { onset: 60, peak: 120, duration: 480, halfLife: 300, strength: 40, rebound: 0 } },
-    ashwagandha:    { name: 'Ashwagandha',      category: 'adaptogen',  color: '#7c3aed', pharma: { onset: 45, peak: 120, duration: 480, halfLife: 360, strength: 50, rebound: 0 } },
-    cordyceps:      { name: 'Cordyceps',        category: 'adaptogen',  color: '#b47ae8', pharma: { onset: 40, peak: 90, duration: 360, halfLife: 240, strength: 45, rebound: 0 } },
-    reishi:         { name: 'Reishi',           category: 'adaptogen',  color: '#8b5cf6', pharma: { onset: 60, peak: 120, duration: 480, halfLife: 300, strength: 35, rebound: 0 } },
-    holytBasil:     { name: 'Holy Basil',       category: 'adaptogen',  color: '#a78bfa', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 240, strength: 40, rebound: 0 } },
-    ginseng:        { name: 'Panax Ginseng',    category: 'adaptogen',  color: '#6d28d9', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 300, strength: 55, rebound: 5 } },
-    schisandra:     { name: 'Schisandra',       category: 'adaptogen',  color: '#d8b4fe', pharma: { onset: 30, peak: 60, duration: 300, halfLife: 180, strength: 35, rebound: 0 } },
-
-    // --- Nootropics ---
-    tyrosine:       { name: 'L-Tyrosine',       category: 'nootropic',  color: '#3b82f6', pharma: { onset: 20, peak: 60, duration: 240, halfLife: 150, strength: 60, rebound: 5 } },
-    citicoline:     { name: 'Citicoline',       category: 'nootropic',  color: '#60a5fa', pharma: { onset: 30, peak: 60, duration: 300, halfLife: 210, strength: 50, rebound: 0 } },
-    alphaGPC:       { name: 'Alpha-GPC',        category: 'nootropic',  color: '#2563eb', pharma: { onset: 20, peak: 60, duration: 240, halfLife: 180, strength: 55, rebound: 0 } },
-    lionsMane:      { name: "Lion's Mane",      category: 'nootropic',  color: '#93c5fd', pharma: { onset: 60, peak: 180, duration: 480, halfLife: 360, strength: 35, rebound: 0 } },
-    racetam:        { name: 'Piracetam',        category: 'nootropic',  color: '#1d4ed8', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 300, strength: 45, rebound: 0 } },
-    aniracetam:     { name: 'Aniracetam',       category: 'nootropic',  color: '#3b5df6', pharma: { onset: 20, peak: 45, duration: 180, halfLife: 90, strength: 55, rebound: 5 } },
-    noopept:        { name: 'Noopept',          category: 'nootropic',  color: '#4f86f7', pharma: { onset: 15, peak: 30, duration: 180, halfLife: 60, strength: 60, rebound: 5 } },
-    phenylpiracetam:{ name: 'Phenylpiracetam',  category: 'nootropic',  color: '#5b7cf7', pharma: { onset: 20, peak: 60, duration: 300, halfLife: 180, strength: 65, rebound: 8 } },
-    uridine:        { name: 'Uridine',          category: 'nootropic',  color: '#7ca3fa', pharma: { onset: 45, peak: 120, duration: 480, halfLife: 300, strength: 30, rebound: 0 } },
-    phosphatidylserine: { name: 'PS',           category: 'nootropic',  color: '#5593f7', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 240, strength: 35, rebound: 0 } },
-    dmae:           { name: 'DMAE',             category: 'nootropic',  color: '#6ba3f7', pharma: { onset: 30, peak: 60, duration: 240, halfLife: 150, strength: 35, rebound: 0 } },
-    sulbutiamine:   { name: 'Sulbutiamine',     category: 'nootropic',  color: '#4a8af7', pharma: { onset: 20, peak: 60, duration: 300, halfLife: 180, strength: 50, rebound: 5 } },
-
-    // --- Minerals & Aminos ---
-    creatine:       { name: 'Creatine',         category: 'mineral',    color: '#22c55e', pharma: { onset: 60, peak: 180, duration: 720, halfLife: 480, strength: 25, rebound: 0 } },
-    magnesium:      { name: 'Magnesium',        category: 'mineral',    color: '#4ade80', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 240, strength: 30, rebound: 0 } },
-    taurine:        { name: 'Taurine',          category: 'mineral',    color: '#16a34a', pharma: { onset: 20, peak: 60, duration: 300, halfLife: 180, strength: 30, rebound: 0 } },
-    zinc:           { name: 'Zinc',             category: 'mineral',    color: '#15803d', pharma: { onset: 60, peak: 120, duration: 480, halfLife: 360, strength: 20, rebound: 0 } },
-    iron:           { name: 'Iron',             category: 'mineral',    color: '#166534', pharma: { onset: 60, peak: 180, duration: 720, halfLife: 480, strength: 20, rebound: 0 } },
-    selenium:       { name: 'Selenium',         category: 'mineral',    color: '#059669', pharma: { onset: 60, peak: 120, duration: 480, halfLife: 360, strength: 15, rebound: 0 } },
-    potassium:      { name: 'Potassium',        category: 'mineral',    color: '#10b981', pharma: { onset: 30, peak: 60, duration: 240, halfLife: 180, strength: 20, rebound: 0 } },
-    nac:            { name: 'NAC',              category: 'mineral',    color: '#34d399', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 240, strength: 30, rebound: 0 } },
-    alcar:          { name: 'ALCAR',            category: 'mineral',    color: '#2dd4bf', pharma: { onset: 20, peak: 60, duration: 300, halfLife: 240, strength: 40, rebound: 0 } },
-    coq10:          { name: 'CoQ10',            category: 'mineral',    color: '#059669', pharma: { onset: 60, peak: 180, duration: 480, halfLife: 360, strength: 20, rebound: 0 } },
-    pqq:            { name: 'PQQ',              category: 'mineral',    color: '#0d9488', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 240, strength: 25, rebound: 0 } },
-    nmn:            { name: 'NMN',              category: 'mineral',    color: '#14b8a6', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 240, strength: 25, rebound: 0 } },
-    resveratrol:    { name: 'Resveratrol',      category: 'mineral',    color: '#047857', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 240, strength: 20, rebound: 0 } },
-
-    // --- Vitamins ---
-    vitaminD:       { name: 'Vitamin D3',       category: 'vitamin',    color: '#eab308', pharma: { onset: 120, peak: 360, duration: 1440, halfLife: 720, strength: 15, rebound: 0 } },
-    vitaminB12:     { name: 'Vitamin B12',      category: 'vitamin',    color: '#f59e0b', pharma: { onset: 30, peak: 120, duration: 480, halfLife: 360, strength: 25, rebound: 0 } },
-    vitaminC:       { name: 'Vitamin C',        category: 'vitamin',    color: '#fbbf24', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 180, strength: 20, rebound: 0 } },
-    vitaminK2:      { name: 'Vitamin K2',       category: 'vitamin',    color: '#d97706', pharma: { onset: 120, peak: 360, duration: 1440, halfLife: 720, strength: 10, rebound: 0 } },
-    bComplex:       { name: 'B-Complex',        category: 'vitamin',    color: '#f97316', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 240, strength: 25, rebound: 0 } },
-    omega3:         { name: 'Omega-3',          category: 'vitamin',    color: '#fb923c', pharma: { onset: 60, peak: 180, duration: 720, halfLife: 480, strength: 20, rebound: 0 } },
-    folate:         { name: 'Methylfolate',     category: 'vitamin',    color: '#fdba74', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 240, strength: 15, rebound: 0 } },
-
-    // --- Sleep ---
-    glycine:        { name: 'Glycine',          category: 'sleep',      color: '#06d6a0', pharma: { onset: 20, peak: 60, duration: 300, halfLife: 180, strength: 50, rebound: 0 } },
-    apigenin:       { name: 'Apigenin',         category: 'sleep',      color: '#2dd4bf', pharma: { onset: 30, peak: 60, duration: 300, halfLife: 180, strength: 45, rebound: 0 } },
-    melatonin:      { name: 'Melatonin',        category: 'sleep',      color: '#14b8a6', pharma: { onset: 20, peak: 40, duration: 240, halfLife: 40, strength: 70, rebound: 0 } },
-    gaba:           { name: 'GABA',             category: 'sleep',      color: '#0891b2', pharma: { onset: 15, peak: 45, duration: 180, halfLife: 90, strength: 55, rebound: 0 } },
-    valerian:       { name: 'Valerian Root',    category: 'sleep',      color: '#06b6d4', pharma: { onset: 30, peak: 60, duration: 300, halfLife: 180, strength: 45, rebound: 0 } },
-    passionflower:  { name: 'Passionflower',    category: 'sleep',      color: '#22d3ee', pharma: { onset: 30, peak: 60, duration: 240, halfLife: 150, strength: 40, rebound: 0 } },
-    lemon_balm:     { name: 'Lemon Balm',       category: 'sleep',      color: '#67e8f9', pharma: { onset: 30, peak: 60, duration: 240, halfLife: 150, strength: 35, rebound: 0 } },
-    tryptophan:     { name: 'L-Tryptophan',     category: 'sleep',      color: '#0e7490', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 240, strength: 45, rebound: 0 } },
-    magL_threonate: { name: 'Mag L-Threonate',  category: 'sleep',      color: '#155e75', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 240, strength: 40, rebound: 0 } },
+// Map substance `class` values to display colors (used by legacy cartridge + fallback)
+const CLASS_COLORS = {
+    'Stimulant':            { fill: '#ff4757', glow: 'rgba(255,71,87,0.4)' },
+    'Depressant/Sleep':     { fill: '#2f3542', glow: 'rgba(47,53,66,0.4)' },
+    'Nootropic':            { fill: '#1e90ff', glow: 'rgba(30,144,255,0.4)' },
+    'Adaptogen':            { fill: '#2ed573', glow: 'rgba(46,213,115,0.4)' },
+    'Psychedelic/Atypical': { fill: '#9b59b6', glow: 'rgba(155,89,182,0.4)' },
+    'Mineral/Electrolyte':  { fill: '#ffa502', glow: 'rgba(255,165,2,0.4)' },
+    'Vitamin/Amino':        { fill: '#eccc68', glow: 'rgba(236,204,104,0.4)' },
+    'Psychiatric/Other':    { fill: '#747d8c', glow: 'rgba(116,125,140,0.4)' },
+    'unknown':              { fill: '#94a3b8', glow: 'rgba(148,163,184,0.4)' },
 };
+// Backward compat alias — old code references CATEGORY_COLORS
+const CATEGORY_COLORS = CLASS_COLORS;
 
-// Rx-only substances (shown when Rx toggle is on)
-const RX_SUBSTANCES = {
-    modafinil:      { name: 'Modafinil',        category: 'rx',         color: '#e11d48', pharma: { onset: 60, peak: 120, duration: 720, halfLife: 720, strength: 85, rebound: 10 } },
-    armodafinil:    { name: 'Armodafinil',      category: 'rx',         color: '#f43f5e', pharma: { onset: 60, peak: 120, duration: 900, halfLife: 900, strength: 85, rebound: 8 } },
-    methylphenidate:{ name: 'Methylphenidate',  category: 'rx',         color: '#fb7185', pharma: { onset: 20, peak: 60, duration: 240, halfLife: 180, strength: 90, rebound: 20 } },
-    amphetamine:    { name: 'Amphetamine',      category: 'rx',         color: '#be123c', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 600, strength: 95, rebound: 25 } },
-    atomoxetine:    { name: 'Atomoxetine',      category: 'rx',         color: '#9f1239', pharma: { onset: 60, peak: 120, duration: 480, halfLife: 300, strength: 60, rebound: 5 } },
-    bromantane:     { name: 'Bromantane',       category: 'rx',         color: '#ff5e7a', pharma: { onset: 60, peak: 180, duration: 600, halfLife: 480, strength: 50, rebound: 0 } },
-    selegiline:     { name: 'Selegiline',       category: 'rx',         color: '#ff8da1', pharma: { onset: 30, peak: 90, duration: 480, halfLife: 360, strength: 55, rebound: 5 } },
-    memantine:      { name: 'Memantine',        category: 'rx',         color: '#ff3d6a', pharma: { onset: 180, peak: 480, duration: 1440, halfLife: 3600, strength: 40, rebound: 0 } },
-    gabapentin:     { name: 'Gabapentin',       category: 'rx',         color: '#e74c7a', pharma: { onset: 60, peak: 180, duration: 480, halfLife: 360, strength: 50, rebound: 5 } },
-    pregabalin:     { name: 'Pregabalin',       category: 'rx',         color: '#d63384', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 360, strength: 60, rebound: 8 } },
-    buspirone:      { name: 'Buspirone',        category: 'rx',         color: '#c71f60', pharma: { onset: 30, peak: 60, duration: 240, halfLife: 150, strength: 45, rebound: 0 } },
-    propranolol:    { name: 'Propranolol',      category: 'rx',         color: '#b81c5c', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 240, strength: 50, rebound: 0 } },
-    clonidine:      { name: 'Clonidine',        category: 'rx',         color: '#a81854', pharma: { onset: 30, peak: 60, duration: 480, halfLife: 720, strength: 50, rebound: 5 } },
-};
-
-// Controlled substances (shown when Controlled toggle is on)
-const CONTROLLED_SUBSTANCES = {
-    psilocybin:     { name: 'Psilocybin',       category: 'controlled', color: '#f59e0b', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 180, strength: 70, rebound: 5 } },
-    lsd:            { name: 'LSD',              category: 'controlled', color: '#fbbf24', pharma: { onset: 30, peak: 120, duration: 720, halfLife: 300, strength: 75, rebound: 5 } },
-    mdma:           { name: 'MDMA',             category: 'controlled', color: '#f97316', pharma: { onset: 30, peak: 90, duration: 300, halfLife: 480, strength: 90, rebound: 30 } },
-    ketamine:       { name: 'Ketamine',         category: 'controlled', color: '#eab308', pharma: { onset: 5, peak: 20, duration: 90, halfLife: 150, strength: 85, rebound: 10 } },
-    dmt:            { name: 'DMT',              category: 'controlled', color: '#d97706', pharma: { onset: 2, peak: 5, duration: 30, halfLife: 15, strength: 95, rebound: 5 } },
-    mescaline:      { name: 'Mescaline',        category: 'controlled', color: '#ca8a04', pharma: { onset: 60, peak: 180, duration: 720, halfLife: 360, strength: 75, rebound: 5 } },
-    thc:            { name: 'THC',              category: 'controlled', color: '#a3e635', pharma: { onset: 10, peak: 30, duration: 180, halfLife: 120, strength: 65, rebound: 10 } },
-    cbd:            { name: 'CBD',              category: 'controlled', color: '#84cc16', pharma: { onset: 30, peak: 90, duration: 360, halfLife: 240, strength: 40, rebound: 0 } },
-    ghb:            { name: 'GHB',              category: 'controlled', color: '#b45309', pharma: { onset: 15, peak: 45, duration: 180, halfLife: 30, strength: 80, rebound: 15 } },
-    ibogaine:       { name: 'Ibogaine',         category: 'controlled', color: '#92400e', pharma: { onset: 60, peak: 240, duration: 1440, halfLife: 720, strength: 85, rebound: 10 } },
-};
-
-const CATEGORY_COLORS = {
-    stimulant:  { fill: '#ff6b4a', glow: 'rgba(255,107,74,0.4)' },
-    adaptogen:  { fill: '#a855f7', glow: 'rgba(168,85,247,0.4)' },
-    nootropic:  { fill: '#3b82f6', glow: 'rgba(59,130,246,0.4)' },
-    sleep:      { fill: '#06d6a0', glow: 'rgba(6,214,160,0.4)' },
-    mineral:    { fill: '#22c55e', glow: 'rgba(34,197,94,0.4)' },
-    vitamin:    { fill: '#eab308', glow: 'rgba(234,179,8,0.4)' },
-    rx:         { fill: '#e11d48', glow: 'rgba(225,29,72,0.4)' },
-    controlled: { fill: '#f59e0b', glow: 'rgba(245,158,11,0.4)' },
-    unknown:    { fill: '#94a3b8', glow: 'rgba(148,163,184,0.4)' },
-};
-
-// Effect type groupings for chart curves
+// Effect type groupings for chart curves (legacy effect chart uses these)
 const EFFECT_TYPES = {
-    'Focus & Cognition': { categories: ['stimulant', 'nootropic'], color: '#60a5fa', glow: 'rgba(96,165,250,0.3)' },
-    'Stress Resilience':  { categories: ['adaptogen'],             color: '#c084fc', glow: 'rgba(192,132,252,0.3)' },
-    'Baseline Support':   { categories: ['mineral', 'vitamin'],    color: '#4ade80', glow: 'rgba(74,222,128,0.3)' },
-    'Sedation':           { categories: ['sleep'],                 color: '#2dd4bf', glow: 'rgba(45,212,191,0.3)' },
-    'Rx Effect':          { categories: ['rx'],                    color: '#fb7185', glow: 'rgba(251,113,133,0.3)' },
-    'Altered State':      { categories: ['controlled'],            color: '#fbbf24', glow: 'rgba(251,191,36,0.3)' },
+    'Focus & Cognition': { classes: ['Stimulant', 'Nootropic'],               color: '#60a5fa', glow: 'rgba(96,165,250,0.3)' },
+    'Stress Resilience':  { classes: ['Adaptogen'],                            color: '#c084fc', glow: 'rgba(192,132,252,0.3)' },
+    'Baseline Support':   { classes: ['Mineral/Electrolyte', 'Vitamin/Amino'], color: '#4ade80', glow: 'rgba(74,222,128,0.3)' },
+    'Sedation':           { classes: ['Depressant/Sleep'],                     color: '#2dd4bf', glow: 'rgba(45,212,191,0.3)' },
+    'Rx Effect':          { classes: ['Psychiatric/Other'],                    color: '#fb7185', glow: 'rgba(251,113,133,0.3)' },
+    'Altered State':      { classes: ['Psychedelic/Atypical'],                 color: '#fbbf24', glow: 'rgba(251,191,36,0.3)' },
 };
 
 // Timing label → hour of day mapping
@@ -639,32 +547,53 @@ function cleanupDivider() {
 // ============================================
 
 function getActiveSubstances() {
-    const active = { ...SUBSTANCES };
-    if (AppState.includeRx) Object.assign(active, RX_SUBSTANCES);
-    if (AppState.includeControlled) Object.assign(active, CONTROLLED_SUBSTANCES);
+    const active = {};
+    for (const [key, s] of Object.entries(SUBSTANCE_DB)) {
+        const status = (s.regulatoryStatus || '').toLowerCase();
+        // Supplement and OTC are always allowed
+        if (status === 'supplement' || status === 'otc') {
+            active[key] = s;
+        } else if (status === 'rx' && AppState.includeRx) {
+            active[key] = s;
+        } else if (status === 'controlled' && AppState.includeControlled) {
+            active[key] = s;
+        }
+    }
     return active;
 }
 
 function resolveSubstance(key, item) {
     const active = getActiveSubstances();
     if (active[key]) return active[key];
+    // Also check the full DB (substance may exist but be filtered out by toggles)
+    if (SUBSTANCE_DB[key]) return SUBSTANCE_DB[key];
 
     // Dynamic entry for substances the LLM returns that aren't in our database
-    const cat = item.category || 'unknown';
-    const catColor = CATEGORY_COLORS[cat] || CATEGORY_COLORS.unknown;
+    const cls = item.class || 'unknown';
+    const clsColor = CLASS_COLORS[cls] || CLASS_COLORS.unknown;
     const dynamicEntry = {
         name: item.name || key.charAt(0).toUpperCase() + key.slice(1),
-        category: cat,
-        color: catColor.fill,
+        class: cls,
+        regulatoryStatus: item.regulatoryStatus || 'Supplement',
+        color: item.color || clsColor.fill,
+        standardDose: item.standardDose || item.dose || '',
+        dataConfidence: 'Estimated',
+        dataNote: 'Dynamically registered substance — not in database.',
+        pharma: item.pharma || { onset: 30, peak: 60, duration: 240, halfLife: 120, strength: 40, rebound: 0 },
     };
     // Cache it so tooltips and labels work
-    SUBSTANCES[key] = dynamicEntry;
+    SUBSTANCE_DB[key] = dynamicEntry;
     return dynamicEntry;
 }
 
 // ============================================
 // 5. SVG UTILITIES
 // ============================================
+
+/** Sanitize a class/category name for use as an SVG ID fragment (no slashes, spaces) */
+function sanitizeId(name) {
+    return (name || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+}
 
 function svgEl(tag, attrs = {}) {
     const el = document.createElementNS(SVG_NS, tag);
@@ -763,7 +692,7 @@ function buildDefs(svg) {
 
     for (const [cat, colors] of Object.entries(CATEGORY_COLORS)) {
         const grad = svgEl('linearGradient', {
-            id: `grad-${cat}`, x1: '0%', y1: '0%', x2: '0%', y2: '100%',
+            id: `grad-${sanitizeId(cat)}`, x1: '0%', y1: '0%', x2: '0%', y2: '100%',
         });
         grad.appendChild(svgEl('stop', { offset: '0%', 'stop-color': colors.fill, 'stop-opacity': '1' }));
         grad.appendChild(svgEl('stop', { offset: '100%', 'stop-color': colors.fill, 'stop-opacity': '0.55' }));
@@ -932,6 +861,33 @@ const DebugLog = {
     updateEntry(entry, updates) {
         Object.assign(entry, updates);
         this.render();
+    },
+
+    exportToFile() {
+        if (this.entries.length === 0) return;
+        const payload = this.entries.map(e => ({
+            stage:        e.stage,
+            stageClass:   e.stageClass,
+            model:        e.model || null,
+            duration:     e.duration || null,
+            timestamp:    e.timestamp,
+            systemPrompt: e.systemPrompt || null,
+            userPrompt:   e.userPrompt || null,
+            response:     e.response || null,
+            parsed:       e.parsed || null,
+            error:        e.error || null,
+        }));
+        const json = JSON.stringify(payload, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = 'cortex_loop_debug_log.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        console.log('[DebugLog] Exported', this.entries.length, 'entries to cortex_loop_debug_log.json');
     },
 
     render() {
@@ -1122,13 +1078,147 @@ const DebugLog = {
 // 10. GENERIC API CALLERS (shared by fast + main models)
 // ============================================
 
+/**
+ * Robust JSON extraction + sanitization for LLM responses.
+ * Handles markdown fences, conversational wrapping, trailing commas,
+ * and unescaped double quotes inside string values.
+ */
+function extractAndParseJSON(rawText) {
+    let text = (rawText || '').trim();
+
+    // 1. Strip markdown fences
+    text = text.replace(/```(?:json|JSON)?\s*/g, '').replace(/```\s*/g, '').trim();
+
+    // 2. Extract the FIRST complete JSON object/array by matching braces/brackets.
+    //    This handles LLM self-correction responses that contain multiple JSON objects.
+    const firstBrace = text.indexOf('{');
+    const firstBracket = text.indexOf('[');
+    let startIdx = -1;
+    let openChar, closeChar;
+    if (firstBrace >= 0 && (firstBracket < 0 || firstBrace <= firstBracket)) {
+        startIdx = firstBrace;
+        openChar = '{'; closeChar = '}';
+    } else if (firstBracket >= 0) {
+        startIdx = firstBracket;
+        openChar = '['; closeChar = ']';
+    }
+    if (startIdx < 0) {
+        console.error('[extractAndParseJSON] No JSON found in:', rawText);
+        throw new Error('LLM returned no valid JSON. Check debug panel for raw response.');
+    }
+    // Walk forward from startIdx matching braces, respecting strings
+    let depth = 0;
+    let inString = false;
+    let endIdx = -1;
+    for (let i = startIdx; i < text.length; i++) {
+        const ch = text[i];
+        if (inString) {
+            if (ch === '\\') { i++; continue; } // skip escaped char
+            if (ch === '"') inString = false;
+            continue;
+        }
+        if (ch === '"') { inString = true; continue; }
+        if (ch === openChar) depth++;
+        else if (ch === closeChar) {
+            depth--;
+            if (depth === 0) { endIdx = i; break; }
+        }
+    }
+    if (endIdx < 0) {
+        console.error('[extractAndParseJSON] Unmatched braces in:', rawText);
+        throw new Error('LLM returned no valid JSON. Check debug panel for raw response.');
+    }
+    text = text.substring(startIdx, endIdx + 1);
+
+    // 3. Fix trailing commas before } or ]
+    text = text.replace(/,\s*([}\]])/g, '$1');
+
+    // 4. Fix smart/curly quotes → straight quotes
+    text = text.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"');
+    text = text.replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'");
+
+    // 5. Attempt parse
+    try {
+        return JSON.parse(text);
+    } catch (e1) {
+        // 6. Second pass: fix unescaped double quotes inside string values
+        //    using a character-by-character state machine
+        try {
+            const fixed = fixUnescapedQuotes(text);
+            return JSON.parse(fixed);
+        } catch (e2) {
+            // 7. Third pass: also fix unescaped newlines
+            try {
+                let fixed = fixUnescapedQuotes(text);
+                fixed = fixed.replace(/\r\n/g, '\\n').replace(/\n/g, '\\n').replace(/\t/g, '\\t');
+                return JSON.parse(fixed);
+            } catch (e3) {
+                console.error('[extractAndParseJSON] PARSE FAILED.\nError:', e1.message, '\nCleaned text:', text);
+                throw new Error('JSON parse error: ' + e1.message);
+            }
+        }
+    }
+}
+
+/**
+ * Walk JSON text character by character. When inside a string value,
+ * if we hit a " that ISN'T followed by a JSON structural char (, : } ]),
+ * it's an unescaped inner quote — replace it with an escaped \".
+ */
+function fixUnescapedQuotes(json) {
+    const out = [];
+    let i = 0;
+    const len = json.length;
+
+    while (i < len) {
+        const ch = json[i];
+
+        if (ch === '"') {
+            // Start of a JSON string — scan to find the real closing quote
+            out.push('"');
+            i++;
+            while (i < len) {
+                const c = json[i];
+                if (c === '\\') {
+                    // Escaped char — pass through both chars
+                    out.push(c);
+                    i++;
+                    if (i < len) { out.push(json[i]); i++; }
+                    continue;
+                }
+                if (c === '"') {
+                    // Is this the real closing quote or an unescaped inner quote?
+                    // Peek ahead past whitespace to see what follows
+                    let peek = i + 1;
+                    while (peek < len && (json[peek] === ' ' || json[peek] === '\t' || json[peek] === '\r' || json[peek] === '\n')) peek++;
+                    const next = peek < len ? json[peek] : '';
+                    // Structural chars that can follow a closing string quote
+                    if (next === ',' || next === '}' || next === ']' || next === ':' || next === '') {
+                        // Real closing quote
+                        out.push('"');
+                        i++;
+                        break;
+                    } else {
+                        // Inner unescaped quote — escape it
+                        out.push('\\"');
+                        i++;
+                        continue;
+                    }
+                }
+                out.push(c);
+                i++;
+            }
+        } else {
+            out.push(ch);
+            i++;
+        }
+    }
+    return out.join('');
+}
+
+// Backward compat alias
 function parseJSONObjectResponse(text) {
-    let jsonStr = text.trim();
-    const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (fenceMatch) jsonStr = fenceMatch[1].trim();
-    const braceMatch = jsonStr.match(/\{[\s\S]*\}/);
-    if (braceMatch) jsonStr = braceMatch[0];
-    return JSON.parse(jsonStr);
+    return extractAndParseJSON(text);
 }
 
 async function callAnthropicGeneric(userPrompt, apiKey, model, systemPrompt, maxTokens) {
@@ -1352,7 +1442,7 @@ async function animateFillSequence(stack) {
         const substance = resolveSubstance(capsule.key, capsule);
         if (!substance) continue;
 
-        const category = substance.category;
+        const category = substance.class || 'unknown';
 
         // Ensure gradient exists for this category
         ensureCategoryGradient(category);
@@ -1372,7 +1462,7 @@ async function animateFillSequence(stack) {
         const fillRect = capsuleGroup.querySelector('.capsule-fill');
         const outlineRect = capsuleGroup.querySelector('.capsule-outline');
 
-        fillRect.setAttribute('fill', `url(#grad-${category})`);
+        fillRect.setAttribute('fill', `url(#grad-${sanitizeId(category)})`);
 
         const targetOpacity = capsule.isToday ? 1 : 0.25;
 
@@ -1421,11 +1511,12 @@ async function animateFillSequence(stack) {
 }
 
 function ensureCategoryGradient(category) {
-    if (document.getElementById(`grad-${category}`)) return;
+    const safeId = sanitizeId(category);
+    if (document.getElementById(`grad-${safeId}`)) return;
     const colors = CATEGORY_COLORS[category] || CATEGORY_COLORS.unknown;
     const defs = document.querySelector('#cartridge-svg defs');
     const grad = svgEl('linearGradient', {
-        id: `grad-${category}`, x1: '0%', y1: '0%', x2: '0%', y2: '100%',
+        id: `grad-${safeId}`, x1: '0%', y1: '0%', x2: '0%', y2: '100%',
     });
     grad.appendChild(svgEl('stop', { offset: '0%', 'stop-color': colors.fill, 'stop-opacity': '1' }));
     grad.appendChild(svgEl('stop', { offset: '100%', 'stop-color': colors.fill, 'stop-opacity': '0.55' }));
@@ -2301,6 +2392,29 @@ async function morphRingsToCurves(curvesData) {
     const color1 = curvesData[0].color;
     const color2 = curvesData.length > 1 ? curvesData[1].color : color1;
 
+    // Parse hex color to [r,g,b]
+    function hexToRgb(hex) {
+        const h = hex.replace('#', '');
+        return [parseInt(h.substring(0, 2), 16), parseInt(h.substring(2, 4), 16), parseInt(h.substring(4, 6), 16)];
+    }
+    // Parse rgba(...) to [r,g,b]
+    function rgbaToRgb(rgba) {
+        const m = rgba.match(/[\d.]+/g);
+        return m ? [+m[0], +m[1], +m[2]] : [128, 128, 128];
+    }
+    function lerpColor(fromRgb, toRgb, t) {
+        const r = Math.round(fromRgb[0] + (toRgb[0] - fromRgb[0]) * t);
+        const g = Math.round(fromRgb[1] + (toRgb[1] - fromRgb[1]) * t);
+        const b = Math.round(fromRgb[2] + (toRgb[2] - fromRgb[2]) * t);
+        return `rgb(${r},${g},${b})`;
+    }
+
+    const ot = chartTheme();
+    const ringRgb1 = rgbaToRgb(ot.orbitalRing1);
+    const ringRgb2 = rgbaToRgb(ot.orbitalRing2);
+    const curveRgb1 = hexToRgb(color1);
+    const curveRgb2 = hexToRgb(color2);
+
     await new Promise(resolve => {
         const start = performance.now();
 
@@ -2319,18 +2433,18 @@ async function morphRingsToCurves(curvesData) {
                 return d;
             }
 
-            // Transition colors and opacity
+            // Transition opacity and width
             const strokeOp = 0.28 + p * 0.35;
             const strokeW = 1.2 + p * 0.6;
 
             rings.ring1.setAttribute('d', buildMorphPath(src1, tgt1));
-            rings.ring1.setAttribute('stroke', color1);
+            rings.ring1.setAttribute('stroke', lerpColor(ringRgb1, curveRgb1, p));
             rings.ring1.setAttribute('stroke-opacity', strokeOp.toFixed(2));
             rings.ring1.setAttribute('stroke-width', strokeW.toFixed(1));
 
             if (rings.ring2 && src2 && tgt2) {
                 rings.ring2.setAttribute('d', buildMorphPath(src2, tgt2));
-                rings.ring2.setAttribute('stroke', color2);
+                rings.ring2.setAttribute('stroke', lerpColor(ringRgb2, curveRgb2, p));
                 rings.ring2.setAttribute('stroke-opacity', strokeOp.toFixed(2));
                 rings.ring2.setAttribute('stroke-width', strokeW.toFixed(1));
             }
@@ -2344,10 +2458,8 @@ async function morphRingsToCurves(curvesData) {
         requestAnimationFrame(tick);
     });
 
-    // Clean up ring elements
-    rings.ring1.remove();
-    if (rings.ring2) rings.ring2.remove();
-    _orbitalRingsState = null;
+    // Don't remove rings here — caller removes after baseline curves are rendered
+    // to prevent a flicker gap between ring disappearance and curve appearance.
 }
 
 function renderWordCloud(effects) {
@@ -2654,7 +2766,8 @@ function dismissWordCloud(mainEffectNames, mainColors) {
         // Resolve after longest animation
         const totalTime = Math.max(flyDuration + 300 + 120, burstDuration);
         setTimeout(() => {
-            group.innerHTML = '';
+            // Remove only word-cloud words — preserve orbital rings (still morphing)
+            group.querySelectorAll('.word-cloud-word').forEach(el => el.remove());
             _wordCloudPositions = [];
             resolve();
         }, totalTime + 50);
@@ -3561,13 +3674,13 @@ function computeEffectCurves(stack) {
         const pharma = sub.pharma || { onset: 30, peak: 60, duration: 240, halfLife: 120, strength: 40, rebound: 0 };
         const count = item.count || 1;
         for (let c = 0; c < count; c++) {
-            doseEvents.push({ key: item.key, category: sub.category, doseMin, pharma });
+            doseEvents.push({ key: item.key, substanceClass: sub.class || 'unknown', doseMin, pharma });
         }
     }
 
     // Group dose events by effect type
     for (const [typeName, typeInfo] of Object.entries(EFFECT_TYPES)) {
-        const relevant = doseEvents.filter(d => typeInfo.categories.includes(d.category));
+        const relevant = doseEvents.filter(d => (typeInfo.classes || []).includes(d.substanceClass));
         if (relevant.length === 0) continue;
 
         const points = [];
@@ -4009,7 +4122,7 @@ async function startSimulation() {
         const capsule = groups[i];
         const substance = resolveSubstance(capsule.key, capsule);
         if (!substance) continue;
-        ensureCategoryGradient(substance.category);
+        ensureCategoryGradient(substance.class || 'unknown');
 
         let layerKey, capsuleIndex;
         if (capsule.globalSlot < CartridgeConfig.capsulesPerLayer) {
@@ -4027,7 +4140,7 @@ async function startSimulation() {
         const outlineRect = capsuleGroup.querySelector('.capsule-outline');
         const targetOpacity = capsule.isToday ? 1 : 0.25;
 
-        fillRect.setAttribute('fill', `url(#grad-${substance.category})`);
+        fillRect.setAttribute('fill', `url(#grad-${sanitizeId(substance.class || 'unknown')})`);
         fillRect.setAttribute('opacity', String(targetOpacity));
 
         if (capsule.isToday) {
@@ -4451,6 +4564,7 @@ function initTooltip() {
     tooltip.innerHTML = `
         <div class="tooltip-name"></div>
         <div class="tooltip-detail"></div>
+        <div class="tooltip-warning"></div>
     `;
     document.body.appendChild(tooltip);
     AppState.tooltip = tooltip;
@@ -4467,9 +4581,22 @@ function initTooltip() {
             tooltip.querySelector('.tooltip-name').textContent = substance.name;
             tooltip.querySelector('.tooltip-name').style.color = substance.color;
 
+            const classLabel = substance.class || '';
+            const doseLabel = substance.standardDose || capsule.dataset.dose || '';
             const dayLabel = capsule.dataset.day ? `Day ${capsule.dataset.day}` : '';
-            tooltip.querySelector('.tooltip-detail').textContent =
-                `${capsule.dataset.dose} · ${capsule.dataset.timing}${dayLabel ? ' · ' + dayLabel : ''}`;
+            const parts = [classLabel, doseLabel, capsule.dataset.timing, dayLabel].filter(Boolean);
+            tooltip.querySelector('.tooltip-detail').textContent = parts.join(' · ');
+
+            // Data confidence warning
+            const warningEl = tooltip.querySelector('.tooltip-warning');
+            const conf = (substance.dataConfidence || '').toLowerCase();
+            if (conf === 'estimated' || conf === 'medium') {
+                warningEl.textContent = `\u26A0\uFE0F ${substance.dataNote || 'Clinical estimation'}`;
+                warningEl.style.display = '';
+            } else {
+                warningEl.textContent = '';
+                warningEl.style.display = 'none';
+            }
 
             tooltip.style.left = `${e.clientX + 14}px`;
             tooltip.style.top = `${e.clientY - 10}px`;
@@ -4620,9 +4747,16 @@ async function handlePromptSubmit(e) {
             morphRingsToCurves(curvesData),
         ]);
 
-        // Rings morphed into position — now render real baseline DOM elements (instant, no animation)
+        // Render real baseline DOM elements BEFORE removing rings — no flicker gap
         renderBaselineCurvesInstant(curvesData);
         renderPhaseLegend(curvesData, 'baseline');
+
+        // Now safe to remove ring elements (baseline curves are painted)
+        if (_orbitalRingsState) {
+            _orbitalRingsState.ring1.remove();
+            if (_orbitalRingsState.ring2) _orbitalRingsState.ring2.remove();
+            _orbitalRingsState = null;
+        }
     } else {
         // No cloud — standard flow
         const effects = mainEffects.slice(0, AppState.maxEffects);
@@ -4685,7 +4819,10 @@ async function handlePromptSubmit(e) {
         interventionData = await PhaseState.interventionPromise;
     }
     if (!interventionData) {
-        interventionData = generateInterventionFallback(curvesData);
+        console.error('[Lx] No intervention data — model call failed or no API key.');
+        PhaseState.isProcessing = false;
+        document.getElementById('prompt-submit').disabled = false;
+        return;
     }
     PhaseState.interventionResult = interventionData;
 
@@ -4710,6 +4847,7 @@ async function handlePromptSubmit(e) {
     PhaseState.maxPhaseReached = 2;
     PhaseState.viewingPhase = 2;
     updateStepButtons();
+    DebugLog.exportToFile();
 
     PhaseState.isProcessing = false;
     document.getElementById('prompt-submit').disabled = false;
@@ -4920,13 +5058,14 @@ document.addEventListener('DOMContentLoaded', () => {
 // 10d. INTERVENTION MODEL (Lx pipeline)
 // ============================================
 
-function buildInterventionSystemPrompt(curvesData) {
+function buildInterventionSystemPrompt(userGoal, curvesData) {
     // Serialize substance database for the LLM
     const active = getActiveSubstances();
     const substanceList = Object.entries(active).map(([key, s]) => ({
         key,
         name: s.name,
-        category: s.category,
+        class: s.class,
+        standardDose: s.standardDose,
         pharma: s.pharma,
     }));
 
@@ -4939,6 +5078,7 @@ function buildInterventionSystemPrompt(curvesData) {
     }));
 
     return interpolatePrompt(PROMPTS.intervention, {
+        userGoal: userGoal,
         substanceList: JSON.stringify(substanceList, null, 1),
         curveSummary: JSON.stringify(curveSummary, null, 1),
     });
@@ -4947,11 +5087,11 @@ function buildInterventionSystemPrompt(curvesData) {
 async function callInterventionModel(prompt, curvesData) {
     const provider = AppState.selectedLLM;
     const key = AppState.apiKeys[provider];
-    if (!key) return generateInterventionFallback(curvesData);
+    if (!key) throw new Error(`No API key configured for ${provider}. Add one in Settings.`);
 
     const model = MAIN_MODELS[provider];
-    const systemPrompt = buildInterventionSystemPrompt(curvesData);
-    const userPrompt = `The user's goal: "${prompt}". Analyze the baseline vs desired curves and prescribe the optimal supplement intervention protocol.`;
+    const systemPrompt = buildInterventionSystemPrompt(prompt, curvesData);
+    const userPrompt = 'Analyze the baseline vs desired curves and prescribe the optimal supplement intervention protocol. Respond with JSON only.';
 
     const debugEntry = DebugLog.addEntry({
         stage: 'Intervention Model', stageClass: 'intervention-model',
@@ -4967,16 +5107,16 @@ async function callInterventionModel(prompt, curvesData) {
         let result;
         switch (provider) {
             case 'anthropic':
-                result = await callAnthropicGeneric(userPrompt, key, model, systemPrompt, 1024);
+                result = await callAnthropicGeneric(userPrompt, key, model, systemPrompt, 4096);
                 break;
             case 'openai':
-                result = await callOpenAIGeneric(userPrompt, key, model, API_ENDPOINTS.openai, systemPrompt, 1024);
+                result = await callOpenAIGeneric(userPrompt, key, model, API_ENDPOINTS.openai, systemPrompt, 4096);
                 break;
             case 'grok':
-                result = await callOpenAIGeneric(userPrompt, key, model, API_ENDPOINTS.grok, systemPrompt, 1024);
+                result = await callOpenAIGeneric(userPrompt, key, model, API_ENDPOINTS.grok, systemPrompt, 4096);
                 break;
             case 'gemini':
-                result = await callGeminiGeneric(userPrompt, key, model, systemPrompt, 1024);
+                result = await callGeminiGeneric(userPrompt, key, model, systemPrompt, 4096);
                 break;
         }
 
@@ -4985,88 +5125,30 @@ async function callInterventionModel(prompt, curvesData) {
         delete result._requestBody;
         delete result._rawResponse;
 
-        // Parse JSON from response text
-        let text = typeof result === 'string' ? result : (result.text || result.content || JSON.stringify(result));
-        // Strip markdown fences
-        text = text.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '').trim();
-        const parsed = JSON.parse(text);
-
+        // Generic callers already parse JSON via extractAndParseJSON — use result directly
         DebugLog.updateEntry(debugEntry, {
             loading: false,
             requestBody,
             rawResponse,
-            response: parsed,
+            response: result,
             duration: Math.round(performance.now() - startTime),
         });
 
-        PhaseState.interventionResult = parsed;
-        return parsed;
+        PhaseState.interventionResult = result;
+        return result;
     } catch (err) {
         DebugLog.updateEntry(debugEntry, {
             loading: false,
             error: err.message || String(err),
             duration: Math.round(performance.now() - startTime),
         });
-        // Fall back to algorithmic intervention
-        const fallback = generateInterventionFallback(curvesData);
-        PhaseState.interventionResult = fallback;
-        return fallback;
+        throw err;
     }
-}
-
-function generateInterventionFallback(curvesData) {
-    // Simple algorithmic fallback when no API key
-    const interventions = [];
-    const active = getActiveSubstances();
-
-    for (const curve of curvesData) {
-        const blSmoothed = smoothPhaseValues(curve.baseline, PHASE_SMOOTH_PASSES);
-        const dsSmoothed = smoothPhaseValues(curve.desired, PHASE_SMOOTH_PASSES);
-        const polarity = curve.polarity || 'higher_is_better';
-
-        // Find the hour of max gap
-        let maxGap = 0, gapHour = 12;
-        const len = Math.min(blSmoothed.length, dsSmoothed.length);
-        for (let j = 0; j < len; j++) {
-            const gap = dsSmoothed[j].value - blSmoothed[j].value;
-            if (Math.abs(gap) > Math.abs(maxGap)) {
-                maxGap = gap;
-                gapHour = dsSmoothed[j].hour;
-            }
-        }
-
-        // Pick substances based on gap direction and polarity
-        const needsBoost = (polarity === 'higher_is_better' && maxGap > 0) ||
-                           (polarity === 'higher_is_worse' && maxGap < 0);
-
-        if (needsBoost) {
-            // For positive effects needing boost: stimulants/nootropics
-            // For negative effects needing reduction: adaptogens/sleep
-            const cats = polarity === 'higher_is_better'
-                ? ['stimulant', 'nootropic', 'adaptogen']
-                : ['adaptogen', 'sleep'];
-
-            const candidates = Object.entries(active)
-                .filter(([, s]) => cats.includes(s.category))
-                .sort((a, b) => b[1].pharma.strength - a[1].pharma.strength)
-                .slice(0, 2);
-
-            const doseTimeMin = Math.round(gapHour * 60) - 60; // dose 1hr before peak need
-            for (const [key, sub] of candidates) {
-                interventions.push({
-                    key,
-                    dose: guessDose(sub),
-                    timeMinutes: Math.max(360, Math.min(1380, doseTimeMin)),
-                    targetEffect: curve.effect,
-                });
-            }
-        }
-    }
-
-    return { interventions, rationale: 'Algorithmic fallback — no API key configured.' };
 }
 
 function guessDose(substance) {
+    // Prefer the standardDose from the new database
+    if (substance.standardDose) return substance.standardDose;
     const doses = {
         caffeine: '200mg', theanine: '400mg', rhodiola: '500mg', ashwagandha: '600mg',
         tyrosine: '1000mg', citicoline: '500mg', alphaGPC: '600mg', lionsMane: '1000mg',
@@ -5086,13 +5168,30 @@ function validateInterventions(interventions, curvesData) {
     const active = getActiveSubstances();
     return interventions.filter(iv => {
         if (!iv.key || iv.timeMinutes == null) return false;
-        const sub = active[iv.key];
+        // Resolve substance from active set or full DB
+        const sub = active[iv.key] || SUBSTANCE_DB[iv.key];
         if (!sub) return false;
         iv.substance = sub;
         iv.timeMinutes = Math.max(PHASE_CHART.startMin, Math.min(PHASE_CHART.endMin, iv.timeMinutes));
 
-        // Resolve targetEffect string → targetCurveIdx
-        if (curvesData && iv.targetEffect) {
+        // Resolve primary target curve for connector line drawing
+        // Multi-vector: find the impact key with the highest absolute vector
+        if (curvesData && iv.impacts && typeof iv.impacts === 'object') {
+            let bestKey = null, bestAbs = 0;
+            for (const [effectKey, vec] of Object.entries(iv.impacts)) {
+                if (Math.abs(vec) > bestAbs) {
+                    bestAbs = Math.abs(vec);
+                    bestKey = effectKey;
+                }
+            }
+            if (bestKey) {
+                const idx = curvesData.findIndex(c =>
+                    c.effect && c.effect.toLowerCase() === bestKey.toLowerCase());
+                iv.targetCurveIdx = idx >= 0 ? idx : null;
+            }
+        }
+        // Legacy fallback: single targetEffect string
+        if (iv.targetCurveIdx == null && curvesData && iv.targetEffect) {
             const idx = curvesData.findIndex(c =>
                 c.effect && c.effect.toLowerCase() === iv.targetEffect.toLowerCase());
             iv.targetCurveIdx = idx >= 0 ? idx : null;
@@ -5106,32 +5205,31 @@ function validateInterventions(interventions, curvesData) {
 }
 
 function mapSubstanceToEffectAxis(substanceKey, curvesData) {
-    const active = getActiveSubstances();
-    const sub = active[substanceKey];
+    const sub = resolveSubstance(substanceKey, {});
     if (!sub) return [0];
 
-    const cat = sub.category;
+    const cls = sub.class || 'unknown';
 
-    // Map categories to curve indices based on polarity and effect type
+    // Map substance class to curve indices based on polarity and effect type
     const mapping = [];
     for (let i = 0; i < curvesData.length; i++) {
         const curve = curvesData[i];
         const polarity = curve.polarity || 'higher_is_better';
 
         // Stimulants & nootropics → positive effects (higher_is_better)
-        if (['stimulant', 'nootropic'].includes(cat) && polarity === 'higher_is_better') {
+        if (['Stimulant', 'Nootropic'].includes(cls) && polarity === 'higher_is_better') {
             mapping.push(i);
         }
         // Adaptogens → both positive effects and negative effect reduction
-        else if (cat === 'adaptogen') {
+        else if (cls === 'Adaptogen') {
             mapping.push(i);
         }
-        // Sleep → sedation or negative effect reduction
-        else if (cat === 'sleep' && (polarity === 'higher_is_worse' || curve.effect?.toLowerCase().includes('sleep'))) {
+        // Sleep/Depressants → sedation or negative effect reduction
+        else if (cls === 'Depressant/Sleep' && (polarity === 'higher_is_worse' || curve.effect?.toLowerCase().includes('sleep'))) {
             mapping.push(i);
         }
-        // Minerals/vitamins → general support, affects all
-        else if (['mineral', 'vitamin'].includes(cat)) {
+        // Minerals/Vitamins → general support, affects all
+        else if (['Mineral/Electrolyte', 'Vitamin/Amino'].includes(cls)) {
             mapping.push(i);
         }
     }
@@ -5156,29 +5254,52 @@ function computeLxOverlay(interventions, curvesData) {
         return { baseline: blSmoothed, desired: dsSmoothed, polarity, maxDesiredGap, points: [] };
     });
 
-    // Compute raw pharmacokinetic contribution per curve
+    // Build a map of curve effect names → curve indices for multi-vector lookup
+    const effectNameToIdx = {};
+    curvesData.forEach((c, i) => {
+        if (c.effect) effectNameToIdx[c.effect.toLowerCase()] = i;
+    });
+
+    // Compute raw pharmacokinetic contribution per curve using multi-vector impacts
     for (let ci = 0; ci < curvesData.length; ci++) {
         const lx = lxCurves[ci];
+        const curveName = (curvesData[ci].effect || '').toLowerCase();
         const points = [];
         let maxRawEffect = 0;
 
-        // Sample every 15 minutes
         for (let j = 0; j < lx.baseline.length; j++) {
             const hourVal = lx.baseline[j].hour;
             const sampleMin = hourVal * 60;
             let rawEffect = 0;
 
             for (const iv of interventions) {
-                const targetIdx = iv.targetCurveIdx != null
-                    ? iv.targetCurveIdx
-                    : mapSubstanceToEffectAxis(iv.key, curvesData)[0] || 0;
-                if (targetIdx !== ci) continue;
-
-                const minutesSinceDose = sampleMin - iv.timeMinutes;
                 const sub = iv.substance;
                 if (!sub || !sub.pharma) continue;
 
-                rawEffect += substanceEffectAt(minutesSinceDose, sub.pharma);
+                // Multi-vector: check impacts dictionary
+                if (iv.impacts && typeof iv.impacts === 'object') {
+                    let impactValue = 0;
+                    for (const [effectKey, vec] of Object.entries(iv.impacts)) {
+                        if (effectKey.toLowerCase() === curveName) {
+                            impactValue = vec;
+                            break;
+                        }
+                    }
+                    if (impactValue === 0) continue;
+
+                    const baseWave = substanceEffectAt(sampleMin - iv.timeMinutes, sub.pharma);
+                    const scaledWave = baseWave * (iv.doseMultiplier || 1.0);
+                    rawEffect += scaledWave * impactValue;
+                } else {
+                    // Legacy fallback: single targetEffect
+                    const targetIdx = iv.targetCurveIdx != null
+                        ? iv.targetCurveIdx
+                        : mapSubstanceToEffectAxis(iv.key, curvesData)[0] || 0;
+                    if (targetIdx !== ci) continue;
+
+                    const baseWave = substanceEffectAt(sampleMin - iv.timeMinutes, sub.pharma);
+                    rawEffect += baseWave * (iv.doseMultiplier || 1.0);
+                }
             }
 
             maxRawEffect = Math.max(maxRawEffect, Math.abs(rawEffect));
@@ -5191,16 +5312,9 @@ function computeLxOverlay(interventions, curvesData) {
         lx.points = points.map((p, j) => {
             const baseVal = lx.baseline[j].value;
             const scaledEffect = p.rawEffect * scaleFactor;
-
-            let value;
-            if (lx.polarity === 'higher_is_worse') {
-                // Reduce negative effects
-                value = baseVal - scaledEffect;
-            } else {
-                // Boost positive effects
-                value = baseVal + scaledEffect;
-            }
-
+            // Impact vectors from the LLM already encode direction (positive=up, negative=down),
+            // so we always ADD — no polarity flip needed.
+            const value = baseVal + scaledEffect;
             return { hour: p.hour, value: Math.max(0, Math.min(100, value)) };
         });
     }
@@ -5234,6 +5348,40 @@ function computeIncrementalLxOverlay(interventions, curvesData) {
         return { blSmoothed, dsSmoothed, polarity, maxDesiredGap };
     });
 
+    // Build effect name → curve index map for multi-vector lookup
+    const effectNameToIdx = {};
+    curvesData.forEach((c, i) => {
+        if (c.effect) effectNameToIdx[c.effect.toLowerCase()] = i;
+    });
+
+    // Helper: compute raw multi-vector effect for a single intervention on a given curve
+    function ivRawEffect(iv, curveIdx, sampleMin) {
+        const sub = iv.substance;
+        if (!sub || !sub.pharma) return 0;
+        const curveName = (curvesData[curveIdx].effect || '').toLowerCase();
+
+        if (iv.impacts && typeof iv.impacts === 'object') {
+            let impactValue = 0;
+            for (const [effectKey, vec] of Object.entries(iv.impacts)) {
+                if (effectKey.toLowerCase() === curveName) {
+                    impactValue = vec;
+                    break;
+                }
+            }
+            if (impactValue === 0) return 0;
+            const baseWave = substanceEffectAt(sampleMin - iv.timeMinutes, sub.pharma);
+            return baseWave * (iv.doseMultiplier || 1.0) * impactValue;
+        } else {
+            // Legacy fallback: single targetEffect
+            const targetIdx = iv.targetCurveIdx != null
+                ? iv.targetCurveIdx
+                : mapSubstanceToEffectAxis(iv.key, curvesData)[0] || 0;
+            if (targetIdx !== curveIdx) return 0;
+            const baseWave = substanceEffectAt(sampleMin - iv.timeMinutes, sub.pharma);
+            return baseWave * (iv.doseMultiplier || 1.0);
+        }
+    }
+
     // 4. Compute GLOBAL scale factor using ALL interventions
     const globalScaleFactors = curveInfo.map((ci, curveIdx) => {
         let maxRawEffect = 0;
@@ -5241,13 +5389,7 @@ function computeIncrementalLxOverlay(interventions, curvesData) {
             const sampleMin = ci.blSmoothed[j].hour * 60;
             let rawEffect = 0;
             for (const iv of sorted) {
-                const targetIdx = iv.targetCurveIdx != null
-                    ? iv.targetCurveIdx
-                    : mapSubstanceToEffectAxis(iv.key, curvesData)[0] || 0;
-                if (targetIdx !== curveIdx) continue;
-                const sub = iv.substance;
-                if (!sub || !sub.pharma) continue;
-                rawEffect += substanceEffectAt(sampleMin - iv.timeMinutes, sub.pharma);
+                rawEffect += ivRawEffect(iv, curveIdx, sampleMin);
             }
             maxRawEffect = Math.max(maxRawEffect, Math.abs(rawEffect));
         }
@@ -5264,21 +5406,11 @@ function computeIncrementalLxOverlay(interventions, curvesData) {
                 const sampleMin = bp.hour * 60;
                 let rawEffect = 0;
                 for (const iv of activeInterventions) {
-                    const targetIdx = iv.targetCurveIdx != null
-                        ? iv.targetCurveIdx
-                        : mapSubstanceToEffectAxis(iv.key, curvesData)[0] || 0;
-                    if (targetIdx !== curveIdx) continue;
-                    const sub = iv.substance;
-                    if (!sub || !sub.pharma) continue;
-                    rawEffect += substanceEffectAt(sampleMin - iv.timeMinutes, sub.pharma);
+                    rawEffect += ivRawEffect(iv, curveIdx, sampleMin);
                 }
                 const scaledEffect = rawEffect * globalScaleFactors[curveIdx];
-                let value;
-                if (ci.polarity === 'higher_is_worse') {
-                    value = bp.value - scaledEffect;
-                } else {
-                    value = bp.value + scaledEffect;
-                }
+                // Impact vectors already encode direction — always ADD.
+                const value = bp.value + scaledEffect;
                 return { hour: bp.hour, value: Math.max(0, Math.min(100, value)) };
             });
             return {
@@ -5960,6 +6092,15 @@ function renderSubstanceTimeline(interventions, lxCurves, curvesData) {
 
         const pillG = svgEl('g', { class: 'timeline-pill-group', opacity: '0' });
 
+        // SVG tooltip (hover title)
+        if (sub) {
+            const ttConf = (sub.dataConfidence || '').toLowerCase();
+            const ttWarn = (ttConf === 'estimated' || ttConf === 'medium') ? `\n\u26A0\uFE0F ${sub.dataNote || 'Clinical estimation'}` : '';
+            const titleEl = svgEl('title');
+            titleEl.textContent = `${sub.name} — ${sub.class || ''}\nDose: ${iv.dose || sub.standardDose || ''}${ttWarn}`;
+            pillG.appendChild(titleEl);
+        }
+
         // Connector line from bar up to the targeted curve
         const targetIdx = iv.targetCurveIdx != null ? iv.targetCurveIdx : 0;
         const hasLxData = lxCurves && lxCurves[targetIdx];
@@ -6019,13 +6160,15 @@ function renderSubstanceTimeline(interventions, lxCurves, curvesData) {
         // Clipped label inside bar
         const contentG = svgEl('g', { 'clip-path': `url(#${clipId})` });
         const name = sub ? sub.name : iv.key;
-        const dose = iv.dose || '';
+        const dose = iv.dose || (sub ? sub.standardDose : '') || '';
+        const conf = sub ? (sub.dataConfidence || '') : '';
+        const warnIcon = (conf.toLowerCase() === 'estimated' || conf.toLowerCase() === 'medium') ? ' \u26A0\uFE0F' : '';
         const label = svgEl('text', {
             x: (x1 + 5).toFixed(1),
             y: (y + h / 2 + 3).toFixed(1),
             class: 'timeline-bar-label',
         });
-        label.textContent = dose ? `${name} ${dose}` : name;
+        label.textContent = dose ? `${name} ${dose}${warnIcon}` : `${name}${warnIcon}`;
         contentG.appendChild(label);
         pillG.appendChild(contentG);
 
@@ -6119,36 +6262,62 @@ async function animateSequentialLxReveal(snapshots, interventions, curvesData) {
         });
     });
 
-    // Grab references to the existing baseline stroke and fill paths
-    const baselineStrokes = [];
-    const baselineFills = [];
+    // Create NEW Lx stroke + fill paths in the lxGroup, starting at baseline position.
+    // This avoids repurposing the baseline strokes (which would cause a visible jump
+    // when the desired strokes dim and the lower baseline strokes become prominent).
+    const lxStrokes = [];
+    const lxFills = [];
+    const baselinePts = curvesData.map(c => smoothPhaseValues(c.baseline, PHASE_SMOOTH_PASSES));
     for (let ci = 0; ci < curvesData.length; ci++) {
-        const strokes = baseGroup.querySelectorAll('.phase-baseline-path');
-        const fills = baseGroup.querySelectorAll('path:not(.phase-baseline-path):not(.peak-descriptor)');
-        baselineStrokes.push(strokes[ci] || null);
-        baselineFills.push(fills[ci] || null);
+        const curve = curvesData[ci];
+        const initD = phasePointsToPath(baselinePts[ci], true);
+        const initFillD = phasePointsToFillPath(baselinePts[ci], true);
+        const lxFill = svgEl('path', {
+            d: initFillD, fill: curve.color, 'fill-opacity': '0.06',
+            class: 'phase-lx-fill',
+        });
+        lxGroup.appendChild(lxFill);
+        lxFills.push(lxFill);
+        const lxStroke = svgEl('path', {
+            d: initD, fill: 'none', stroke: curve.color,
+            'stroke-width': '2.2', 'stroke-opacity': '0.9',
+            'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+            class: 'phase-lx-path',
+        });
+        lxGroup.appendChild(lxStroke);
+        lxStrokes.push(lxStroke);
     }
 
-    // Make baseline strokes solid for the layering phase (remove dashing, boost opacity)
-    baselineStrokes.forEach(s => {
+    // Dim baseline strokes to ghost reference (keep dashed)
+    const baselineStrokesAll = baseGroup.querySelectorAll('.phase-baseline-path');
+    baselineStrokesAll.forEach(s => {
         if (!s) return;
         s.style.transition = 'stroke-opacity 400ms ease';
-        s.setAttribute('stroke-dasharray', 'none');
-        s.setAttribute('stroke-opacity', '0.85');
-        s.setAttribute('stroke-width', '2.2');
+        s.setAttribute('stroke-opacity', '0.25');
     });
 
-    // Track current smoothed points per curve (start from baseline)
-    let currentPts = curvesData.map(c => smoothPhaseValues(c.baseline, PHASE_SMOOTH_PASSES));
+    // Fade out desired fills so only the Lx fills are visible as the area reference
+    desiredGroup.querySelectorAll('.phase-desired-fill').forEach(f => {
+        f.animate([{ fillOpacity: parseFloat(f.getAttribute('fill-opacity') || '0.08') }, { fillOpacity: 0 }], {
+            duration: 600, fill: 'forwards',
+        });
+    });
+
+    // Also fade out baseline fills (the Lx fills replace them)
+    baseGroup.querySelectorAll('path:not(.phase-baseline-path):not(.peak-descriptor)').forEach(f => {
+        f.animate([{ fillOpacity: parseFloat(f.getAttribute('fill-opacity') || '0.04') }, { fillOpacity: 0 }], {
+            duration: 600, fill: 'forwards',
+        });
+    });
+
+    // Track current smoothed points per curve (Lx strokes start at baseline)
+    let currentPts = baselinePts.map(pts => pts.map(p => ({ ...p })));
 
     // Fade baseline peak descriptors
     baseGroup.querySelectorAll('.peak-descriptor').forEach(el => {
         el.style.transition = 'opacity 300ms ease';
         el.style.opacity = '0';
     });
-
-    // The baseline FILL paths stay at their original position throughout the scans,
-    // serving as the ghost AUC reference. Only the STROKES move.
 
     const finalLxCurves = snapshots[snapshots.length - 1].lxCurves;
     const plotBot = PHASE_CHART.padT + PHASE_CHART.plotH;
@@ -6170,6 +6339,15 @@ async function animateSequentialLxReveal(snapshots, interventions, curvesData) {
         const rx = TIMELINE_ZONE.pillRx;
 
         const pillG = svgEl('g', { class: 'timeline-pill-group', opacity: '0' });
+
+        // SVG tooltip (hover title)
+        if (sub) {
+            const ttConf = (sub.dataConfidence || '').toLowerCase();
+            const ttWarn = (ttConf === 'estimated' || ttConf === 'medium') ? `\n\u26A0\uFE0F ${sub.dataNote || 'Clinical estimation'}` : '';
+            const titleEl = svgEl('title');
+            titleEl.textContent = `${sub.name} — ${sub.class || ''}\nDose: ${iv.dose || sub.standardDose || ''}${ttWarn}`;
+            pillG.appendChild(titleEl);
+        }
 
         const targetIdx = iv.targetCurveIdx != null ? iv.targetCurveIdx : 0;
         const hasLxData = finalLxCurves && finalLxCurves[targetIdx];
@@ -6204,7 +6382,9 @@ async function animateSequentialLxReveal(snapshots, interventions, curvesData) {
             stroke: color, 'stroke-opacity': '0.35', 'stroke-width': '0.75',
         }));
 
-        const labelText = `${sub?.name || iv.key}  ${iv.dose || ''}`;
+        const conf = sub ? (sub.dataConfidence || '') : '';
+        const warnIcon = (conf.toLowerCase() === 'estimated' || conf.toLowerCase() === 'medium') ? ' \u26A0\uFE0F' : '';
+        const labelText = `${sub?.name || iv.key}  ${iv.dose || (sub?.standardDose || '')}${warnIcon}`;
         pillG.appendChild(svgEl('text', {
             x: (x1 + 6).toFixed(1),
             y: (y + h / 2 + 3.5).toFixed(1),
@@ -6295,13 +6475,14 @@ async function animateSequentialLxReveal(snapshots, interventions, curvesData) {
                 phLine.setAttribute('x', playheadX.toFixed(1));
                 phGlow.setAttribute('x', (playheadX - 8).toFixed(1));
 
-                // Morph baseline STROKES only (fills stay as original AUC ghost)
+                // Morph Lx STROKES + FILLS (baseline stays as ghost reference)
                 for (let ci = 0; ci < curvesData.length; ci++) {
                     const morphed = buildProgressiveMorphPoints(
                         sourcePts[ci], targetPts[ci], playheadHour, BLEND_WIDTH
                     );
                     const strokeD = phasePointsToPath(morphed, true);
-                    if (baselineStrokes[ci]) baselineStrokes[ci].setAttribute('d', strokeD);
+                    if (lxStrokes[ci]) lxStrokes[ci].setAttribute('d', strokeD);
+                    if (lxFills[ci]) lxFills[ci].setAttribute('d', phasePointsToFillPath(morphed, true));
                 }
 
                 if (rawT < 1) {
@@ -6309,7 +6490,8 @@ async function animateSequentialLxReveal(snapshots, interventions, curvesData) {
                 } else {
                     for (let ci = 0; ci < curvesData.length; ci++) {
                         const strokeD = phasePointsToPath(targetPts[ci], true);
-                        if (baselineStrokes[ci]) baselineStrokes[ci].setAttribute('d', strokeD);
+                        if (lxStrokes[ci]) lxStrokes[ci].setAttribute('d', strokeD);
+                        if (lxFills[ci]) lxFills[ci].setAttribute('d', phasePointsToFillPath(targetPts[ci], true));
                     }
                     resolveSweep();
                 }
@@ -6393,7 +6575,9 @@ async function handleLxPhase(curvesData) {
                 interventionData = await PhaseState.interventionPromise;
             }
             if (!interventionData) {
-                interventionData = generateInterventionFallback(curvesData);
+                console.error('[Lx] No intervention data — model call failed or no API key.');
+                resolve();
+                return;
             }
 
             PhaseState.interventionResult = interventionData;
@@ -6416,6 +6600,7 @@ async function handleLxPhase(curvesData) {
             PhaseState.maxPhaseReached = 2;
             PhaseState.viewingPhase = 2;
             updateStepButtons();
+            DebugLog.exportToFile();
             resolve();
         }, { once: true });
     });
