@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cortex Loop</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="/styles.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -84,9 +84,7 @@
                     </svg>
                 </button>
             </div>
-            <div id="debug-entries" class="debug-entries">
-                <p class="debug-empty">Submit a prompt to see the LLM pipeline.</p>
-            </div>
+            <div id="debug-entries" class="debug-entries"></div>
         </div>
 
         <!-- Settings Popover -->
@@ -117,7 +115,7 @@
         <!-- TOP: Prompt (starts vertically centered, slides up on submit) -->
         <header id="prompt-section" class="phase-centered">
             <div class="prompt-container">
-                <h1 class="logo-text">Cortex Loop (2)</h1>
+                <h1 class="logo-text">Cortex Loop (3)</h1>
                 <form id="prompt-form">
                     <input type="text" id="prompt-input"
                            placeholder="Describe your desired outcome..."
@@ -144,19 +142,29 @@
                     </label>
                 </div>
 
-                <p id="prompt-hint" class="hint-text">e.g. "4 hours of deep focus, no sleep impact"</p>
+                <p id="prompt-hint" class="hint-text"><a id="hint-example" href="#">e.g. "4 hours of deep focus, no sleep impact"</a></p>
             </div>
         </header>
 
         <!-- MAIN: Phase Chart (primary visual after prompt submit) -->
         <main id="main-content">
             <div id="phase-chart-container" class="phase-chart-container">
-                <svg id="phase-chart-svg" viewBox="0 0 960 500" xmlns="http://www.w3.org/2000/svg">
+                <svg id="phase-chart-svg" viewBox="0 0 1120 500" xmlns="http://www.w3.org/2000/svg">
                     <defs>
                         <linearGradient id="scan-line-grad" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stop-color="rgba(160,160,255,0)"/>
                             <stop offset="50%" stop-color="rgba(160,160,255,0.6)"/>
                             <stop offset="100%" stop-color="rgba(160,160,255,0)"/>
+                        </linearGradient>
+                        <linearGradient id="tl-scan-line-grad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="rgba(245,200,80,0)"/>
+                            <stop offset="50%" stop-color="rgba(245,200,80,0.6)"/>
+                            <stop offset="100%" stop-color="rgba(245,200,80,0)"/>
+                        </linearGradient>
+                        <linearGradient id="bio-scan-line-grad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="rgba(255,77,77,0)"/>
+                            <stop offset="50%" stop-color="rgba(255,77,77,0.7)"/>
+                            <stop offset="100%" stop-color="rgba(255,77,77,0)"/>
                         </linearGradient>
                         <marker id="arrowhead" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
                             <path class="arrowhead-path" d="M1 1 L9 4 L1 7" fill="none" stroke="rgba(255,255,255,0.7)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -170,15 +178,37 @@
                     <g id="phase-word-cloud"></g>
                     <g id="phase-baseline-curves"></g>
                     <g id="phase-desired-curves"></g>
+                    <g id="phase-lx-bands"></g>
                     <g id="phase-lx-curves"></g>
                     <g id="phase-lx-markers"></g>
                     <g id="phase-substance-timeline"></g>
                     <g id="phase-mission-arrows"></g>
+                    <g id="phase-yaxis-indicators"></g>
                     <g id="phase-legend"></g>
                     <g id="phase-tooltip-overlay"></g>
+                    <g id="phase-biometric-strips"></g>
                 </svg>
                 <button id="phase-optimize-btn" class="phase-optimize-btn hidden">Optimize</button>
                 <button id="phase-lx-btn" class="phase-lx-btn hidden">Lx</button>
+
+                <!-- Biometric loop trigger (red + button, shown after Lx completes) -->
+                <div id="biometric-trigger-wrap" class="biometric-trigger-wrap hidden">
+                    <span class="bio-trigger-label">Biometric Loop</span>
+                    <button id="bio-trigger-btn" class="bio-trigger-btn" aria-label="Start biometric loop">+</button>
+                </div>
+
+                <!-- Biometric strip UI (device selection + profile input) -->
+                <div id="biometric-strip-ui" class="biometric-strip-ui hidden">
+                    <div id="bio-device-row" class="bio-device-row">
+                        <div id="bio-device-scroll" class="bio-device-scroll"></div>
+                        <button id="bio-go-btn" class="bio-go-btn" disabled>Select devices &amp; continue</button>
+                    </div>
+                    <div id="bio-profile-row" class="bio-profile-row hidden">
+                        <label class="bio-profile-label" for="bio-profile-input">Biometric context</label>
+                        <input type="text" id="bio-profile-input" placeholder="e.g. resting HR 62, HRV 45ms, sleep score 78" autocomplete="off" spellcheck="false" />
+                        <button id="bio-submit-btn" class="bio-submit-btn">Run biometric loop</button>
+                    </div>
+                </div>
             </div>
 
             <!-- Cartridge + old chart (hidden, for later phase) -->
@@ -229,8 +259,7 @@
     </div>
 
     <script src="config.js"></script>
-    <script src="Substance_DB.js"></script>
-    <script src="prompts.js"></script>
-    <script src="app.js"></script>
+    <script src="biometricDevices.js"></script>
+    <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

@@ -11,7 +11,7 @@
 //   {{curveSummary}}     — JSON of baseline/desired curves
 // ============================================
 
-const PROMPTS = {
+export const PROMPTS: any = {
 
     // ── Stage 1: Fast Model — Effect Identification ────────────────────
     fastModel: `You are an expert pharmacologist. Given a user's desired cognitive or physical outcome, identify 5-8 relevant pharmacodynamic effects that could be modulated to achieve the goal, ranked by relevance.
@@ -42,6 +42,7 @@ Rules:
       "effect": "Effect Name",
       "color": "#hex",
       "polarity": "higher_is_better",
+      "directive": "improve",
       "levels": {"0": "No activity", "25": "Mild", "50": "Moderate", "75": "Strong", "100": "Peak"},
       "baseline": [{"hour": 6, "value": 20}, {"hour": 7, "value": 25}, ...],
       "desired": [{"hour": 6, "value": 20}, {"hour": 7, "value": 30}, ...]
@@ -57,7 +58,8 @@ Rules:
 9. Be physiologically realistic
 10. Effect names MUST be pharmacodynamic effects (not molecules or substances). Use short (1-3 words) physiological descriptors — e.g. "Sleep Pressure", "Focused Attention", "Stress Resilience", "Circadian Rhythm". NEVER use substance names like "Melatonin", "Cortisol", "GABA" as effect labels. Never combine concepts with "/" or "and"
 11. Level descriptors must be experiential and specific to the effect — e.g. for Focused Attention: "0": "No focus", "25": "Easily distracted", "50": "Steady awareness", "75": "Deep concentration", "100": "Flow state"
-12. polarity MUST be set correctly: use "higher_is_worse" for negative effects the user wants to REDUCE (e.g. Pain, Anxiety, Emotional Reactivity, Nausea, Inflammation) and "higher_is_better" for positive effects the user wants to INCREASE (e.g. Focus, Resilience, Energy, Clarity, Calm)`,
+12. polarity MUST be set correctly: use "higher_is_worse" for negative effects the user wants to REDUCE (e.g. Pain, Anxiety, Emotional Reactivity, Nausea, Inflammation) and "higher_is_better" for positive effects the user wants to INCREASE (e.g. Focus, Resilience, Energy, Clarity, Calm)
+13. directive: "improve" when the user wants to actively change this effect (push it higher or lower than baseline). "keep" when the user wants this effect to remain at its natural baseline level — e.g. "no sleep impact", "maintain energy", "don't affect appetite". CRITICAL: when directive is "keep", the desired curve MUST closely mirror the baseline curve (values within ±3 of baseline at every hour). The goal for "keep" effects is preservation, not change`,
 
     // ── Stage 4: Intervention Model — Substance Selection ──────────────
     intervention: `You are a pharmacodynamic intervention expert acting as a "Chess Player". Select the optimal protocol to move a person's baseline physiological state toward a desired target state across a 24-hour day.

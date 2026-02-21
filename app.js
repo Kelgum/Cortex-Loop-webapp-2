@@ -125,7 +125,7 @@ const API_ENDPOINTS = {
 
 const PHASE_CHART = {
     viewW: 960, viewH: 500,
-    padL: 70, padR: 70, padT: 40, padB: 50,
+    padL: 70, padR: 70, padT: 62, padB: 50,
     startHour: 6, endHour: 30,   // 6:00am to 6:00am next day (30 = 24+6)
     maxEffect: 100,
     sampleInterval: 15,
@@ -171,7 +171,26 @@ const AppState = {
         grok:      localStorage.getItem('cortex_key_grok')      || CONFIG_KEYS.grok || '',
         gemini:    localStorage.getItem('cortex_key_gemini')     || CONFIG_KEYS.gemini || '',
     },
+    // Per-stage model tier: 'fast' or 'main'
+    stageModels: {
+        fast:         localStorage.getItem('cortex_stage_fast')         || 'fast',
+        curves:       localStorage.getItem('cortex_stage_curves')       || 'main',
+        intervention: localStorage.getItem('cortex_stage_intervention') || 'main',
+        biometric:    localStorage.getItem('cortex_stage_biometric')    || 'fast',
+        revision:     localStorage.getItem('cortex_stage_revision')     || 'fast',
+    },
 };
+
+/**
+ * Resolve model name for a given pipeline stage.
+ * Returns { model, provider, key } using the stage tier + selected provider.
+ */
+function getStageModel(stage) {
+    const provider = AppState.selectedLLM;
+    const tier = AppState.stageModels[stage] || 'main';
+    const model = tier === 'fast' ? FAST_MODELS[provider].model : MAIN_MODELS[provider];
+    return { model, provider, key: AppState.apiKeys[provider] };
+}
 
 // Phase chart flow state
 const PhaseState = {
@@ -188,7 +207,27 @@ const PhaseState = {
     viewingPhase: -1,     // currently displayed phase index
 };
 
-const PHASE_STEPS = ['baseline-shown', 'curves-drawn', 'lx-rendered'];
+const PHASE_STEPS = ['baseline-shown', 'curves-drawn', 'lx-rendered', 'biometric-rendered', 'revision-rendered'];
+
+// Biometric Loop state
+const BiometricState = {
+    selectedDevices: [],
+    profileText: '',
+    biometricResult: null,
+    channels: [],
+    phase: 'idle',  // idle | selecting | profiling | loading | rendered
+};
+
+// Revision state (Phase 4 — chess player re-evaluates after biometric data)
+const RevisionState = {
+    revisionPromise: null,
+    revisionResult: null,
+    oldInterventions: null,
+    newInterventions: null,
+    diff: null,
+    newLxCurves: null,
+    phase: 'idle',  // idle | pending | ready | animating | rendered
+};
 
 // Effect divider state (split-screen for 2-effect mode)
 const DividerState = {
@@ -218,10 +257,16 @@ function chartTheme() {
         grid:           'rgba(100, 130, 170, 0.22)',
         axisBoundary:   'rgba(80, 110, 150, 0.30)',
         axisLine:       'rgba(80, 110, 150, 0.55)',
-        tickAnchor:     'rgba(80, 110, 150, 0.45)',
-        tickNormal:     'rgba(80, 110, 150, 0.28)',
-        labelAnchor:    'rgba(40, 60, 90, 0.75)',
-        labelNormal:    'rgba(40, 60, 90, 0.50)',
+        tickAnchor:     'rgba(50, 80, 120, 0.65)',
+        tickNormal:     'rgba(80, 110, 150, 0.40)',
+        labelAnchor:    'rgba(20, 40, 70, 0.92)',
+        labelNormal:    'rgba(30, 50, 80, 0.70)',
+        rulerLine:      'rgba(80, 110, 150, 0.30)',
+        periodMorning:  'rgba(250, 200, 60, 0.10)',
+        periodAfternoon:'rgba(240, 160, 50, 0.08)',
+        periodEvening:  'rgba(180, 100, 200, 0.08)',
+        periodNight:    'rgba(60, 80, 140, 0.10)',
+        periodLabel:    'rgba(40, 60, 90, 0.50)',
         yTick:          'rgba(80, 110, 150, 0.40)',
         yLabel:         'rgba(40, 60, 90, 0.80)',
         yLabelDefault:  'rgba(30, 50, 80, 0.92)',
@@ -234,10 +279,16 @@ function chartTheme() {
         grid:           'rgba(145, 175, 214, 0.17)',
         axisBoundary:   'rgba(174, 201, 237, 0.25)',
         axisLine:       'rgba(174, 201, 237, 0.58)',
-        tickAnchor:     'rgba(174, 201, 237, 0.35)',
-        tickNormal:     'rgba(174, 201, 237, 0.2)',
-        labelAnchor:    'rgba(167, 191, 223, 0.7)',
-        labelNormal:    'rgba(167, 191, 223, 0.45)',
+        tickAnchor:     'rgba(174, 201, 237, 0.60)',
+        tickNormal:     'rgba(174, 201, 237, 0.35)',
+        labelAnchor:    'rgba(220, 235, 255, 0.95)',
+        labelNormal:    'rgba(180, 200, 230, 0.70)',
+        rulerLine:      'rgba(174, 201, 237, 0.25)',
+        periodMorning:  'rgba(250, 200, 60, 0.07)',
+        periodAfternoon:'rgba(240, 160, 50, 0.05)',
+        periodEvening:  'rgba(180, 100, 220, 0.06)',
+        periodNight:    'rgba(80, 100, 180, 0.08)',
+        periodLabel:    'rgba(180, 200, 230, 0.45)',
         yTick:          'rgba(174, 201, 237, 0.35)',
         yLabel:         'rgba(167, 191, 223, 0.76)',
         yLabelDefault:  'rgba(171, 214, 255, 0.92)',
@@ -474,7 +525,7 @@ function applyDividerMasksToExistingGroups() {
     if (!DividerState.active) return;
     const groupIds = [
         'phase-baseline-curves', 'phase-desired-curves',
-        'phase-lx-curves', 'phase-mission-arrows',
+        'phase-lx-curves', 'phase-mission-arrows', 'phase-yaxis-indicators',
     ];
     for (const gid of groupIds) {
         const g = document.getElementById(gid);
@@ -1304,18 +1355,16 @@ function buildFastModelSystemPrompt() {
 }
 
 async function callFastModel(prompt) {
-    const provider = AppState.selectedLLM;
-    const key = AppState.apiKeys[provider];
+    const { model, provider, key } = getStageModel('fast');
     if (!key) {
         throw new Error(`No API key configured for ${provider}. Add your key in Settings.`);
     }
 
-    const config = FAST_MODELS[provider];
     const systemPrompt = buildFastModelSystemPrompt();
 
     const debugEntry = DebugLog.addEntry({
         stage: 'Fast Model', stageClass: 'fast-model',
-        model: config.model,
+        model,
         systemPrompt,
         userPrompt: prompt,
         loading: true,
@@ -1325,17 +1374,18 @@ async function callFastModel(prompt) {
 
     try {
         let result;
-        switch (config.type) {
+        switch (provider) {
             case 'anthropic':
-                result = await callAnthropicGeneric(prompt, key, config.model, systemPrompt, 256);
+                result = await callAnthropicGeneric(prompt, key, model, systemPrompt, 256);
                 break;
             case 'openai':
-                result = await callOpenAIGeneric(prompt, key, config.model,
-                    provider === 'grok' ? API_ENDPOINTS.grok : API_ENDPOINTS.openai,
-                    systemPrompt, 256);
+                result = await callOpenAIGeneric(prompt, key, model, API_ENDPOINTS.openai, systemPrompt, 256);
+                break;
+            case 'grok':
+                result = await callOpenAIGeneric(prompt, key, model, API_ENDPOINTS.grok, systemPrompt, 256);
                 break;
             case 'gemini':
-                result = await callGeminiGeneric(prompt, key, config.model, systemPrompt, 256);
+                result = await callGeminiGeneric(prompt, key, model, systemPrompt, 256);
                 break;
         }
         const requestBody = result._requestBody;
@@ -1372,13 +1422,11 @@ function buildCurveModelSystemPrompt() {
 }
 
 async function callMainModelForCurves(prompt) {
-    const provider = AppState.selectedLLM;
-    const key = AppState.apiKeys[provider];
+    const { model, provider, key } = getStageModel('curves');
     if (!key) {
         throw new Error(`No API key configured for ${provider}. Add your key in Settings.`);
     }
 
-    const model = MAIN_MODELS[provider];
     const systemPrompt = buildCurveModelSystemPrompt();
 
     const debugEntry = DebugLog.addEntry({
@@ -1777,9 +1825,13 @@ function buildPhaseXAxis() {
     group.innerHTML = '';
     const t = chartTheme();
 
-    const rulerY = 12;  // top time ruler, FCP-style
+    const padT = PHASE_CHART.padT;
+    const rulerTop = 8;
+    const rulerBottom = padT - 8;
+    const tickBaseY = rulerBottom;
+    const labelY = rulerTop + 32;
 
-    // Subtle bottom boundary line for plot area
+    // Bottom boundary line for plot area
     group.appendChild(svgEl('line', {
         x1: String(PHASE_CHART.padL),
         y1: String(PHASE_CHART.padT + PHASE_CHART.plotH),
@@ -1788,48 +1840,119 @@ function buildPhaseXAxis() {
         stroke: t.axisBoundary, 'stroke-width': '0.75',
     }));
 
-    // Hour labels + ticks every 2h at the TOP (FCP time ruler)
-    // Sparse AM/PM: show suffix only at 6h anchors (6am, 12pm, 6pm, 12am)
-    for (let h = PHASE_CHART.startHour; h <= PHASE_CHART.endHour; h += 2) {
+    // High-contrast ruler strip behind top axis labels/ticks.
+    group.appendChild(svgEl('rect', {
+        x: String(PHASE_CHART.padL),
+        y: String(rulerTop),
+        width: String(PHASE_CHART.plotW),
+        height: String(rulerBottom - rulerTop),
+        fill: document.body.classList.contains('light-mode')
+            ? 'rgba(40, 60, 90, 0.05)'
+            : 'rgba(170, 200, 255, 0.07)',
+        rx: '4',
+        'pointer-events': 'none',
+    }));
+
+    // Day split zones to make the 24h rollover explicit.
+    const day1StartX = phaseChartX(PHASE_CHART.startHour * 60);
+    const midnightX = phaseChartX(24 * 60);
+    const day2EndX = phaseChartX(PHASE_CHART.endHour * 60);
+    group.appendChild(svgEl('rect', {
+        x: day1StartX.toFixed(1),
+        y: String(rulerTop + 1),
+        width: (midnightX - day1StartX).toFixed(1),
+        height: String(rulerBottom - rulerTop - 2),
+        fill: document.body.classList.contains('light-mode')
+            ? 'rgba(220, 170, 80, 0.07)'
+            : 'rgba(220, 170, 80, 0.09)',
+        'pointer-events': 'none',
+    }));
+    group.appendChild(svgEl('rect', {
+        x: midnightX.toFixed(1),
+        y: String(rulerTop + 1),
+        width: (day2EndX - midnightX).toFixed(1),
+        height: String(rulerBottom - rulerTop - 2),
+        fill: document.body.classList.contains('light-mode')
+            ? 'rgba(100, 130, 190, 0.08)'
+            : 'rgba(100, 130, 190, 0.11)',
+        'pointer-events': 'none',
+    }));
+
+    // Ruler baseline connecting ticks to plot area.
+    group.appendChild(svgEl('line', {
+        x1: String(PHASE_CHART.padL), y1: String(tickBaseY),
+        x2: String(PHASE_CHART.padL + PHASE_CHART.plotW), y2: String(tickBaseY),
+        stroke: t.rulerLine, 'stroke-width': '1',
+    }));
+
+    // Day labels.
+    group.appendChild(svgEl('text', {
+        x: ((day1StartX + midnightX) / 2).toFixed(1),
+        y: String(rulerTop + 11),
+        fill: t.periodLabel,
+        'text-anchor': 'middle',
+        'font-family': "'IBM Plex Mono', monospace",
+        'font-size': '10.5',
+        'font-weight': '600',
+        'letter-spacing': '0.09em',
+    })).textContent = 'DAY 1';
+    group.appendChild(svgEl('text', {
+        x: ((midnightX + day2EndX) / 2).toFixed(1),
+        y: String(rulerTop + 11),
+        fill: t.periodLabel,
+        'text-anchor': 'middle',
+        'font-family': "'IBM Plex Mono', monospace",
+        'font-size': '10.5',
+        'font-weight': '600',
+        'letter-spacing': '0.09em',
+    })).textContent = 'DAY 2';
+
+    // Hour ticks every 1h; taller ticks every 2h.
+    for (let h = PHASE_CHART.startHour; h <= PHASE_CHART.endHour; h++) {
+        const x = phaseChartX(h * 60);
+        const isEvenHour = h % 2 === 0;
+        const isMidnight = (h % 24) === 0;
+        const tickTopY = isMidnight ? (labelY + 4) : (isEvenHour ? (labelY + 8) : (labelY + 12));
+        group.appendChild(svgEl('line', {
+            x1: x.toFixed(1), y1: String(tickTopY),
+            x2: x.toFixed(1), y2: String(tickBaseY),
+            stroke: isMidnight ? t.tickAnchor : t.tickNormal,
+            'stroke-width': isMidnight ? '1.8' : (isEvenHour ? '1' : '0.7'),
+        }));
+    }
+
+    // Label every 4h in full 24h format (HH:00) for readability.
+    for (let h = PHASE_CHART.startHour; h <= PHASE_CHART.endHour; h += 4) {
         const x = phaseChartX(h * 60);
         const displayHour = h % 24;
-        const isAnchor = displayHour % 6 === 0; // 0, 6, 12, 18
-
-        // Downward tick — slightly taller at anchors
-        group.appendChild(svgEl('line', {
-            x1: x.toFixed(1), y1: String(rulerY + 4),
-            x2: x.toFixed(1), y2: String(rulerY + (isAnchor ? 12 : 9)),
-            stroke: isAnchor ? t.tickAnchor : t.tickNormal,
-            'stroke-width': '0.75',
-        }));
-
-        // Hour number
-        const hour12 = displayHour === 0 ? 12 : displayHour > 12 ? displayHour - 12 : displayHour;
+        const isMidnight = displayHour === 0;
+        const hh = String(displayHour).padStart(2, '0');
         const label = svgEl('text', {
-            x: x.toFixed(1), y: String(rulerY),
-            fill: isAnchor ? t.labelAnchor : t.labelNormal,
+            x: x.toFixed(1), y: String(labelY),
+            fill: isMidnight ? t.labelAnchor : t.labelNormal,
             'font-family': "'IBM Plex Mono', monospace",
-            'font-size': '8', 'text-anchor': 'middle',
+            'font-size': isMidnight ? '17' : '14',
+            'font-weight': isMidnight ? '700' : '500',
+            'text-anchor': 'middle',
         });
-
-        if (isAnchor) {
-            // Anchor labels: "6am", "12pm" etc. — suffix in smaller tspan
-            const ampm = displayHour < 12 || displayHour === 0 ? 'am' : 'pm';
-            const numSpan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
-            numSpan.textContent = String(hour12);
-            const suffixSpan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
-            suffixSpan.textContent = ampm;
-            suffixSpan.setAttribute('font-size', '6');
-            suffixSpan.setAttribute('fill-opacity', '0.7');
-            label.appendChild(numSpan);
-            label.appendChild(suffixSpan);
-        } else {
-            label.textContent = String(hour12);
+        label.textContent = `${hh}:00`;
+        if (isMidnight) {
+            label.setAttribute('dy', '-1');
         }
-
         group.appendChild(label);
     }
 
+    // Explicit midnight marker label.
+    group.appendChild(svgEl('text', {
+        x: (midnightX + 8).toFixed(1),
+        y: String(rulerTop + 27),
+        fill: t.labelAnchor,
+        'text-anchor': 'start',
+        'font-family': "'IBM Plex Mono', monospace",
+        'font-size': '10',
+        'font-weight': '600',
+        'letter-spacing': '0.06em',
+    })).textContent = 'MIDNIGHT';
 }
 
 // ---- Phase Chart: Curve highlight on Y-axis hover ----
@@ -1845,7 +1968,7 @@ function highlightCurve(activeIdx, active) {
 
     const allGroupIds = [
         'phase-baseline-curves', 'phase-desired-curves', 'phase-lx-curves',
-        'phase-mission-arrows', 'phase-lx-markers',
+        'phase-mission-arrows', 'phase-yaxis-indicators', 'phase-lx-markers',
     ];
 
     for (const id of allGroupIds) {
@@ -2115,10 +2238,12 @@ function buildPhaseGrid() {
 
     for (let h = PHASE_CHART.startHour; h <= PHASE_CHART.endHour; h += 2) {
         const x = phaseChartX(h * 60);
+        const displayHour = h % 24;
+        const isAnchor = displayHour % 6 === 0;
         group.appendChild(svgEl('line', {
             x1: x.toFixed(1), y1: String(PHASE_CHART.padT),
             x2: x.toFixed(1), y2: String(PHASE_CHART.padT + PHASE_CHART.plotH),
-            stroke: t.grid, 'stroke-width': '1',
+            stroke: isAnchor ? t.axisBoundary : t.grid, 'stroke-width': '1',
         }));
     }
     for (let v = 25; v <= 100; v += 25) {
@@ -2192,6 +2317,168 @@ function stopScanLine() {
         const group = document.getElementById('phase-scan-line');
         if (group) group.innerHTML = '';
     }, 450);
+}
+
+// ---- Timeline Scan Line (gold-themed, runs in substance timeline zone) ----
+let tlScanLineAnimId = null;
+
+function startTimelineScanLine(laneCount) {
+    const group = document.getElementById('phase-substance-timeline');
+    if (!group) return;
+
+    const laneStep = TIMELINE_ZONE.laneH + TIMELINE_ZONE.laneGap;
+    const zoneTop = TIMELINE_ZONE.separatorY;
+    const zoneH = Math.max(30, laneCount * laneStep + TIMELINE_ZONE.bottomPad);
+
+    const glow = svgEl('rect', {
+        id: 'tl-scan-glow',
+        x: String(PHASE_CHART.padL - 4), y: String(zoneTop),
+        width: '10', height: String(zoneH),
+        fill: 'rgba(245, 200, 80, 0.08)', rx: '5',
+    });
+    group.appendChild(glow);
+
+    const line = svgEl('rect', {
+        id: 'tl-scan-rect',
+        x: String(PHASE_CHART.padL), y: String(zoneTop),
+        width: '2', height: String(zoneH),
+        fill: 'url(#tl-scan-line-grad)', opacity: '0.7',
+    });
+    group.appendChild(line);
+
+    let direction = 1;
+    let position = 0;
+    const range = PHASE_CHART.plotW;
+    const speed = range / 1.5;
+    let lastTime = performance.now();
+
+    function tick(now) {
+        const dt = (now - lastTime) / 1000;
+        lastTime = now;
+        position += direction * speed * dt;
+        if (position >= range) { position = range; direction = -1; }
+        if (position <= 0) { position = 0; direction = 1; }
+        const currentX = PHASE_CHART.padL + position;
+        line.setAttribute('x', currentX.toFixed(1));
+        glow.setAttribute('x', (currentX - 4).toFixed(1));
+        tlScanLineAnimId = requestAnimationFrame(tick);
+    }
+    tlScanLineAnimId = requestAnimationFrame(tick);
+}
+
+function stopTimelineScanLine() {
+    if (tlScanLineAnimId) {
+        cancelAnimationFrame(tlScanLineAnimId);
+        tlScanLineAnimId = null;
+    }
+    const line = document.getElementById('tl-scan-rect');
+    const glow = document.getElementById('tl-scan-glow');
+    if (line) line.animate([{ opacity: 0.7 }, { opacity: 0 }], { duration: 300, fill: 'forwards' });
+    if (glow) glow.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, fill: 'forwards' });
+    setTimeout(() => {
+        if (line) line.remove();
+        if (glow) glow.remove();
+    }, 350);
+}
+
+// ---- Biometric Scan Line (red-themed, runs in biometric strip zone) ----
+let bioScanLineAnimId = null;
+
+function startBioScanLine() {
+    const svg = document.getElementById('phase-chart-svg');
+    const group = document.getElementById('phase-biometric-strips');
+    if (!svg || !group) return;
+
+    // Clear any existing content
+    group.innerHTML = '';
+
+    // Determine the zone: starts just below current viewBox bottom
+    const currentVB = svg.getAttribute('viewBox').split(' ').map(Number);
+    const currentH = currentVB[3];
+
+    // Store pre-scan viewBox height so renderBiometricStrips can reset to it
+    svg.dataset.preBioScanH = String(currentH);
+
+    // Estimate strip zone height (~8 channels × 17px each + padding)
+    const estimatedChannels = BiometricState.selectedDevices.reduce((sum, dKey) => {
+        const dev = BIOMETRIC_DEVICES.devices.find(d => d.key === dKey);
+        return sum + (dev ? dev.displayChannels.length : 0);
+    }, 0);
+    const zoneH = Math.max(80, estimatedChannels * (BIOMETRIC_ZONE.laneH + BIOMETRIC_ZONE.laneGap) + BIOMETRIC_ZONE.separatorPad * 2 + BIOMETRIC_ZONE.bottomPad);
+
+    // Expand viewBox to make room for the scan zone
+    const newH = currentH + zoneH;
+    svg.setAttribute('viewBox', `0 0 960 ${newH}`);
+
+    const zoneTop = currentH + BIOMETRIC_ZONE.separatorPad;
+    const zoneBottom = newH - BIOMETRIC_ZONE.bottomPad;
+    const zoneHeight = zoneBottom - zoneTop;
+
+    // Faint zone background
+    const bg = svgEl('rect', {
+        x: String(PHASE_CHART.padL), y: String(zoneTop),
+        width: String(PHASE_CHART.plotW), height: String(zoneHeight),
+        fill: 'rgba(255, 77, 77, 0.02)', rx: '2',
+    });
+    group.appendChild(bg);
+
+    // Red glow behind line
+    const glow = svgEl('rect', {
+        id: 'bio-scan-glow',
+        x: String(PHASE_CHART.padL - 4), y: String(zoneTop),
+        width: '10', height: String(zoneHeight),
+        fill: 'rgba(255, 77, 77, 0.12)', rx: '5',
+    });
+    group.appendChild(glow);
+
+    // Main red scan line
+    const line = svgEl('rect', {
+        id: 'bio-scan-rect',
+        x: String(PHASE_CHART.padL), y: String(zoneTop),
+        width: '2', height: String(zoneHeight),
+        fill: 'url(#bio-scan-line-grad)', opacity: '0.8',
+    });
+    group.appendChild(line);
+
+    let direction = 1;
+    let position = 0;
+    const range = PHASE_CHART.plotW;
+    const speed = range / 1.8; // slightly slower than the main scan line
+    let lastTime = performance.now();
+
+    function tick(now) {
+        const dt = (now - lastTime) / 1000;
+        lastTime = now;
+        position += direction * speed * dt;
+        if (position >= range) { position = range; direction = -1; }
+        if (position <= 0) { position = 0; direction = 1; }
+        const currentX = PHASE_CHART.padL + position;
+        line.setAttribute('x', currentX.toFixed(1));
+        glow.setAttribute('x', (currentX - 4).toFixed(1));
+        bioScanLineAnimId = requestAnimationFrame(tick);
+    }
+    bioScanLineAnimId = requestAnimationFrame(tick);
+}
+
+function stopBioScanLine() {
+    if (bioScanLineAnimId) {
+        cancelAnimationFrame(bioScanLineAnimId);
+        bioScanLineAnimId = null;
+    }
+    const line = document.getElementById('bio-scan-rect');
+    const glow = document.getElementById('bio-scan-glow');
+    if (line) line.animate([{ opacity: 0.8 }, { opacity: 0 }], { duration: 350, fill: 'forwards' });
+    if (glow) glow.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 350, fill: 'forwards' });
+    setTimeout(() => {
+        const group = document.getElementById('phase-biometric-strips');
+        if (group) group.innerHTML = '';
+        // Restore viewBox to pre-scan height so renderBiometricStrips starts clean
+        const svg = document.getElementById('phase-chart-svg');
+        if (svg && svg.dataset.preBioScanH) {
+            svg.setAttribute('viewBox', `0 0 960 ${svg.dataset.preBioScanH}`);
+            delete svg.dataset.preBioScanH;
+        }
+    }, 400);
 }
 
 // ============================================
@@ -3070,6 +3357,242 @@ function placePeakDescriptors(group, curvesData, pointsKey, baseDelay) {
     }
 }
 
+// ---- Phase Chart: Y-Axis Transition Indicators ----
+// Renders FROM→TO level descriptors (change) or keep markers in the Y-axis margins
+function renderYAxisTransitionIndicators(curvesData, animDelay = 0) {
+    const group = document.getElementById('phase-yaxis-indicators');
+    if (!group) return;
+    group.innerHTML = '';
+    group.style.opacity = '1';
+
+    const t = chartTheme();
+
+    for (let i = 0; i < curvesData.length; i++) {
+        const curve = curvesData[i];
+        if (!curve.levels) continue;
+
+        const side = i === 0 ? 'left' : 'right';
+        const axisX = side === 'left' ? PHASE_CHART.padL : PHASE_CHART.padL + PHASE_CHART.plotW;
+
+        const div = findMaxDivergence(curve);
+        const isChange = div && Math.abs(div.diff) >= 5;
+
+        const sub = getEffectSubGroup(group, i);
+
+        if (isChange) {
+            renderChangeIndicator(sub, curve, i, div, side, axisX, t, animDelay + i * 200);
+        } else {
+            renderKeepIndicator(sub, curve, i, side, axisX, t, animDelay + i * 200);
+        }
+    }
+}
+
+function renderChangeIndicator(group, curve, curveIdx, div, side, axisX, theme, delay) {
+    const blSmoothed = smoothPhaseValues(curve.baseline, PHASE_SMOOTH_PASSES);
+    const blMatch = blSmoothed.reduce((a, b) =>
+        Math.abs(b.hour - div.hour) < Math.abs(a.hour - div.hour) ? b : a);
+
+    const baselineVal = blMatch.value;
+    const desiredVal = div.value;
+
+    const baseLevel = nearestLevel(baselineVal);
+    const desiredLevel = nearestLevel(desiredVal);
+
+    const baseDescriptor = curve.levels[String(baseLevel)];
+    const desiredDescriptor = curve.levels[String(desiredLevel)];
+    if (!baseDescriptor || !desiredDescriptor) return;
+    if (baseLevel === desiredLevel) return;
+
+    const baseY = phaseChartY(baseLevel);
+    const desiredY = phaseChartY(desiredLevel);
+
+    const textX = side === 'left' ? axisX - 14 : axisX + 14;
+    const textAnchor = side === 'left' ? 'end' : 'start';
+
+    const maxChars = 10;
+    const baseTxt = baseDescriptor.length > maxChars
+        ? baseDescriptor.slice(0, maxChars - 1) + '\u2026' : baseDescriptor;
+    const desTxt = desiredDescriptor.length > maxChars
+        ? desiredDescriptor.slice(0, maxChars - 1) + '\u2026' : desiredDescriptor;
+
+    const container = svgEl('g', {
+        class: 'yaxis-change-indicator', opacity: '0',
+        'data-effect-idx': String(curveIdx),
+    });
+
+    // FROM label (baseline level — strikethrough, subdued)
+    const fromLabel = svgEl('text', {
+        x: String(textX), y: (baseY + 3).toFixed(1),
+        fill: curve.color, 'fill-opacity': '0.5',
+        'font-family': "'IBM Plex Mono', monospace",
+        'font-size': '9', 'font-weight': '500',
+        'text-anchor': textAnchor,
+        'text-decoration': 'line-through',
+        'letter-spacing': '0.01em',
+    });
+    fromLabel.textContent = baseTxt;
+    container.appendChild(fromLabel);
+
+    // TO label (desired level — bold, bright)
+    const toLabel = svgEl('text', {
+        x: String(textX), y: (desiredY + 3).toFixed(1),
+        fill: curve.color, 'fill-opacity': '0.92',
+        'font-family': "'IBM Plex Mono', monospace",
+        'font-size': '9', 'font-weight': '700',
+        'text-anchor': textAnchor,
+        'letter-spacing': '0.01em',
+    });
+    toLabel.textContent = desTxt;
+    container.appendChild(toLabel);
+
+    // Vertical arrow shaft in the margin
+    const arrowX = side === 'left' ? axisX - 6 : axisX + 6;
+
+    const shaft = svgEl('line', {
+        x1: String(arrowX), y1: baseY.toFixed(1),
+        x2: String(arrowX), y2: baseY.toFixed(1),
+        stroke: curve.color, 'stroke-width': '1.5',
+        'stroke-opacity': '0.7', 'stroke-linecap': 'round',
+    });
+    container.appendChild(shaft);
+
+    // Arrow tip (inline chevron)
+    const tipSize = 4;
+    const tipDir = desiredY < baseY ? -1 : 1; // -1 = up (higher value), +1 = down
+    const tipPath = svgEl('path', {
+        d: `M${(arrowX - tipSize).toFixed(1)} ${(desiredY - tipDir * tipSize).toFixed(1)} L${arrowX.toFixed(1)} ${desiredY.toFixed(1)} L${(arrowX + tipSize).toFixed(1)} ${(desiredY - tipDir * tipSize).toFixed(1)}`,
+        fill: 'none', stroke: curve.color, 'stroke-width': '1.5',
+        'stroke-opacity': '0', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+    });
+    container.appendChild(tipPath);
+
+    group.appendChild(container);
+
+    // Animate: fade in + grow arrow
+    const startTime = performance.now();
+    const fadeInDur = 400;
+    const arrowGrowDur = 600;
+
+    (function animate() {
+        const elapsed = performance.now() - startTime;
+        if (elapsed < delay) { requestAnimationFrame(animate); return; }
+
+        const localT = elapsed - delay;
+
+        // Fade in container
+        const fadeT = Math.min(1, localT / fadeInDur);
+        container.setAttribute('opacity', String(1 - Math.pow(1 - fadeT, 3)));
+
+        // Grow arrow shaft (starts 200ms after fade begins)
+        if (localT > 200) {
+            const arrowT = Math.min(1, (localT - 200) / arrowGrowDur);
+            const arrowEase = 1 - Math.pow(1 - arrowT, 3);
+            const curY2 = baseY + (desiredY - baseY) * arrowEase;
+            shaft.setAttribute('y2', curY2.toFixed(1));
+
+            // Tip fades in near completion
+            if (arrowT > 0.85) {
+                tipPath.setAttribute('stroke-opacity', String(0.7 * ((arrowT - 0.85) / 0.15)));
+            }
+        }
+
+        if (localT < fadeInDur + arrowGrowDur + 200) {
+            requestAnimationFrame(animate);
+        }
+    })();
+}
+
+function renderKeepIndicator(group, curve, curveIdx, side, axisX, theme, delay) {
+    const blSmoothed = smoothPhaseValues(curve.baseline, PHASE_SMOOTH_PASSES);
+
+    // Find baseline range
+    let minVal = 100, maxVal = 0;
+    for (const pt of blSmoothed) {
+        if (pt.value < minVal) minVal = pt.value;
+        if (pt.value > maxVal) maxVal = pt.value;
+    }
+
+    const avgVal = (minVal + maxVal) / 2;
+    const avgLevel = nearestLevel(avgVal);
+    const descriptor = curve.levels ? curve.levels[String(avgLevel)] : null;
+    if (!descriptor) return;
+
+    const centerY = phaseChartY(avgVal);
+    const textX = side === 'left' ? axisX - 14 : axisX + 14;
+    const textAnchor = side === 'left' ? 'end' : 'start';
+
+    const maxChars = 10;
+    const txt = descriptor.length > maxChars
+        ? descriptor.slice(0, maxChars - 1) + '\u2026' : descriptor;
+
+    const container = svgEl('g', {
+        class: 'yaxis-keep-indicator', opacity: '0',
+        'data-effect-idx': String(curveIdx),
+    });
+
+    // Level descriptor text
+    const label = svgEl('text', {
+        x: String(textX), y: (centerY + 3).toFixed(1),
+        fill: curve.color, 'fill-opacity': '0.75',
+        'font-family': "'IBM Plex Mono', monospace",
+        'font-size': '9', 'font-weight': '500',
+        'text-anchor': textAnchor,
+    });
+    label.textContent = txt;
+    container.appendChild(label);
+
+    // Keep marker: horizontal line with center dot
+    const markerX = side === 'left' ? axisX - 6 : axisX + 6;
+    const markerHalfW = 6;
+
+    container.appendChild(svgEl('line', {
+        x1: String(markerX - markerHalfW), y1: centerY.toFixed(1),
+        x2: String(markerX + markerHalfW), y2: centerY.toFixed(1),
+        stroke: curve.color, 'stroke-width': '1.2',
+        'stroke-opacity': '0.6', 'stroke-linecap': 'round',
+    }));
+
+    container.appendChild(svgEl('circle', {
+        cx: String(markerX), cy: centerY.toFixed(1),
+        r: '2.5', fill: curve.color, 'fill-opacity': '0.7',
+    }));
+
+    // Small "keep" label below marker
+    const keepLabel = svgEl('text', {
+        x: String(markerX), y: (centerY + 14).toFixed(1),
+        fill: curve.color, 'fill-opacity': '0.45',
+        'font-family': "'Space Grotesk', sans-serif",
+        'font-size': '7', 'font-weight': '500',
+        'text-anchor': 'middle', 'font-style': 'italic',
+    });
+    keepLabel.textContent = 'keep';
+    container.appendChild(keepLabel);
+
+    // Baseline range bracket (dashed vertical span)
+    const minY = phaseChartY(minVal);
+    const maxY = phaseChartY(maxVal);
+    if (Math.abs(minY - maxY) > 8) {
+        container.appendChild(svgEl('line', {
+            x1: String(markerX), y1: maxY.toFixed(1),
+            x2: String(markerX), y2: minY.toFixed(1),
+            stroke: curve.color, 'stroke-width': '0.8',
+            'stroke-opacity': '0.3', 'stroke-dasharray': '2 2',
+        }));
+    }
+
+    group.appendChild(container);
+
+    // Animate: simple fade in
+    const startTime = performance.now();
+    (function animate() {
+        const elapsed = performance.now() - startTime;
+        if (elapsed < delay) { requestAnimationFrame(animate); return; }
+        const localT = Math.min(1, (elapsed - delay) / 500);
+        container.setAttribute('opacity', String(0.85 * (1 - Math.pow(1 - localT, 3))));
+        if (localT < 1) requestAnimationFrame(animate);
+    })();
+}
+
 // ---- Phase Chart: Render Baseline Curves ----
 async function renderBaselineCurves(curvesData) {
     const group = document.getElementById('phase-baseline-curves');
@@ -3201,6 +3724,9 @@ async function morphToDesiredCurves(curvesData) {
         })();
     }
 
+    // Y-axis margin indicators (change arrows / keep markers) — concurrent with mission arrows
+    renderYAxisTransitionIndicators(curvesData, 0);
+
     await sleep(400);
 
     // Phase 2: Morph baseline paths → desired paths (1200ms)
@@ -3309,7 +3835,8 @@ function resetPhaseChart() {
     ['phase-x-axis', 'phase-y-axis-left', 'phase-y-axis-right', 'phase-grid',
      'phase-scan-line', 'phase-word-cloud', 'phase-baseline-curves', 'phase-desired-curves',
      'phase-lx-curves', 'phase-lx-markers', 'phase-substance-timeline',
-     'phase-mission-arrows', 'phase-legend'].forEach(id => {
+     'phase-biometric-strips', 'phase-mission-arrows', 'phase-yaxis-indicators',
+     'phase-legend', 'phase-tooltip-overlay'].forEach(id => {
         const el = document.getElementById(id);
         if (el) {
             el.innerHTML = '';
@@ -3348,7 +3875,7 @@ function resetPhaseChart() {
     PhaseState.viewingPhase = -1;
 
     // Clear any inline opacity/transition/filter styles left by phase stepping
-    ['phase-desired-curves', 'phase-mission-arrows', 'phase-lx-curves', 'phase-lx-markers'].forEach(id => {
+    ['phase-desired-curves', 'phase-mission-arrows', 'phase-yaxis-indicators', 'phase-lx-curves', 'phase-lx-markers'].forEach(id => {
         const el = document.getElementById(id);
         if (el) {
             el.style.opacity = '';
@@ -3372,9 +3899,35 @@ function resetPhaseChart() {
     // Clean up timeline defs + restore viewBox
     const svg = document.getElementById('phase-chart-svg');
     if (svg) {
-        svg.querySelectorAll('defs [id^="tl-grad-"], defs [id^="tl-clip-"]').forEach(el => el.remove());
+        svg.querySelectorAll('defs [id^="tl-grad-"], defs [id^="tl-clip-"], defs [id^="bio-clip-"]').forEach(el => el.remove());
         svg.setAttribute('viewBox', '0 0 960 500');
     }
+
+    // Reset scan lines and biometric state
+    stopTimelineScanLine();
+    stopBioScanLine();
+    hideBiometricTrigger();
+    const bioStripUI = document.getElementById('biometric-strip-ui');
+    if (bioStripUI) {
+        bioStripUI.classList.remove('visible');
+        bioStripUI.classList.add('hidden');
+    }
+    BiometricState.selectedDevices = [];
+    BiometricState.profileText = '';
+    BiometricState.biometricResult = null;
+    BiometricState.channels = [];
+    BiometricState.phase = 'idle';
+
+    // Reset play buttons
+    hideInterventionPlayButton();
+    hideRevisionPlayButton();
+    RevisionState.revisionPromise = null;
+    RevisionState.revisionResult = null;
+    RevisionState.oldInterventions = null;
+    RevisionState.newInterventions = null;
+    RevisionState.diff = null;
+    RevisionState.newLxCurves = null;
+    RevisionState.phase = 'idle';
 }
 
 // ============================================
@@ -3483,8 +4036,69 @@ async function stepToPhase(targetIdx) {
         // ---- Stepping BACKWARD — fast rewind via fades/morphs ----
         _stepAnimating = true;
         const dur = 250;
+
+        if (targetIdx < 4 && current >= 4) {
+            // Phase 4→3: undo revision — restore old Lx curves + timeline
+            hideRevisionPlayButton();
+            if (RevisionState.oldInterventions && PhaseState.curvesData) {
+                const oldLx = computeLxOverlay(RevisionState.oldInterventions, PhaseState.curvesData);
+                PhaseState.lxCurves = oldLx;
+                PhaseState.interventionResult = { interventions: RevisionState.oldInterventions.map(iv => ({
+                    key: iv.key, dose: iv.dose, doseMultiplier: iv.doseMultiplier,
+                    timeMinutes: iv.timeMinutes, impacts: iv.impacts, rationale: iv.rationale,
+                })) };
+                PhaseState.incrementalSnapshots = computeIncrementalLxOverlay(RevisionState.oldInterventions, PhaseState.curvesData);
+                // Re-render timeline with original interventions
+                renderSubstanceTimeline(RevisionState.oldInterventions, oldLx, PhaseState.curvesData);
+                revealTimelinePillsInstant();
+                preserveBiometricStrips();
+                // Restore Lx curves
+                const lxStrokes = lxGroup.querySelectorAll('.phase-lx-path');
+                const lxFills = lxGroup.querySelectorAll('.phase-lx-fill');
+                for (let ci = 0; ci < PhaseState.curvesData.length; ci++) {
+                    if (oldLx[ci] && oldLx[ci].points) {
+                        if (lxStrokes[ci]) lxStrokes[ci].setAttribute('d', phasePointsToPath(oldLx[ci].points, true));
+                        if (lxFills[ci]) lxFills[ci].setAttribute('d', phasePointsToFillPath(oldLx[ci].points, true));
+                    }
+                }
+            }
+        }
+
+        if (targetIdx < 3 && current >= 3) {
+            // Remove biometric strips
+            const bioGroup = document.getElementById('phase-biometric-strips');
+            if (bioGroup) {
+                fadeGroup(bioGroup, 0, dur);
+                await sleep(dur);
+                bioGroup.innerHTML = '';
+                bioGroup.style.opacity = '';
+            }
+            // Hide trigger + strip UI
+            hideBiometricTrigger();
+            const svg = document.getElementById('phase-chart-svg');
+            if (svg) {
+                svg.querySelectorAll('defs [id^="bio-clip-"]').forEach(el => el.remove());
+                // Recalculate viewBox based on timeline
+                const tlGroup = document.getElementById('phase-substance-timeline');
+                if (tlGroup && tlGroup.children.length > 0) {
+                    const tlBox = tlGroup.getBBox();
+                    const neededH = Math.ceil(tlBox.y + tlBox.height + TIMELINE_ZONE.bottomPad);
+                    svg.setAttribute('viewBox', `0 0 960 ${Math.max(500, neededH)}`);
+                } else {
+                    svg.setAttribute('viewBox', '0 0 960 500');
+                }
+            }
+            // Hide the strip UI
+            const bioStripUI = document.getElementById('biometric-strip-ui');
+            if (bioStripUI) {
+                bioStripUI.classList.remove('visible');
+                bioStripUI.classList.add('hidden');
+            }
+        }
+
         if (targetIdx < 2 && current >= 2) {
             // Remove Lx layer: clear ghost AUC fills, timeline, markers, playhead
+            hideInterventionPlayButton();
             lxGroup.innerHTML = '';
             fadeGroup(lxMarkers, 0, dur);
             timelineGroup.innerHTML = '';
@@ -3498,6 +4112,9 @@ async function stepToPhase(targetIdx) {
                 ch.style.opacity = '';
                 ch.getAnimations().forEach(a => a.cancel());
             });
+            // Restore Y-axis indicators
+            const yaxisInd = document.getElementById('phase-yaxis-indicators');
+            if (yaxisInd) { yaxisInd.style.opacity = '1'; yaxisInd.style.filter = ''; }
             // Restore baseline curves to their original shape (scans morphed them)
             const cd = PhaseState.curvesData;
             if (cd) {
@@ -3522,6 +4139,8 @@ async function stepToPhase(targetIdx) {
         if (targetIdx < 1 && current >= 1) {
             fadeGroup(desiredGroup, 0, dur);
             fadeGroup(arrowGroup, 0, dur);
+            const indicatorGroup = document.getElementById('phase-yaxis-indicators');
+            if (indicatorGroup) fadeGroup(indicatorGroup, 0, dur);
         }
 
         if (targetIdx === 0) {
@@ -3559,15 +4178,60 @@ async function stepToPhase(targetIdx) {
         }
 
         if (targetIdx >= 2 && PhaseState.viewingPhase < 2) {
-            // Phase 1→2: Replay the full sequential substance animation
+            // Phase 1→2: Show play button then replay sequential substance animation
             const snapshots = PhaseState.incrementalSnapshots;
             const interventionData = PhaseState.interventionResult;
             if (snapshots && interventionData) {
                 const interventions = validateInterventions(interventionData.interventions || [], curvesData);
+
+                // Show amber play button and wait for click
+                showInterventionPlayButton();
+                _stepAnimating = false; // Allow UI interaction while waiting
+                await new Promise(resolve => {
+                    const btn = document.getElementById('intervention-play-btn');
+                    if (!btn) { resolve(); return; }
+                    btn.addEventListener('click', () => {
+                        hideInterventionPlayButton();
+                        resolve();
+                    }, { once: true });
+                });
+                _stepAnimating = true;
+
                 await animateSequentialLxReveal(snapshots, interventions, curvesData);
             }
 
             PhaseState.viewingPhase = 2;
+            updateStepButtons();
+        }
+
+        if (targetIdx >= 3 && PhaseState.viewingPhase < 3) {
+            // Phase 2→3: Re-render biometric strips from cache or show trigger
+            if (BiometricState.biometricResult) {
+                renderBiometricStrips(BiometricState.channels);
+                await animateBiometricReveal(600);
+                PhaseState.viewingPhase = 3;
+            } else {
+                showBiometricTrigger();
+                PhaseState.viewingPhase = 2; // stay at 2 until user completes flow
+            }
+            updateStepButtons();
+        }
+
+        if (targetIdx >= 4 && PhaseState.viewingPhase < 4) {
+            // Phase 3→4: Replay revision from cache or show play button
+            if (RevisionState.phase === 'rendered' && RevisionState.newLxCurves) {
+                const oldLx = computeLxOverlay(RevisionState.oldInterventions, curvesData);
+                const diff = RevisionState.diff || diffInterventions(RevisionState.oldInterventions, RevisionState.newInterventions);
+                await animateRevisionScan(diff, RevisionState.newInterventions, RevisionState.newLxCurves, curvesData);
+                await morphLxCurvesToRevision(oldLx, RevisionState.newLxCurves, curvesData);
+                PhaseState.lxCurves = RevisionState.newLxCurves;
+                PhaseState.viewingPhase = 4;
+            } else if (RevisionState.revisionResult) {
+                showRevisionPlayButton();
+                setRevisionPlayReady();
+            } else {
+                showRevisionPlayButton();
+            }
             updateStepButtons();
         }
 
@@ -3649,8 +4313,10 @@ function substanceEffectAt(minutesSinceDose, pharma) {
         effect = strength * 0.85 * Math.pow(0.5, elapsed / halfLife);
     } else {
         // Post-duration: continued decay + rebound dip
+        const elapsedAtDuration = duration - duration * 0.6;
+        const valueAtDuration = strength * 0.85 * Math.pow(0.5, elapsedAtDuration / halfLife);
         const elapsed = minutesSinceDose - duration;
-        const residual = strength * 0.3 * Math.pow(0.5, elapsed / halfLife);
+        const residual = valueAtDuration * Math.pow(0.5, elapsed / halfLife);
         const reboundDip = rebound * Math.exp(-elapsed / (halfLife * 0.5));
         effect = residual - reboundDip;
     }
@@ -4813,11 +5479,18 @@ async function handlePromptSubmit(e) {
     updateStepButtons();
 
     // === SEQUENTIAL SUBSTANCE LAYERING ===
+    // Start timeline scan line while waiting for intervention model
+    startTimelineScanLine(3);
+
     // Wait for intervention model
     let interventionData = PhaseState.interventionResult;
     if (!interventionData && PhaseState.interventionPromise) {
         interventionData = await PhaseState.interventionPromise;
     }
+
+    // Stop scan line — LLM has returned
+    stopTimelineScanLine();
+
     if (!interventionData) {
         console.error('[Lx] No intervention data — model call failed or no API key.');
         PhaseState.isProcessing = false;
@@ -4838,6 +5511,24 @@ async function handlePromptSubmit(e) {
     PhaseState.incrementalSnapshots = incrementalSnapshots;
     PhaseState.lxCurves = incrementalSnapshots[incrementalSnapshots.length - 1].lxCurves;
 
+    PhaseState.phase = 'lx-ready';
+
+    // Show amber play button — wait for user to trigger the substance layup
+    showInterventionPlayButton();
+    PhaseState.isProcessing = false;
+    document.getElementById('prompt-submit').disabled = false;
+
+    await new Promise(resolve => {
+        const btn = document.getElementById('intervention-play-btn');
+        if (!btn) { resolve(); return; }
+        btn.addEventListener('click', () => {
+            hideInterventionPlayButton();
+            resolve();
+        }, { once: true });
+    });
+
+    PhaseState.isProcessing = true;
+    document.getElementById('prompt-submit').disabled = true;
     PhaseState.phase = 'lx-sequential';
 
     // Animate sequential substance reveal
@@ -4847,7 +5538,10 @@ async function handlePromptSubmit(e) {
     PhaseState.maxPhaseReached = 2;
     PhaseState.viewingPhase = 2;
     updateStepButtons();
-    DebugLog.exportToFile();
+
+    // Show biometric trigger after Lx completes
+    await sleep(600);
+    showBiometricTrigger();
 
     PhaseState.isProcessing = false;
     document.getElementById('prompt-submit').disabled = false;
@@ -4901,6 +5595,18 @@ function initSettings() {
 
     // Init LLM select
     llmSelect.value = AppState.selectedLLM;
+
+    // Init per-stage model selectors
+    const STAGE_IDS = ['fast', 'curves', 'intervention', 'biometric', 'revision'];
+    STAGE_IDS.forEach(stage => {
+        const sel = document.getElementById(`stage-${stage}`);
+        if (!sel) return;
+        sel.value = AppState.stageModels[stage];
+        sel.addEventListener('change', () => {
+            AppState.stageModels[stage] = sel.value;
+            localStorage.setItem(`cortex_stage_${stage}`, sel.value);
+        });
+    });
 
     // Init effects select
     const effectsSelect = document.getElementById('effects-select');
@@ -5032,6 +5738,10 @@ function initThemeToggle() {
             const isLight = document.body.classList.contains('light-mode');
             localStorage.setItem('cortex_theme', isLight ? 'light' : 'dark');
             refreshChartTheme();
+            // Swap biometric device chip icons for the new theme
+            document.querySelectorAll('.bio-device-chip-icon[data-src-dark]').forEach(img => {
+                img.src = isLight ? img.dataset.srcLight : img.dataset.srcDark;
+            });
         });
     }
 }
@@ -5085,11 +5795,9 @@ function buildInterventionSystemPrompt(userGoal, curvesData) {
 }
 
 async function callInterventionModel(prompt, curvesData) {
-    const provider = AppState.selectedLLM;
-    const key = AppState.apiKeys[provider];
+    const { model, provider, key } = getStageModel('intervention');
     if (!key) throw new Error(`No API key configured for ${provider}. Add one in Settings.`);
 
-    const model = MAIN_MODELS[provider];
     const systemPrompt = buildInterventionSystemPrompt(prompt, curvesData);
     const userPrompt = 'Analyze the baseline vs desired curves and prescribe the optimal supplement intervention protocol. Respond with JSON only.';
 
@@ -5146,6 +5854,95 @@ async function callInterventionModel(prompt, curvesData) {
     }
 }
 
+// ============================================
+// REVISION MODEL — Biometric-Informed Re-evaluation
+// ============================================
+
+function buildBiometricSummary() {
+    const channels = BiometricState.channels;
+    if (!channels || channels.length === 0) return 'No biometric data available.';
+    return channels.map(ch => {
+        const data = ch.data || [];
+        const hourly = data.filter((_, i) => i % 4 === 0);
+        const values = hourly.map(p => `${p.hour}h:${Math.round(p.value)}`).join(', ');
+        return `${ch.metric || ch.displayName || ch.signal} (${ch.unit}): [${values}]`;
+    }).join('\n');
+}
+
+function buildRevisionSystemPrompt(userGoal, curvesData) {
+    const active = getActiveSubstances();
+    const substanceList = Object.entries(active).map(([key, s]) => ({
+        key, name: s.name, class: s.class, standardDose: s.standardDose, pharma: s.pharma,
+    }));
+    const curveSummary = curvesData.map(c => ({
+        effect: c.effect, polarity: c.polarity || 'higher_is_better',
+        baseline: (c.baseline || []).filter((_, i) => i % 4 === 0),
+        desired: (c.desired || []).filter((_, i) => i % 4 === 0),
+    }));
+    const originalInterventions = PhaseState.interventionResult
+        ? JSON.stringify(PhaseState.interventionResult.interventions, null, 1)
+        : '[]';
+    return interpolatePrompt(PROMPTS.revision, {
+        userGoal,
+        originalInterventions,
+        biometricSummary: buildBiometricSummary(),
+        curveSummary: JSON.stringify(curveSummary),
+        substanceList: JSON.stringify(substanceList),
+    });
+}
+
+async function callRevisionModel(userGoal, curvesData) {
+    const { model, provider, key } = getStageModel('revision');
+    if (!key) throw new Error(`No API key configured for ${provider}.`);
+
+    const systemPrompt = buildRevisionSystemPrompt(userGoal, curvesData);
+    const userPrompt = 'Revise the intervention protocol based on the biometric feedback. Respond with JSON only.';
+
+    const debugEntry = DebugLog.addEntry({
+        stage: 'Revision Model', stageClass: 'revision-model',
+        model, systemPrompt, userPrompt, loading: true,
+    });
+
+    const startTime = performance.now();
+
+    try {
+        let result;
+        switch (provider) {
+            case 'anthropic':
+                result = await callAnthropicGeneric(userPrompt, key, model, systemPrompt, 4096);
+                break;
+            case 'openai':
+                result = await callOpenAIGeneric(userPrompt, key, model, API_ENDPOINTS.openai, systemPrompt, 4096);
+                break;
+            case 'grok':
+                result = await callOpenAIGeneric(userPrompt, key, model, API_ENDPOINTS.grok, systemPrompt, 4096);
+                break;
+            case 'gemini':
+                result = await callGeminiGeneric(userPrompt, key, model, systemPrompt, 4096);
+                break;
+        }
+
+        const requestBody = result._requestBody;
+        const rawResponse = result._rawResponse;
+        delete result._requestBody;
+        delete result._rawResponse;
+
+        DebugLog.updateEntry(debugEntry, {
+            loading: false, requestBody, rawResponse,
+            response: result,
+            duration: Math.round(performance.now() - startTime),
+        });
+
+        return result;
+    } catch (err) {
+        DebugLog.updateEntry(debugEntry, {
+            loading: false, error: err.message || String(err),
+            duration: Math.round(performance.now() - startTime),
+        });
+        throw err;
+    }
+}
+
 function guessDose(substance) {
     // Prefer the standardDose from the new database
     if (substance.standardDose) return substance.standardDose;
@@ -5186,14 +5983,14 @@ function validateInterventions(interventions, curvesData) {
             }
             if (bestKey) {
                 const idx = curvesData.findIndex(c =>
-                    c.effect && c.effect.toLowerCase() === bestKey.toLowerCase());
+                    c.effect && matchImpactToCurve({ [bestKey]: 1 }, c.effect) !== 0);
                 iv.targetCurveIdx = idx >= 0 ? idx : null;
             }
         }
         // Legacy fallback: single targetEffect string
         if (iv.targetCurveIdx == null && curvesData && iv.targetEffect) {
             const idx = curvesData.findIndex(c =>
-                c.effect && c.effect.toLowerCase() === iv.targetEffect.toLowerCase());
+                c.effect && matchImpactToCurve({ [iv.targetEffect]: 1 }, c.effect) !== 0);
             iv.targetCurveIdx = idx >= 0 ? idx : null;
         }
         if (iv.targetCurveIdx == null && curvesData) {
@@ -5237,6 +6034,34 @@ function mapSubstanceToEffectAxis(substanceKey, curvesData) {
     return mapping.length > 0 ? mapping : [0];
 }
 
+/**
+ * Fuzzy-match an impact key from the LLM to a curve effect name.
+ * Handles exact match, substring containment, and word overlap.
+ * Returns the impact value if matched, 0 otherwise.
+ */
+function matchImpactToCurve(impacts, curveName) {
+    if (!impacts || typeof impacts !== 'object') return 0;
+    const cn = curveName.toLowerCase().trim();
+    const cnWords = cn.split(/\s+/);
+
+    // Pass 1: exact match
+    for (const [key, vec] of Object.entries(impacts)) {
+        if (key.toLowerCase().trim() === cn) return vec;
+    }
+    // Pass 2: substring containment (either direction)
+    for (const [key, vec] of Object.entries(impacts)) {
+        const kn = key.toLowerCase().trim();
+        if (cn.includes(kn) || kn.includes(cn)) return vec;
+    }
+    // Pass 3: any significant word overlap (ignore short words)
+    for (const [key, vec] of Object.entries(impacts)) {
+        const kWords = key.toLowerCase().trim().split(/\s+/);
+        const overlap = kWords.filter(w => w.length > 3 && cnWords.some(cw => cw.length > 3 && (cw.includes(w) || w.includes(cw))));
+        if (overlap.length > 0) return vec;
+    }
+    return 0;
+}
+
 function computeLxOverlay(interventions, curvesData) {
     const lxCurves = curvesData.map(curve => {
         const blSmoothed = smoothPhaseValues(curve.baseline, PHASE_SMOOTH_PASSES);
@@ -5267,6 +6092,20 @@ function computeLxOverlay(interventions, curvesData) {
         const points = [];
         let maxRawEffect = 0;
 
+        // Diagnostic: log which interventions match this curve
+        const matchLog = interventions.map(iv => {
+            if (!iv.impacts || typeof iv.impacts !== 'object') return null;
+            const val = matchImpactToCurve(iv.impacts, curveName);
+            if (val === 0) return null;
+            return `${iv.key}(${JSON.stringify(iv.impacts)}) → ${val}`;
+        }).filter(Boolean);
+        if (matchLog.length > 0) {
+            console.log(`[Lx] Curve "${curveName}" matched:`, matchLog);
+        } else {
+            console.warn(`[Lx] Curve "${curveName}" — NO interventions matched. Impacts:`,
+                interventions.map(iv => ({ key: iv.key, impacts: iv.impacts })));
+        }
+
         for (let j = 0; j < lx.baseline.length; j++) {
             const hourVal = lx.baseline[j].hour;
             const sampleMin = hourVal * 60;
@@ -5276,15 +6115,9 @@ function computeLxOverlay(interventions, curvesData) {
                 const sub = iv.substance;
                 if (!sub || !sub.pharma) continue;
 
-                // Multi-vector: check impacts dictionary
+                // Multi-vector: check impacts dictionary with fuzzy matching
                 if (iv.impacts && typeof iv.impacts === 'object') {
-                    let impactValue = 0;
-                    for (const [effectKey, vec] of Object.entries(iv.impacts)) {
-                        if (effectKey.toLowerCase() === curveName) {
-                            impactValue = vec;
-                            break;
-                        }
-                    }
+                    const impactValue = matchImpactToCurve(iv.impacts, curveName);
                     if (impactValue === 0) continue;
 
                     const baseWave = substanceEffectAt(sampleMin - iv.timeMinutes, sub.pharma);
@@ -5358,16 +6191,10 @@ function computeIncrementalLxOverlay(interventions, curvesData) {
     function ivRawEffect(iv, curveIdx, sampleMin) {
         const sub = iv.substance;
         if (!sub || !sub.pharma) return 0;
-        const curveName = (curvesData[curveIdx].effect || '').toLowerCase();
+        const curveName = (curvesData[curveIdx].effect || '');
 
         if (iv.impacts && typeof iv.impacts === 'object') {
-            let impactValue = 0;
-            for (const [effectKey, vec] of Object.entries(iv.impacts)) {
-                if (effectKey.toLowerCase() === curveName) {
-                    impactValue = vec;
-                    break;
-                }
-            }
+            const impactValue = matchImpactToCurve(iv.impacts, curveName);
             if (impactValue === 0) return 0;
             const baseWave = substanceEffectAt(sampleMin - iv.timeMinutes, sub.pharma);
             return baseWave * (iv.doseMultiplier || 1.0) * impactValue;
@@ -5631,7 +6458,9 @@ function showDraggablePlayhead(lxCurves, curvesData) {
 
     const curveAnimData = lxCurves.map((lx, i) => ({
         desiredPts: lx.desired,
-        lxSmoothed: smoothPhaseValues(lx.points, PHASE_SMOOTH_PASSES),
+        // lx.points is already produced from a smoothed baseline; avoid re-smoothing
+        // here because it can attenuate early-step peaks below baseline.
+        lxSmoothed: (lx.points || []).map(p => ({ ...p })),
         strokeEl: strokePaths[i] || null,
         fillEl: fillPaths[i] || null,
     }));
@@ -5680,7 +6509,7 @@ function animatePlayheadMorph(lxCurves, curvesData) {
 
         const curveAnimData = lxCurves.map((lx, i) => ({
             desiredPts: lx.desired,
-            lxSmoothed: smoothPhaseValues(lx.points, PHASE_SMOOTH_PASSES),
+            lxSmoothed: (lx.points || []).map(p => ({ ...p })),
             strokeEl: strokePaths[i] || null,
             fillEl: fillPaths[i] || null,
         }));
@@ -5750,7 +6579,7 @@ function quickMorphDesiredToLx(lxCurves, curvesData, durationMs) {
 
         const perCurve = lxCurves.map((lx, i) => ({
             desiredPts: lx.desired,
-            lxSmoothed: smoothPhaseValues(lx.points, PHASE_SMOOTH_PASSES),
+            lxSmoothed: (lx.points || []).map(p => ({ ...p })),
             strokeEl: strokePaths[i] || null,
             fillEl: fillPaths[i] || null,
         }));
@@ -5826,7 +6655,7 @@ function quickMorphLxToDesired(lxCurves, curvesData, durationMs) {
 
         const perCurve = lxCurves.map((lx, i) => ({
             desiredPts: lx.desired,
-            lxSmoothed: smoothPhaseValues(lx.points, PHASE_SMOOTH_PASSES),
+            lxSmoothed: (lx.points || []).map(p => ({ ...p })),
             strokeEl: strokePaths[i] || null,
             fillEl: fillPaths[i] || null,
         }));
@@ -5927,13 +6756,39 @@ async function animateLxReveal(lxCurves, curvesData, interventions) {
 
 const TIMELINE_ZONE = {
     separatorY: 454,   // thin line just below plot area
-    top: 457,          // first track starts here
-    laneH: 20,
-    laneGap: 1,
-    pillRx: 3,
-    minBarW: 40,
-    bottomPad: 6,
+    top: 460,          // first track starts here
+    laneH: 28,
+    laneGap: 4,
+    pillRx: 6,
+    minBarW: 58,
+    bottomPad: 10,
 };
+
+const BIOMETRIC_ZONE = {
+    separatorPad: 8,
+    laneH: 16,
+    laneGap: 1,
+    labelWidth: 58,
+    bottomPad: 8,
+};
+
+/**
+ * After timeline re-render, re-render biometric strips if they exist.
+ * This preserves strip visibility when renderSubstanceTimeline() resets the viewBox.
+ */
+function preserveBiometricStrips() {
+    const channels = BiometricState.channels;
+    if (!channels || channels.length === 0) return;
+    const bioGroup = document.getElementById('phase-biometric-strips');
+    if (!bioGroup || bioGroup.children.length === 0) return;
+
+    // Clear old bio clip-paths from defs
+    const svg = document.getElementById('phase-chart-svg');
+    if (svg) svg.querySelectorAll('defs [id^="bio-clip-"]').forEach(el => el.remove());
+
+    // Re-render at correct position (instant = true, no clip animation)
+    renderBiometricStrips(channels, true);
+}
 
 /** Toggle desired curves to dashed/dim when Lx takes over */
 function transmuteDesiredCurves(transmute) {
@@ -6090,7 +6945,11 @@ function renderSubstanceTimeline(interventions, lxCurves, curvesData) {
         const h = TIMELINE_ZONE.laneH;
         const rx = TIMELINE_ZONE.pillRx;
 
-        const pillG = svgEl('g', { class: 'timeline-pill-group', opacity: '0' });
+        const pillG = svgEl('g', {
+            class: 'timeline-pill-group', opacity: '0',
+            'data-substance-key': iv.key,
+            'data-time-minutes': String(iv.timeMinutes),
+        });
 
         // SVG tooltip (hover title)
         if (sub) {
@@ -6152,8 +7011,8 @@ function renderSubstanceTimeline(interventions, lxCurves, curvesData) {
             x: x1.toFixed(1), y: y.toFixed(1),
             width: barW.toFixed(1), height: String(h),
             rx: String(rx), ry: String(rx),
-            fill: color, 'fill-opacity': '0.22',
-            stroke: color, 'stroke-opacity': '0.45', 'stroke-width': '0.75',
+            fill: color, 'fill-opacity': '0.30',
+            stroke: color, 'stroke-opacity': '0.60', 'stroke-width': '1',
             class: 'timeline-bar',
         }));
 
@@ -6164,8 +7023,8 @@ function renderSubstanceTimeline(interventions, lxCurves, curvesData) {
         const conf = sub ? (sub.dataConfidence || '') : '';
         const warnIcon = (conf.toLowerCase() === 'estimated' || conf.toLowerCase() === 'medium') ? ' \u26A0\uFE0F' : '';
         const label = svgEl('text', {
-            x: (x1 + 5).toFixed(1),
-            y: (y + h / 2 + 3).toFixed(1),
+            x: (x1 + 7).toFixed(1),
+            y: (y + h / 2 + 4).toFixed(1),
             class: 'timeline-bar-label',
         });
         label.textContent = dose ? `${name} ${dose}${warnIcon}` : `${name}${warnIcon}`;
@@ -6173,6 +7032,15 @@ function renderSubstanceTimeline(interventions, lxCurves, curvesData) {
         pillG.appendChild(contentG);
 
         group.appendChild(pillG);
+    });
+}
+
+/** Instantly show all timeline pills (used after re-render outside initial sequential flow) */
+function revealTimelinePillsInstant() {
+    const group = document.getElementById('phase-substance-timeline');
+    if (!group) return;
+    group.querySelectorAll('.timeline-pill-group').forEach(pill => {
+        pill.setAttribute('opacity', '1');
     });
 }
 
@@ -6338,7 +7206,11 @@ async function animateSequentialLxReveal(snapshots, interventions, curvesData) {
         const h = TIMELINE_ZONE.laneH;
         const rx = TIMELINE_ZONE.pillRx;
 
-        const pillG = svgEl('g', { class: 'timeline-pill-group', opacity: '0' });
+        const pillG = svgEl('g', {
+            class: 'timeline-pill-group', opacity: '0',
+            'data-substance-key': iv.key,
+            'data-time-minutes': String(iv.timeMinutes),
+        });
 
         // SVG tooltip (hover title)
         if (sub) {
@@ -6378,18 +7250,18 @@ async function animateSequentialLxReveal(snapshots, interventions, curvesData) {
         pillG.appendChild(svgEl('rect', {
             x: x1.toFixed(1), y: y.toFixed(1),
             width: barW.toFixed(1), height: String(h),
-            rx: String(rx), fill: color, 'fill-opacity': '0.18',
-            stroke: color, 'stroke-opacity': '0.35', 'stroke-width': '0.75',
+            rx: String(rx), fill: color, 'fill-opacity': '0.30',
+            stroke: color, 'stroke-opacity': '0.60', 'stroke-width': '1',
         }));
 
         const conf = sub ? (sub.dataConfidence || '') : '';
         const warnIcon = (conf.toLowerCase() === 'estimated' || conf.toLowerCase() === 'medium') ? ' \u26A0\uFE0F' : '';
         const labelText = `${sub?.name || iv.key}  ${iv.dose || (sub?.standardDose || '')}${warnIcon}`;
         pillG.appendChild(svgEl('text', {
-            x: (x1 + 6).toFixed(1),
-            y: (y + h / 2 + 3.5).toFixed(1),
+            x: (x1 + 7).toFixed(1),
+            y: (y + h / 2 + 4).toFixed(1),
             class: 'timeline-bar-label',
-            fill: color, 'font-size': '9',
+            fill: color,
         })).textContent = labelText;
 
         timelineGroup.appendChild(pillG);
@@ -6401,7 +7273,7 @@ async function animateSequentialLxReveal(snapshots, interventions, curvesData) {
         const snapshot = snapshots[k];
         const step = snapshot.step;
         const targetPts = snapshot.lxCurves.map(lx =>
-            smoothPhaseValues(lx.points, PHASE_SMOOTH_PASSES)
+            (lx.points || []).map(p => ({ ...p }))
         );
 
         // 1. Show substance label
@@ -6520,16 +7392,16 @@ async function animateSequentialLxReveal(snapshots, interventions, curvesData) {
     dots.forEach(dot => {
         const ci = parseInt(dot.getAttribute('data-curve-idx'));
         const tH = parseFloat(dot.getAttribute('data-time-h'));
-        const lxSmoothed = smoothPhaseValues(finalLxCurves[ci]?.points || [], PHASE_SMOOTH_PASSES);
-        const val = interpolatePointsAtTime(lxSmoothed, tH);
+        const lxPts = finalLxCurves[ci]?.points || [];
+        const val = interpolatePointsAtTime(lxPts, tH);
         dot.setAttribute('cy', phaseChartY(val).toFixed(1));
     });
 
     connectors.forEach(conn => {
         const ci = parseInt(conn.getAttribute('data-curve-idx'));
         const tH = parseFloat(conn.getAttribute('data-time-h'));
-        const lxSmoothed = smoothPhaseValues(finalLxCurves[ci]?.points || [], PHASE_SMOOTH_PASSES);
-        const val = interpolatePointsAtTime(lxSmoothed, tH);
+        const lxPts = finalLxCurves[ci]?.points || [];
+        const val = interpolatePointsAtTime(lxPts, tH);
         conn.setAttribute('y1', phaseChartY(val).toFixed(1));
     });
 
@@ -6569,11 +7441,18 @@ async function handleLxPhase(curvesData) {
         document.getElementById('phase-lx-btn').addEventListener('click', async () => {
             hideLxButton();
 
+            // Start timeline scan line while waiting for intervention model
+            startTimelineScanLine(3);
+
             // Await intervention result (likely already cached from background call)
             let interventionData = PhaseState.interventionResult;
             if (!interventionData && PhaseState.interventionPromise) {
                 interventionData = await PhaseState.interventionPromise;
             }
+
+            // Stop scan line — LLM has returned
+            stopTimelineScanLine();
+
             if (!interventionData) {
                 console.error('[Lx] No intervention data — model call failed or no API key.');
                 resolve();
@@ -6600,7 +7479,1561 @@ async function handleLxPhase(curvesData) {
             PhaseState.maxPhaseReached = 2;
             PhaseState.viewingPhase = 2;
             updateStepButtons();
-            DebugLog.exportToFile();
+
+            // Show biometric trigger after Lx completes
+            await sleep(600);
+            showBiometricTrigger();
+
+            resolve();
+        }, { once: true });
+    });
+}
+
+// ============================================
+// 25. BIOMETRIC LOOP — Trigger, Flow, LLM, Rendering
+// ============================================
+
+/**
+ * Position biometric HTML elements right below the SVG's rendered box.
+ * Returns the top offset (px) relative to the chart container.
+ */
+function getBiometricTopOffset() {
+    const svg = document.getElementById('phase-chart-svg');
+    if (!svg) return 0;
+    const container = svg.closest('.phase-chart-container');
+    if (!container) return svg.clientHeight;
+    return svg.getBoundingClientRect().bottom - container.getBoundingClientRect().top;
+}
+
+/**
+ * Show the red "+" trigger button just below the SVG.
+ */
+function showBiometricTrigger() {
+    const wrap = document.getElementById('biometric-trigger-wrap');
+    if (!wrap) return;
+
+    // Position right below the SVG
+    wrap.style.top = getBiometricTopOffset() + 'px';
+    wrap.classList.remove('hidden');
+
+    const btn = document.getElementById('bio-trigger-btn');
+    // Remove old listener by cloning
+    const fresh = btn.cloneNode(true);
+    btn.parentNode.replaceChild(fresh, btn);
+
+    fresh.addEventListener('click', () => {
+        wrap.classList.add('hidden');
+        initBiometricFlow();
+    }, { once: true });
+}
+
+function hideBiometricTrigger() {
+    const wrap = document.getElementById('biometric-trigger-wrap');
+    if (wrap) wrap.classList.add('hidden');
+}
+
+/**
+ * Build a contextual default profile placeholder based on the user's goal
+ * and the prescribed intervention protocol. Designed to create biometric
+ * patterns that produce interesting revision-model adjustments.
+ */
+function buildContextualProfilePlaceholder() {
+    const userGoal = (document.getElementById('prompt-input').value || '').trim().toLowerCase();
+    const interventions = PhaseState.interventionResult?.interventions || [];
+    const keys = interventions.map(iv => (iv.key || '').toLowerCase());
+
+    // Detect substance categories present
+    const hasCaffeine = keys.some(k => k.includes('caffeine') || k.includes('theacrine') || k.includes('dynamine'));
+    const hasSleepAid = keys.some(k => k.includes('melatonin') || k.includes('glycine') || k.includes('magnesium') || k.includes('gaba'));
+    const hasStimulant = keys.some(k => k.includes('modafinil') || k.includes('methylphenidate') || k.includes('adderall'));
+    const hasAdaptogen = keys.some(k => k.includes('ashwagandha') || k.includes('rhodiola') || k.includes('theanine'));
+    const hasNootropic = keys.some(k => k.includes('tyrosine') || k.includes('citicoline') || k.includes('lion'));
+
+    // Detect goal themes
+    const isFocus = /focus|concentrat|attention|productiv|work|study|deep\s*work/i.test(userGoal);
+    const isSleep = /sleep|rest|recover|insomnia|wind\s*down/i.test(userGoal);
+    const isEnergy = /energy|fatigue|tired|wake|alert|morning/i.test(userGoal);
+    const isAnxiety = /anxi|stress|calm|relax|tension/i.test(userGoal);
+    const isExercise = /exercis|workout|train|gym|run|athlet|performance|endurance/i.test(userGoal);
+
+    // Build profile fragments that create interesting biometric tensions
+    const fragments = [];
+
+    // Age/gender — random variety
+    const ages = ['28yo female', '35yo male', '42yo female', '31yo male', '38yo non-binary', '45yo male', '33yo female'];
+    fragments.push(ages[Math.floor(Math.random() * ages.length)]);
+
+    // Exercise timing — place it where it conflicts interestingly with substances
+    if (hasSleepAid || isSleep) {
+        fragments.push('evening HIIT at 19:30');
+    } else if (hasCaffeine || isFocus) {
+        fragments.push('morning run at 6:30');
+    } else if (isExercise) {
+        fragments.push('strength training at 17:00');
+    } else {
+        const exTimes = ['yoga at 7:00', 'cycling at 17:30', 'HIIT at 18:00', 'morning jog at 6:45'];
+        fragments.push(exTimes[Math.floor(Math.random() * exTimes.length)]);
+    }
+
+    // Caffeine sensitivity — creates revision pressure on stimulant doses
+    if (hasCaffeine || hasStimulant) {
+        fragments.push('moderate caffeine sensitivity');
+    }
+
+    // Sleep pattern — late sleeper + early substances = tension
+    if (isFocus || isEnergy) {
+        fragments.push('natural late sleeper (00:30–08:00)');
+    } else if (isSleep) {
+        fragments.push('light sleeper, wakes easily');
+    }
+
+    // Stress context — creates HRV/HR variation
+    if (isAnxiety || hasAdaptogen) {
+        fragments.push('high-stress job with back-to-back meetings 9–13');
+    } else if (isFocus || hasNootropic) {
+        fragments.push('deep work blocks 9–12 and 14–17');
+    }
+
+    // Meal timing — affects glucose, interacts with supplements
+    if (interventions.some(iv => (iv.timeMinutes || 0) < 480)) {
+        fragments.push('skips breakfast (IF until 12:00)');
+    } else {
+        fragments.push('meals at 8:00, 12:30, 19:00');
+    }
+
+    // Existing condition that adds biometric interest
+    if (isAnxiety) {
+        fragments.push('elevated resting HR (~78 bpm)');
+    } else if (isSleep) {
+        fragments.push('low baseline HRV (~35ms)');
+    } else if (isExercise) {
+        fragments.push('resting HR 52 bpm, VO2max 48');
+    }
+
+    return fragments.join(', ');
+}
+
+/**
+ * Initialize the biometric device selection flow.
+ * Slides down an inline strip below the SVG with device chips in a horizontal row.
+ */
+function initBiometricFlow() {
+    BiometricState.phase = 'selecting';
+    BiometricState.selectedDevices = [];
+
+    const stripUI = document.getElementById('biometric-strip-ui');
+    const deviceRow = document.getElementById('bio-device-row');
+    const profileRow = document.getElementById('bio-profile-row');
+    const scroll = document.getElementById('bio-device-scroll');
+    const goBtn = document.getElementById('bio-go-btn');
+
+    // Reset steps
+    deviceRow.classList.remove('hidden');
+    profileRow.classList.add('hidden');
+    goBtn.disabled = true;
+
+    // Populate horizontal device chips
+    scroll.innerHTML = '';
+    const devices = (typeof BIOMETRIC_DEVICES !== 'undefined') ? BIOMETRIC_DEVICES.devices : [];
+    const isLight = document.body.classList.contains('light-mode');
+    devices.forEach(dev => {
+        const chip = document.createElement('div');
+        chip.className = 'bio-device-chip';
+        chip.dataset.key = dev.key;
+
+        // Image-based icon (dark/light aware)
+        const icon = document.createElement('img');
+        icon.className = 'bio-device-chip-icon';
+        icon.src = isLight ? dev.iconLight : dev.iconDark;
+        icon.alt = dev.name;
+        icon.draggable = false;
+        // Store both paths for theme switching
+        icon.dataset.srcDark = dev.iconDark;
+        icon.dataset.srcLight = dev.iconLight;
+
+        const name = document.createElement('span');
+        name.className = 'bio-device-chip-name';
+        name.textContent = dev.name;
+
+        chip.appendChild(icon);
+        chip.appendChild(name);
+
+        chip.addEventListener('click', () => {
+            chip.classList.toggle('selected');
+            BiometricState.selectedDevices = Array.from(scroll.querySelectorAll('.bio-device-chip.selected'))
+                .map(c => c.dataset.key);
+            goBtn.disabled = BiometricState.selectedDevices.length === 0;
+        });
+
+        scroll.appendChild(chip);
+    });
+
+    // Position below the SVG and slide open the strip
+    stripUI.style.top = (getBiometricTopOffset() + 2) + 'px';
+    stripUI.classList.remove('hidden');
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => stripUI.classList.add('visible'));
+    });
+
+    // Go → switch to profile input with contextual placeholder
+    goBtn.onclick = () => {
+        BiometricState.phase = 'profiling';
+        deviceRow.classList.add('hidden');
+        profileRow.classList.remove('hidden');
+        const input = document.getElementById('bio-profile-input');
+        input.value = '';
+        input.placeholder = buildContextualProfilePlaceholder();
+        input.focus();
+    };
+
+    // Submit → close strip and execute pipeline
+    const submitBtn = document.getElementById('bio-submit-btn');
+    const handleSubmit = () => {
+        const input = document.getElementById('bio-profile-input');
+        BiometricState.profileText = input.value.trim() || input.placeholder;
+        // Collapse the strip
+        stripUI.classList.remove('visible');
+        setTimeout(() => stripUI.classList.add('hidden'), 400);
+        BiometricState.phase = 'loading';
+        executeBiometricPipeline();
+    };
+    submitBtn.onclick = handleSubmit;
+
+    document.getElementById('bio-profile-input').onkeydown = (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            handleSubmit();
+        }
+    };
+}
+
+/**
+ * Build the intervention summary string for the biometric prompt.
+ */
+function buildInterventionSummary() {
+    const result = PhaseState.interventionResult;
+    if (!result || !result.interventions) return 'No interventions prescribed.';
+    return result.interventions.map(iv => {
+        const h = Math.floor(iv.timeMinutes / 60);
+        const m = iv.timeMinutes % 60;
+        const time = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        return `${iv.key} ${iv.dose || ''} at ${time}`;
+    }).join('; ');
+}
+
+/**
+ * Build the channel spec from selected devices.
+ */
+function buildChannelSpec() {
+    const devices = (typeof BIOMETRIC_DEVICES !== 'undefined') ? BIOMETRIC_DEVICES.devices : [];
+    const channels = [];
+    const seen = new Set();
+
+    for (const devKey of BiometricState.selectedDevices) {
+        const dev = devices.find(d => d.key === devKey);
+        if (!dev) continue;
+        for (const ch of dev.displayChannels) {
+            // Tag with device for uniqueness when multiple devices share signals
+            const tag = `${devKey}:${ch.signal}`;
+            if (seen.has(tag)) continue;
+            seen.add(tag);
+            channels.push({
+                signal: ch.signal,
+                displayName: ch.displayName,
+                device: devKey,
+                deviceName: dev.name,
+                color: ch.color,
+                range: ch.range,
+                unit: ch.unit,
+                stripHeight: ch.stripHeight,
+            });
+        }
+    }
+    return channels;
+}
+
+/**
+ * Call the biometric LLM model (always claude-haiku-4-5 via Anthropic).
+ */
+async function callBiometricModel(channelSpec) {
+    const { model, provider, key } = getStageModel('biometric');
+    if (!key) throw new Error(`No API key configured for ${provider}. Add one in Settings.`);
+
+    // Slim curve summary — only include every 4th point to reduce prompt size
+    const curveSummary = PhaseState.curvesData ? PhaseState.curvesData.map(c => ({
+        effect: c.effect,
+        polarity: c.polarity || 'higher_is_better',
+        baseline: (c.baseline || []).filter((_, i) => i % 4 === 0),
+        desired: (c.desired || []).filter((_, i) => i % 4 === 0),
+    })) : [];
+
+    const systemPrompt = interpolatePrompt(PROMPTS.biometric, {
+        channelSpec: JSON.stringify(channelSpec),
+        profileText: BiometricState.profileText,
+        interventionSummary: buildInterventionSummary(),
+        curveSummary: JSON.stringify(curveSummary),
+    });
+
+    const userPrompt = 'Simulate the 24-hour biometric data for the specified channels. Respond with JSON only.';
+
+    const debugEntry = DebugLog.addEntry({
+        stage: 'Biometric Model', stageClass: 'biometric-model',
+        model,
+        systemPrompt,
+        userPrompt,
+        loading: true,
+    });
+
+    const startTime = performance.now();
+
+    try {
+        let result;
+        switch (provider) {
+            case 'anthropic':
+                result = await callAnthropicGeneric(userPrompt, key, model, systemPrompt, 16384);
+                break;
+            case 'openai':
+                result = await callOpenAIGeneric(userPrompt, key, model, API_ENDPOINTS.openai, systemPrompt, 16384);
+                break;
+            case 'grok':
+                result = await callOpenAIGeneric(userPrompt, key, model, API_ENDPOINTS.grok, systemPrompt, 16384);
+                break;
+            case 'gemini':
+                result = await callGeminiGeneric(userPrompt, key, model, systemPrompt, 16384);
+                break;
+        }
+        const requestBody = result._requestBody;
+        const rawResponse = result._rawResponse;
+        delete result._requestBody;
+        delete result._rawResponse;
+
+        const duration = Math.round(performance.now() - startTime);
+        DebugLog.updateEntry(debugEntry, {
+            loading: false,
+            duration,
+            requestBody,
+            rawResponse,
+            response: result,
+        });
+        return result;
+    } catch (err) {
+        const duration = Math.round(performance.now() - startTime);
+        DebugLog.updateEntry(debugEntry, {
+            loading: false,
+            duration,
+            error: err.message,
+        });
+        throw err;
+    }
+}
+
+/**
+ * Export biometric-specific debug log as a downloadable JSON file.
+ */
+function exportBiometricLog() {
+    const bioEntries = DebugLog.entries.filter(e => e.stageClass === 'biometric-model');
+    if (bioEntries.length === 0) return;
+
+    const payload = bioEntries.map(e => ({
+        stage:        e.stage,
+        stageClass:   e.stageClass,
+        model:        e.model || null,
+        duration:     e.duration || null,
+        timestamp:    e.timestamp,
+        systemPrompt: e.systemPrompt || null,
+        userPrompt:   e.userPrompt || null,
+        response:     e.response || null,
+        parsed:       e.parsed || null,
+        error:        e.error || null,
+    }));
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = 'cortex_loop_biometric_log.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    console.log('[BiometricLog] Exported', bioEntries.length, 'biometric entries to cortex_loop_biometric_log.json');
+}
+
+/**
+ * Orchestrate the full biometric pipeline: LLM call → parse → render strips.
+ */
+async function executeBiometricPipeline() {
+    const channelSpec = buildChannelSpec();
+
+    // Start red scan line in the biometric zone while LLM is working
+    startBioScanLine();
+
+    try {
+        const result = await callBiometricModel(channelSpec);
+
+        // Stop scan line before rendering strips
+        stopBioScanLine();
+        await sleep(420); // wait for fade-out to finish
+
+        if (!result || !Array.isArray(result.channels)) {
+            console.error('[Biometric] Invalid LLM response — missing channels array');
+            BiometricState.phase = 'idle';
+            return;
+        }
+
+        // Validate channels: skip any with missing/short data
+        const validChannels = result.channels.filter(ch =>
+            ch && ch.data && Array.isArray(ch.data) && ch.data.length >= 10 && ch.signal
+        );
+
+        if (validChannels.length === 0) {
+            console.error('[Biometric] No valid channels in LLM response');
+            BiometricState.phase = 'idle';
+            return;
+        }
+
+        // Merge LLM-returned colors/ranges with the spec if missing
+        for (const ch of validChannels) {
+            const spec = channelSpec.find(s => s.signal === ch.signal && s.device === ch.device);
+            if (spec) {
+                if (!ch.color) ch.color = spec.color;
+                if (!ch.range) ch.range = spec.range;
+                if (!ch.stripHeight) ch.stripHeight = spec.stripHeight;
+                if (!ch.unit) ch.unit = spec.unit;
+            }
+        }
+
+        BiometricState.biometricResult = result;
+        BiometricState.channels = validChannels;
+        BiometricState.phase = 'rendered';
+
+        renderBiometricStrips(validChannels);
+        await animateBiometricReveal(600);
+
+        PhaseState.phase = 'biometric-rendered';
+        PhaseState.maxPhaseReached = 3;
+        PhaseState.viewingPhase = 3;
+        updateStepButtons();
+
+
+
+        // Kick off revision phase (Phase 4)
+        await sleep(800);
+        handleRevisionPhase(PhaseState.curvesData);
+
+    } catch (err) {
+        stopBioScanLine();
+        console.error('[Biometric] Pipeline error:', err.message);
+        BiometricState.phase = 'idle';
+    }
+}
+
+/**
+ * Render biometric strips as oscilloscope-style waveforms below the substance timeline.
+ * @param {Array} channels - Biometric channel data
+ * @param {boolean} instant - If true, skip clip-path setup (strips appear immediately)
+ */
+function renderBiometricStrips(channels, instant) {
+    const group = document.getElementById('phase-biometric-strips');
+    if (!group) return;
+    group.innerHTML = '';
+
+    // Force red-shade palette on all channels regardless of LLM-returned colors
+    const redShades = (typeof BIO_RED_PALETTE !== 'undefined') ? BIO_RED_PALETTE
+        : ['#ff4d4d','#e03e3e','#c92a2a','#ff6b6b','#f76707','#d9480f','#ff8787','#e8590c','#fa5252','#b72b2b'];
+    channels.forEach((ch, i) => { ch.color = redShades[i % redShades.length]; });
+
+    const svg = document.getElementById('phase-chart-svg');
+    const defs = svg.querySelector('defs');
+    const currentVB = svg.getAttribute('viewBox').split(' ').map(Number);
+    let currentH = currentVB[3];
+
+    // Draw separator line
+    const sepY = currentH + BIOMETRIC_ZONE.separatorPad;
+    const sep = svgEl('line', {
+        x1: String(PHASE_CHART.padL), y1: String(sepY),
+        x2: String(PHASE_CHART.padL + PHASE_CHART.plotW), y2: String(sepY),
+        class: 'biometric-separator',
+    });
+    group.appendChild(sep);
+
+    let yOffset = sepY + BIOMETRIC_ZONE.separatorPad;
+    const laneStep = BIOMETRIC_ZONE.laneH + BIOMETRIC_ZONE.laneGap;
+
+    channels.forEach((ch, i) => {
+        const y = yOffset + i * laneStep;
+        const h = ch.stripHeight || BIOMETRIC_ZONE.laneH;
+
+        // Alternating lane background stripe
+        if (i % 2 === 0) {
+            const stripe = svgEl('rect', {
+                x: String(PHASE_CHART.padL), y: String(y),
+                width: String(PHASE_CHART.plotW), height: String(h),
+                fill: 'rgba(255, 255, 255, 0.015)',
+                rx: '1',
+            });
+            group.appendChild(stripe);
+        }
+
+        // Left-margin label
+        const label = svgEl('text', {
+            x: String(PHASE_CHART.padL - 4),
+            y: String(y + h / 2),
+            class: 'bio-strip-label',
+            fill: ch.color || 'rgba(238, 244, 255, 0.65)',
+            'text-anchor': 'end',
+        });
+        label.textContent = ch.metric || ch.displayName || ch.signal;
+        group.appendChild(label);
+
+        // Build waveform
+        const stripG = svgEl('g');
+        if (ch.signal === 'hr_bpm') stripG.classList.add('bio-strip-hr');
+
+        const { strokeD, fillD } = buildBiometricWaveformPath(ch.data, ch.range, y, h);
+
+        // Fill path (semi-transparent)
+        if (fillD) {
+            const fillPath = svgEl('path', {
+                d: fillD,
+                class: 'bio-strip-fill',
+                fill: ch.color || '#ff6b6b',
+            });
+            stripG.appendChild(fillPath);
+        }
+
+        // Stroke path
+        const strokePath = svgEl('path', {
+            d: strokeD,
+            class: 'bio-strip-path',
+            stroke: ch.color || '#ff6b6b',
+        });
+        stripG.appendChild(strokePath);
+
+        // Clip path for animation (skipped when instant re-render)
+        if (!instant) {
+            const clipId = `bio-clip-${i}`;
+            const clipPath = svgEl('clipPath', { id: clipId });
+            const clipRect = svgEl('rect', {
+                x: String(PHASE_CHART.padL), y: String(y - 2),
+                width: '0', height: String(h + 4),
+            });
+            clipPath.appendChild(clipRect);
+            defs.appendChild(clipPath);
+            stripG.setAttribute('clip-path', `url(#${clipId})`);
+            stripG.dataset.clipId = clipId;
+        }
+
+        group.appendChild(stripG);
+    });
+
+    // Expand viewBox to fit all strips
+    const totalH = yOffset + channels.length * laneStep + BIOMETRIC_ZONE.bottomPad;
+    svg.setAttribute('viewBox', `0 0 960 ${Math.max(currentH, totalH)}`);
+}
+
+/**
+ * Build SVG path data for a biometric waveform strip.
+ * Uses monotone cubic (Fritsch-Carlson) for smooth curves — same approach as phasePointsToPath.
+ */
+function buildBiometricWaveformPath(data, range, yTop, height) {
+    if (!data || data.length < 2) return { strokeD: '', fillD: '' };
+
+    const [rMin, rMax] = range || [0, 100];
+    const rSpan = rMax - rMin || 1;
+
+    // Map data to SVG coords
+    const coords = data.map(p => ({
+        x: phaseChartX(Number(p.hour) * 60),
+        y: yTop + height - ((Math.max(rMin, Math.min(rMax, Number(p.value))) - rMin) / rSpan) * height,
+    }));
+
+    // Monotone cubic interpolation (same as phasePointsToPath)
+    const n = coords.length;
+    if (n === 2) {
+        const strokeD = `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)} L ${coords[1].x.toFixed(1)} ${coords[1].y.toFixed(1)}`;
+        const baseY = yTop + height;
+        const fillD = strokeD + ` L ${coords[1].x.toFixed(1)} ${baseY.toFixed(1)} L ${coords[0].x.toFixed(1)} ${baseY.toFixed(1)} Z`;
+        return { strokeD, fillD };
+    }
+
+    const dx = new Array(n - 1);
+    const dy = new Array(n - 1);
+    const m = new Array(n - 1);
+    const t = new Array(n);
+
+    for (let i = 0; i < n - 1; i++) {
+        dx[i] = coords[i + 1].x - coords[i].x;
+        dy[i] = coords[i + 1].y - coords[i].y;
+        m[i] = dx[i] !== 0 ? dy[i] / dx[i] : 0;
+    }
+
+    t[0] = m[0];
+    t[n - 1] = m[n - 2];
+    for (let i = 1; i < n - 1; i++) {
+        if (m[i - 1] === 0 || m[i] === 0 || m[i - 1] * m[i] <= 0) {
+            t[i] = 0;
+        } else {
+            const w1 = 2 * dx[i] + dx[i - 1];
+            const w2 = dx[i] + 2 * dx[i - 1];
+            t[i] = (w1 + w2) / ((w1 / m[i - 1]) + (w2 / m[i]));
+        }
+    }
+
+    let strokeD = `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)}`;
+    for (let i = 0; i < n - 1; i++) {
+        const p0 = coords[i];
+        const p1 = coords[i + 1];
+        const h = dx[i];
+        const cp1x = p0.x + h / 3;
+        const cp1y = p0.y + (t[i] * h) / 3;
+        const cp2x = p1.x - h / 3;
+        const cp2y = p1.y - (t[i + 1] * h) / 3;
+        strokeD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p1.x.toFixed(1)} ${p1.y.toFixed(1)}`;
+    }
+
+    // Fill: close path along bottom
+    const baseY = yTop + height;
+    const fillD = strokeD
+        + ` L ${coords[n - 1].x.toFixed(1)} ${baseY.toFixed(1)}`
+        + ` L ${coords[0].x.toFixed(1)} ${baseY.toFixed(1)} Z`;
+
+    return { strokeD, fillD };
+}
+
+/**
+ * Animate biometric strips with staggered left-to-right clip-path reveal.
+ */
+async function animateBiometricReveal(duration) {
+    const group = document.getElementById('phase-biometric-strips');
+    if (!group) return;
+
+    const stripGroups = group.querySelectorAll('g[data-clip-id]');
+    const svg = document.getElementById('phase-chart-svg');
+    const defs = svg.querySelector('defs');
+    const stagger = 80;
+
+    const promises = Array.from(stripGroups).map((sg, i) => {
+        return new Promise(resolve => {
+            const clipId = sg.dataset.clipId;
+            const clip = defs.querySelector(`#${clipId}`);
+            if (!clip) { resolve(); return; }
+            const rect = clip.querySelector('rect');
+            if (!rect) { resolve(); return; }
+
+            const delay = i * stagger;
+
+            setTimeout(() => {
+                const startTime = performance.now();
+                (function animate() {
+                    const elapsed = performance.now() - startTime;
+                    const t = Math.min(1, elapsed / duration);
+                    const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+                    rect.setAttribute('width', String(PHASE_CHART.plotW * ease));
+                    if (t < 1) {
+                        requestAnimationFrame(animate);
+                    } else {
+                        // Remove clip after reveal
+                        sg.removeAttribute('clip-path');
+                        clip.remove();
+                        resolve();
+                    }
+                })();
+            }, delay);
+        });
+    });
+
+    await Promise.all(promises);
+}
+
+// ============================================
+// PHASE 4 — REVISION (Biometric-Informed Re-evaluation)
+// ============================================
+
+// ---- Intervention Play Button (amber/gold) ----
+
+function showInterventionPlayButton() {
+    let btn = document.getElementById('intervention-play-btn');
+    if (!btn) {
+        btn = document.createElement('button');
+        btn.id = 'intervention-play-btn';
+        btn.className = 'intervention-play-btn hidden';
+        btn.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg>';
+        document.querySelector('.phase-chart-container').appendChild(btn);
+    }
+    const svg = document.getElementById('phase-chart-svg');
+    const top = svg ? svg.clientHeight + 16 : getBiometricTopOffset() + 16;
+    btn.style.top = top + 'px';
+    btn.classList.remove('hidden', 'loading');
+    requestAnimationFrame(() => requestAnimationFrame(() => btn.classList.add('visible')));
+}
+
+function hideInterventionPlayButton() {
+    const btn = document.getElementById('intervention-play-btn');
+    if (!btn) return;
+    btn.classList.remove('visible');
+    setTimeout(() => btn.classList.add('hidden'), 500);
+}
+
+// ---- Revision Play Button (red) ----
+
+function showRevisionPlayButton() {
+    let btn = document.getElementById('revision-play-btn');
+    if (!btn) {
+        btn = document.createElement('button');
+        btn.id = 'revision-play-btn';
+        btn.className = 'revision-play-btn hidden';
+        btn.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg>';
+        document.querySelector('.phase-chart-container').appendChild(btn);
+    }
+    // Use SVG rendered height for positioning (more reliable than getBoundingClientRect)
+    const svg = document.getElementById('phase-chart-svg');
+    const top = svg ? svg.clientHeight + 16 : getBiometricTopOffset() + 16;
+    btn.style.top = top + 'px';
+    btn.classList.remove('hidden');
+    btn.classList.add('loading');
+    requestAnimationFrame(() => requestAnimationFrame(() => btn.classList.add('visible')));
+}
+
+function hideRevisionPlayButton() {
+    const btn = document.getElementById('revision-play-btn');
+    if (!btn) return;
+    btn.classList.remove('visible');
+    setTimeout(() => { btn.classList.add('hidden'); btn.classList.remove('loading'); }, 500);
+}
+
+function setRevisionPlayReady() {
+    const btn = document.getElementById('revision-play-btn');
+    if (btn) btn.classList.remove('loading');
+}
+
+// ---- Diffing Logic ----
+
+function diffInterventions(oldIvs, newIvs) {
+    const diff = [];
+    const matched = new Set();
+    const usedNew = new Set();
+
+    // Pass 1: Match by substance key
+    for (let oi = 0; oi < oldIvs.length; oi++) {
+        for (let ni = 0; ni < newIvs.length; ni++) {
+            if (usedNew.has(ni)) continue;
+            if (oldIvs[oi].key === newIvs[ni].key) {
+                const timeDelta = Math.abs(oldIvs[oi].timeMinutes - newIvs[ni].timeMinutes);
+                const doseDiff = oldIvs[oi].dose !== newIvs[ni].dose
+                    || (oldIvs[oi].doseMultiplier || 1) !== (newIvs[ni].doseMultiplier || 1);
+                if (timeDelta > 15 || doseDiff) {
+                    diff.push({ type: timeDelta > 15 ? 'moved' : 'resized', oldIv: oldIvs[oi], newIv: newIvs[ni] });
+                }
+                // else unchanged — no animation needed
+                matched.add(oi);
+                usedNew.add(ni);
+                break;
+            }
+        }
+    }
+
+    // Pass 2: Unmatched old → replacement or removal
+    for (let oi = 0; oi < oldIvs.length; oi++) {
+        if (matched.has(oi)) continue;
+        let bestNi = -1, bestDelta = Infinity;
+        for (let ni = 0; ni < newIvs.length; ni++) {
+            if (usedNew.has(ni)) continue;
+            const delta = Math.abs(oldIvs[oi].timeMinutes - newIvs[ni].timeMinutes);
+            if (delta < 60 && delta < bestDelta) { bestDelta = delta; bestNi = ni; }
+        }
+        if (bestNi >= 0) {
+            diff.push({ type: 'replaced', oldIv: oldIvs[oi], newIv: newIvs[bestNi] });
+            matched.add(oi);
+            usedNew.add(bestNi);
+        } else {
+            diff.push({ type: 'removed', oldIv: oldIvs[oi], newIv: null });
+            matched.add(oi);
+        }
+    }
+
+    // Pass 3: Unmatched new → additions
+    for (let ni = 0; ni < newIvs.length; ni++) {
+        if (usedNew.has(ni)) continue;
+        diff.push({ type: 'added', oldIv: null, newIv: newIvs[ni] });
+    }
+
+    // Sort chronologically by the relevant intervention's time
+    diff.sort((a, b) => {
+        const tA = (a.oldIv || a.newIv).timeMinutes;
+        const tB = (b.oldIv || b.newIv).timeMinutes;
+        return tA - tB;
+    });
+    return diff;
+}
+
+// ---- Pill Matching ----
+
+function findPillByIntervention(iv, timelineGroup) {
+    // Match by data-substance-key AND data-time-minutes proximity
+    const candidates = timelineGroup.querySelectorAll(
+        `.timeline-pill-group[data-substance-key="${iv.key}"]`
+    );
+    if (candidates.length === 1) return candidates[0];
+    if (candidates.length > 1) {
+        // Multiple pills with same key — match by closest time
+        let best = null, bestDelta = Infinity;
+        for (const c of candidates) {
+            const t = parseInt(c.getAttribute('data-time-minutes') || '0');
+            const delta = Math.abs(t - iv.timeMinutes);
+            if (delta < bestDelta) { bestDelta = delta; best = c; }
+        }
+        if (best) return best;
+    }
+
+    // Fallback: match by name text + X proximity
+    const name = iv.substance?.name || iv.key;
+    const targetX = phaseChartX(iv.timeMinutes);
+    const pills = timelineGroup.querySelectorAll('.timeline-pill-group');
+    for (const pill of pills) {
+        const label = pill.querySelector('.timeline-bar-label');
+        if (!label) continue;
+        const labelText = label.textContent || '';
+        if (!labelText.toLowerCase().includes(name.toLowerCase())) continue;
+        const bar = pill.querySelector('rect[rx]') || pill.querySelector('.timeline-bar');
+        if (bar && Math.abs(parseFloat(bar.getAttribute('x')) - targetX) < 30) return pill;
+    }
+    console.warn('[Revision] Could not find pill for:', iv.key, '@', iv.timeMinutes, 'min');
+    return null;
+}
+
+// ---- SVG Animation Helper ----
+// rAF-based interpolation for SVG attributes (more reliable than WAAPI on SVG)
+
+function animateSvgTransform(el, fromTx, fromTy, toTx, toTy, duration, easing) {
+    const start = performance.now();
+    const ease = easing === 'ease-in'
+        ? t => t * t
+        : easing === 'ease-out'
+        ? t => 1 - (1 - t) * (1 - t)
+        : t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // ease-in-out
+    return new Promise(resolve => {
+        (function tick(now) {
+            const rawT = Math.min(1, (now - start) / duration);
+            const t = ease(rawT);
+            const tx = fromTx + (toTx - fromTx) * t;
+            const ty = fromTy + (toTy - fromTy) * t;
+            el.setAttribute('transform', `translate(${tx.toFixed(1)},${ty.toFixed(1)})`);
+            if (rawT < 1) requestAnimationFrame(tick);
+            else resolve();
+        })(performance.now());
+    });
+}
+
+function animateSvgOpacity(el, from, to, duration) {
+    const start = performance.now();
+    return new Promise(resolve => {
+        (function tick(now) {
+            const t = Math.min(1, (now - start) / duration);
+            const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+            el.setAttribute('opacity', String(from + (to - from) * ease));
+            if (t < 1) requestAnimationFrame(tick);
+            else resolve();
+        })(performance.now());
+    });
+}
+
+function animateSvgWidth(el, fromW, toW, duration) {
+    const start = performance.now();
+    return new Promise(resolve => {
+        (function tick(now) {
+            const t = Math.min(1, (now - start) / duration);
+            const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+            el.setAttribute('width', String(fromW + (toW - fromW) * ease));
+            if (t < 1) requestAnimationFrame(tick);
+            else resolve();
+        })(performance.now());
+    });
+}
+
+// ---- Individual Pill Animations ----
+// All animations receive a `targetLayout` map: key+time → {x, y, w, laneIdx}
+
+function animatePillMove(trigger, timelineGroup, targetLayout) {
+    const pill = findPillByIntervention(trigger.oldIv, timelineGroup);
+    if (!pill) { console.warn('[Revision] Move: pill not found for', trigger.oldIv.key); return; }
+
+    const target = targetLayout.get(layoutKey(trigger.newIv));
+    const bar = pill.querySelector('rect[rx]') || pill.querySelector('.timeline-bar');
+    if (!bar) return;
+
+    const oldX = parseFloat(bar.getAttribute('x'));
+    const oldY = parseFloat(bar.getAttribute('y'));
+    const deltaX = target ? target.x - oldX : phaseChartX(trigger.newIv.timeMinutes) - oldX;
+    const deltaY = target ? target.y - oldY : 0;
+
+    console.log('[Revision] MOVE:', trigger.oldIv.key, `dx=${deltaX.toFixed(0)} dy=${deltaY.toFixed(0)}`);
+
+    pill.setAttribute('opacity', '1');
+    animateSvgTransform(pill, 0, 0, deltaX, deltaY, 800, 'ease-in-out');
+
+    // Also update bar width + label for any dose change
+    if (target) {
+        const oldW = parseFloat(bar.getAttribute('width'));
+        if (Math.abs(target.w - oldW) > 2) {
+            animateSvgWidth(bar, oldW, target.w, 800);
+        }
+    }
+    const label = pill.querySelector('.timeline-bar-label');
+    if (label) {
+        const name = trigger.newIv.substance?.name || trigger.newIv.key;
+        label.textContent = `${name} ${trigger.newIv.dose || ''}`;
+    }
+    pill.setAttribute('data-time-minutes', String(trigger.newIv.timeMinutes));
+}
+
+function animatePillResize(trigger, timelineGroup, targetLayout) {
+    const pill = findPillByIntervention(trigger.oldIv, timelineGroup);
+    if (!pill) { console.warn('[Revision] Resize: pill not found for', trigger.oldIv.key); return; }
+
+    const target = targetLayout.get(layoutKey(trigger.newIv));
+    const bar = pill.querySelector('rect[rx]') || pill.querySelector('.timeline-bar');
+    if (!bar) return;
+
+    const oldW = parseFloat(bar.getAttribute('width'));
+    const newW = target ? target.w : oldW;
+    const oldY = parseFloat(bar.getAttribute('y'));
+    const deltaY = target ? target.y - oldY : 0;
+
+    console.log('[Revision] RESIZE:', trigger.oldIv.key, trigger.oldIv.dose, '→', trigger.newIv.dose,
+        `dw=${(newW - oldW).toFixed(0)} dy=${deltaY.toFixed(0)}`);
+
+    // Animate bar width + lane change
+    if (Math.abs(newW - oldW) > 2) animateSvgWidth(bar, oldW, newW, 600);
+    if (Math.abs(deltaY) > 1) animateSvgTransform(pill, 0, 0, 0, deltaY, 600, 'ease-in-out');
+
+    // Flash effect: brief opacity pulse to make dose change visible
+    animateSvgOpacity(pill, 1, 0.3, 200).then(() => animateSvgOpacity(pill, 0.3, 1, 400));
+
+    // Update label
+    const label = pill.querySelector('.timeline-bar-label');
+    if (label) {
+        const name = trigger.newIv.substance?.name || trigger.newIv.key;
+        label.textContent = `${name} ${trigger.newIv.dose || ''}`;
+    }
+}
+
+function animatePillFlip(trigger, timelineGroup, targetLayout) {
+    const pill = findPillByIntervention(trigger.oldIv, timelineGroup);
+    if (!pill) { console.warn('[Revision] Flip: pill not found for', trigger.oldIv.key); return; }
+
+    const target = targetLayout.get(layoutKey(trigger.newIv));
+    const bar = pill.querySelector('rect[rx]') || pill.querySelector('.timeline-bar');
+    const label = pill.querySelector('.timeline-bar-label');
+
+    console.log('[Revision] FLIP:', trigger.oldIv.key, '→', trigger.newIv.key);
+
+    // Move to new lane if needed
+    if (target && bar) {
+        const oldY = parseFloat(bar.getAttribute('y'));
+        const deltaY = target.y - oldY;
+        if (Math.abs(deltaY) > 1) animateSvgTransform(pill, 0, 0, 0, deltaY, 600, 'ease-in-out');
+    }
+
+    // Phase 1: fade out old
+    animateSvgOpacity(pill, 1, 0.05, 300).then(() => {
+        // Swap content at midpoint
+        const newSub = trigger.newIv.substance;
+        const newColor = newSub ? newSub.color : 'rgba(245,180,60,0.7)';
+        if (bar) {
+            bar.setAttribute('fill', newColor);
+            bar.setAttribute('stroke', newColor);
+            if (target) bar.setAttribute('width', target.w.toFixed(1));
+        }
+        if (label) {
+            label.textContent = `${newSub?.name || trigger.newIv.key} ${trigger.newIv.dose || ''}`;
+            label.setAttribute('fill', newColor);
+        }
+        pill.setAttribute('data-substance-key', trigger.newIv.key);
+        pill.setAttribute('data-time-minutes', String(trigger.newIv.timeMinutes));
+        // Phase 2: fade in new
+        animateSvgOpacity(pill, 0.05, 1, 300);
+    });
+}
+
+function animatePillRemove(trigger, timelineGroup) {
+    const pill = findPillByIntervention(trigger.oldIv, timelineGroup);
+    if (!pill) { console.warn('[Revision] Remove: pill not found for', trigger.oldIv.key); return; }
+    console.log('[Revision] REMOVE:', trigger.oldIv.key);
+    animateSvgOpacity(pill, 1, 0, 500).then(() => pill.remove());
+}
+
+function animatePillAdd(trigger, timelineGroup, targetLayout) {
+    const iv = trigger.newIv;
+    const target = targetLayout.get(layoutKey(iv));
+    const sub = iv.substance;
+    const color = sub ? sub.color : 'rgba(245,180,60,0.7)';
+    const plotRight = PHASE_CHART.padL + PHASE_CHART.plotW;
+
+    const x1 = target ? target.x : phaseChartX(iv.timeMinutes);
+    const barW = target ? target.w : Math.max(TIMELINE_ZONE.minBarW,
+        Math.min(phaseChartX(Math.min(iv.timeMinutes + ((sub?.pharma?.duration) || 240), PHASE_CHART.endMin)) - x1, plotRight - x1));
+    const laneStep = TIMELINE_ZONE.laneH + TIMELINE_ZONE.laneGap;
+    const y = target ? target.y : TIMELINE_ZONE.top;
+    const h = TIMELINE_ZONE.laneH;
+    const rx = TIMELINE_ZONE.pillRx;
+
+    console.log('[Revision] ADD:', iv.key, `x=${x1.toFixed(0)} y=${y.toFixed(0)} w=${barW.toFixed(0)}`);
+
+    const pillG = svgEl('g', {
+        class: 'timeline-pill-group', opacity: '0',
+        'data-substance-key': iv.key,
+        'data-time-minutes': String(iv.timeMinutes),
+    });
+
+    pillG.appendChild(svgEl('rect', {
+        x: x1.toFixed(1), y: y.toFixed(1),
+        width: barW.toFixed(1), height: String(h),
+        rx: String(rx), fill: color, 'fill-opacity': '0.30',
+        stroke: color, 'stroke-opacity': '0.60', 'stroke-width': '1',
+    }));
+
+    const labelText = `${sub?.name || iv.key} ${iv.dose || ''}`;
+    pillG.appendChild(svgEl('text', {
+        x: (x1 + 7).toFixed(1), y: (y + h / 2 + 4).toFixed(1),
+        class: 'timeline-bar-label', fill: color,
+    })).textContent = labelText;
+
+    timelineGroup.appendChild(pillG);
+    animateSvgOpacity(pillG, 0, 1, 500);
+}
+
+/** Build layout key for target position map */
+function layoutKey(iv) {
+    return `${iv.key}@${iv.timeMinutes}`;
+}
+
+/** Pre-compute target layout from allocateTimelineLanes → Map<key@time, {x,y,w,laneIdx}> */
+function buildTargetLayout(newInterventions) {
+    const allocated = allocateTimelineLanes(newInterventions);
+    const laneStep = TIMELINE_ZONE.laneH + TIMELINE_ZONE.laneGap;
+    const plotRight = PHASE_CHART.padL + PHASE_CHART.plotW;
+    const map = new Map();
+
+    for (const item of allocated) {
+        const { iv, laneIdx, startMin, endMin } = item;
+        const x = phaseChartX(startMin);
+        const x2raw = phaseChartX(Math.min(endMin, PHASE_CHART.endMin));
+        const w = Math.min(Math.max(TIMELINE_ZONE.minBarW, x2raw - x), plotRight - x);
+        const y = TIMELINE_ZONE.top + laneIdx * laneStep;
+        map.set(layoutKey(iv), { x, y, w, laneIdx });
+    }
+    return map;
+}
+
+function animatePillDiffEntry(trigger, timelineGroup, curvesData, targetLayout) {
+    switch (trigger.type) {
+        case 'moved':    animatePillMove(trigger, timelineGroup, targetLayout); break;
+        case 'resized':  animatePillResize(trigger, timelineGroup, targetLayout); break;
+        case 'replaced': animatePillFlip(trigger, timelineGroup, targetLayout); break;
+        case 'removed':  animatePillRemove(trigger, timelineGroup); break;
+        case 'added':    animatePillAdd(trigger, timelineGroup, targetLayout); break;
+    }
+}
+
+// ---- Revision Pick-and-Place Animation ----
+
+/**
+ * Shuffle array in-place (Fisher-Yates).
+ */
+function shuffleArray(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+}
+
+/**
+ * Create animated targeting brackets around a pill.
+ * Returns { group, animateIn(), animateOut() }
+ *
+ * Brackets look like corner marks:
+ *   ⌐              ¬
+ *   |  [ pill ]    |
+ *   ⌙              ⌟
+ */
+function createTargetBrackets(svg, pillBBox, color) {
+    const PAD = 22;      // start wide
+    const SNUG = 4;      // end snug
+    const CORNER = 8;    // bracket arm length
+    const STROKE_W = 1.5;
+    const cx = pillBBox.x + pillBBox.width / 2;
+    const cy = pillBBox.y + pillBBox.height / 2;
+    const isLight = document.body.classList.contains('light-mode');
+
+    const g = svgEl('g', { class: 'revision-target-brackets', opacity: '0' });
+
+    // Glow backdrop (soft rect behind pill)
+    const glow = svgEl('rect', {
+        x: (pillBBox.x - 6).toFixed(1), y: (pillBBox.y - 4).toFixed(1),
+        width: (pillBBox.width + 12).toFixed(1), height: (pillBBox.height + 8).toFixed(1),
+        rx: '4', fill: color, 'fill-opacity': '0', 'pointer-events': 'none',
+    });
+    g.appendChild(glow);
+
+    // 4 corner brackets (each is a polyline: L-shape)
+    const bracketStyle = {
+        fill: 'none', stroke: isLight ? '#b45309' : '#fbbf24',
+        'stroke-width': String(STROKE_W), 'stroke-linecap': 'round',
+        'pointer-events': 'none',
+    };
+
+    const tl = svgEl('polyline', { ...bracketStyle, class: 'bracket-tl' });
+    const tr = svgEl('polyline', { ...bracketStyle, class: 'bracket-tr' });
+    const bl = svgEl('polyline', { ...bracketStyle, class: 'bracket-bl' });
+    const br = svgEl('polyline', { ...bracketStyle, class: 'bracket-br' });
+    g.appendChild(tl); g.appendChild(tr); g.appendChild(bl); g.appendChild(br);
+
+    // Crosshair dot in center
+    const dot = svgEl('circle', {
+        cx: cx.toFixed(1), cy: cy.toFixed(1), r: '1.5',
+        fill: isLight ? '#b45309' : '#fbbf24', opacity: '0',
+    });
+    g.appendChild(dot);
+
+    svg.appendChild(g);
+
+    function setBracketPositions(pad) {
+        const L = pillBBox.x - pad;
+        const R = pillBBox.x + pillBBox.width + pad;
+        const T = pillBBox.y - pad;
+        const B = pillBBox.y + pillBBox.height + pad;
+        const c = CORNER;
+        tl.setAttribute('points', `${L},${T + c} ${L},${T} ${L + c},${T}`);
+        tr.setAttribute('points', `${R - c},${T} ${R},${T} ${R},${T + c}`);
+        bl.setAttribute('points', `${L},${B - c} ${L},${B} ${L + c},${B}`);
+        br.setAttribute('points', `${R - c},${B} ${R},${B} ${R},${B - c}`);
+    }
+
+    return {
+        group: g,
+        /** Animate brackets from wide to snug + glow fade in (350ms) */
+        animateIn() {
+            return new Promise(resolve => {
+                g.setAttribute('opacity', '1');
+                const start = performance.now();
+                const DUR = 350;
+                (function tick(now) {
+                    const rawT = Math.min(1, (now - start) / DUR);
+                    const ease = 1 - Math.pow(1 - rawT, 3); // ease-out cubic
+                    const pad = PAD + (SNUG - PAD) * ease;
+                    setBracketPositions(pad);
+                    glow.setAttribute('fill-opacity', (0.08 * ease).toFixed(3));
+                    dot.setAttribute('opacity', (ease * 0.7).toFixed(2));
+                    // Bracket stroke opacity ramps in
+                    const strokeOp = (0.3 + 0.7 * ease).toFixed(2);
+                    [tl, tr, bl, br].forEach(b => b.setAttribute('stroke-opacity', strokeOp));
+                    if (rawT < 1) requestAnimationFrame(tick);
+                    else resolve();
+                })(performance.now());
+            });
+        },
+        /** Fade out brackets + glow (200ms) */
+        animateOut() {
+            return animateSvgOpacity(g, 1, 0, 200).then(() => g.remove());
+        },
+    };
+}
+
+/**
+ * Brief amber/gold flash on a pill (action fire indicator).
+ */
+function flashPill(pill, duration = 250) {
+    const bar = pill.querySelector('.timeline-bar') || pill.querySelector('rect');
+    if (!bar) return Promise.resolve();
+    const origFillOp = bar.getAttribute('fill-opacity') || '0.30';
+    const origStrokeOp = bar.getAttribute('stroke-opacity') || '0.60';
+    const isLight = document.body.classList.contains('light-mode');
+    const flashColor = isLight ? '#b45309' : '#fbbf24';
+    const origFill = bar.getAttribute('fill');
+    const origStroke = bar.getAttribute('stroke');
+
+    return new Promise(resolve => {
+        // Flash on
+        bar.setAttribute('fill', flashColor);
+        bar.setAttribute('fill-opacity', '0.5');
+        bar.setAttribute('stroke', flashColor);
+        bar.setAttribute('stroke-opacity', '0.9');
+        bar.setAttribute('stroke-width', '2');
+
+        setTimeout(() => {
+            // Flash off — restore
+            bar.setAttribute('fill', origFill);
+            bar.setAttribute('fill-opacity', origFillOp);
+            bar.setAttribute('stroke', origStroke);
+            bar.setAttribute('stroke-opacity', origStrokeOp);
+            bar.setAttribute('stroke-width', '0.75');
+            resolve();
+        }, duration);
+    });
+}
+
+/**
+ * Get bounding box of a pill relative to the SVG coordinate system.
+ */
+function getPillBBox(pill) {
+    try {
+        const bar = pill.querySelector('.timeline-bar') || pill.querySelector('rect');
+        if (bar) {
+            return {
+                x: parseFloat(bar.getAttribute('x')),
+                y: parseFloat(bar.getAttribute('y')),
+                width: parseFloat(bar.getAttribute('width')),
+                height: parseFloat(bar.getAttribute('height')),
+            };
+        }
+        return pill.getBBox();
+    } catch { return { x: 100, y: 460, width: 60, height: 20 }; }
+}
+
+/**
+ * Main revision animation: mechanistic pick-and-place.
+ *
+ * For each changed substance (random order):
+ *   1. Target brackets lock on
+ *   2. Action fires (move / resize / replace / remove / add)
+ *   3. Brackets dissolve
+ * After all individual actions, a silent re-render ensures DOM consistency.
+ */
+async function animateRevisionScan(diff, newInterventions, newLxCurves, curvesData) {
+    const svg = document.getElementById('phase-chart-svg');
+    const timelineGroup = document.getElementById('phase-substance-timeline');
+    if (!svg || !timelineGroup) return;
+
+    console.log('[Revision] Diff:', diff.length, diff.map(d => `${d.type}: ${(d.oldIv||d.newIv).key}`));
+
+    // If no changes, skip animation entirely
+    if (diff.length === 0) {
+        renderSubstanceTimeline(newInterventions, newLxCurves, curvesData);
+        preserveBiometricStrips();
+        revealTimelinePillsInstant();
+        return;
+    }
+
+    const targetLayout = buildTargetLayout(newInterventions);
+
+    // Ensure all existing pills are visible before we start
+    revealTimelinePillsInstant();
+
+    // Shuffle for the "intelligent random" pick-and-place feel
+    const shuffled = shuffleArray([...diff]);
+
+    // ── Process each diff entry sequentially ──
+    for (const entry of shuffled) {
+        const { type, oldIv, newIv } = entry;
+        const iv = oldIv || newIv;
+
+        // --- STEP 1: TARGET — lock on with brackets ---
+        let pill = null;
+        let brackets = null;
+
+        if (type === 'added') {
+            // For additions, show brackets at the target position (no existing pill)
+            const target = targetLayout.get(layoutKey(newIv));
+            const bbox = target
+                ? { x: target.x, y: target.y, width: target.w, height: TIMELINE_ZONE.laneH }
+                : { x: phaseChartX(newIv.timeMinutes), y: TIMELINE_ZONE.top, width: 60, height: TIMELINE_ZONE.laneH };
+            const color = newIv.substance?.color || '#fbbf24';
+            brackets = createTargetBrackets(svg, bbox, color);
+            await brackets.animateIn();
+            await sleep(120);
+        } else {
+            // Find the existing pill
+            pill = findPillByIntervention(oldIv, timelineGroup);
+            if (!pill) {
+                console.warn(`[Revision] ${type}: pill not found for`, iv.key);
+                continue;
+            }
+            const bbox = getPillBBox(pill);
+            const color = oldIv.substance?.color || '#fbbf24';
+            brackets = createTargetBrackets(svg, bbox, color);
+            await brackets.animateIn();
+            await sleep(120);
+        }
+
+        // --- STEP 2: ACTION — perform the change ---
+        switch (type) {
+            case 'moved': {
+                await flashPill(pill, 180);
+                const target = targetLayout.get(layoutKey(newIv));
+                const bar = pill.querySelector('.timeline-bar') || pill.querySelector('rect');
+                if (bar && target) {
+                    const oldX = parseFloat(bar.getAttribute('x'));
+                    const oldY = parseFloat(bar.getAttribute('y'));
+                    const dx = target.x - oldX;
+                    const dy = target.y - oldY;
+                    const oldW = parseFloat(bar.getAttribute('width'));
+                    // Animate position + width simultaneously
+                    const moveP = animateSvgTransform(pill, 0, 0, dx, dy, 650, 'ease-in-out');
+                    const widthP = Math.abs(target.w - oldW) > 2
+                        ? animateSvgWidth(bar, oldW, target.w, 650)
+                        : Promise.resolve();
+                    await Promise.all([moveP, widthP]);
+                }
+                // Update label
+                const label = pill.querySelector('.timeline-bar-label');
+                if (label) {
+                    const name = newIv.substance?.name || newIv.key;
+                    label.textContent = `${name} ${newIv.dose || ''}`;
+                }
+                pill.setAttribute('data-time-minutes', String(newIv.timeMinutes));
+                break;
+            }
+            case 'resized': {
+                await flashPill(pill, 180);
+                const target = targetLayout.get(layoutKey(newIv));
+                const bar = pill.querySelector('.timeline-bar') || pill.querySelector('rect');
+                if (bar) {
+                    const oldW = parseFloat(bar.getAttribute('width'));
+                    const newW = target ? target.w : oldW;
+                    const oldY = parseFloat(bar.getAttribute('y'));
+                    const dy = target ? target.y - oldY : 0;
+                    const widthP = Math.abs(newW - oldW) > 2
+                        ? animateSvgWidth(bar, oldW, newW, 500)
+                        : Promise.resolve();
+                    const moveP = Math.abs(dy) > 1
+                        ? animateSvgTransform(pill, 0, 0, 0, dy, 500, 'ease-in-out')
+                        : Promise.resolve();
+                    await Promise.all([widthP, moveP]);
+                }
+                const label = pill.querySelector('.timeline-bar-label');
+                if (label) {
+                    label.textContent = `${newIv.substance?.name || newIv.key} ${newIv.dose || ''}`;
+                }
+                break;
+            }
+            case 'replaced': {
+                // Phase 1: flash + fade out old identity
+                await flashPill(pill, 150);
+                await animateSvgOpacity(pill, 1, 0.05, 250);
+                // Phase 2: swap color/label at the invisible state
+                const newSub = newIv.substance;
+                const newColor = newSub ? newSub.color : 'rgba(245,180,60,0.7)';
+                const bar = pill.querySelector('.timeline-bar') || pill.querySelector('rect');
+                if (bar) {
+                    bar.setAttribute('fill', newColor);
+                    bar.setAttribute('stroke', newColor);
+                    const target = targetLayout.get(layoutKey(newIv));
+                    if (target) bar.setAttribute('width', target.w.toFixed(1));
+                }
+                const label = pill.querySelector('.timeline-bar-label');
+                if (label) {
+                    label.textContent = `${newSub?.name || newIv.key} ${newIv.dose || ''}`;
+                }
+                pill.setAttribute('data-substance-key', newIv.key);
+                pill.setAttribute('data-time-minutes', String(newIv.timeMinutes));
+                // Phase 3: fade back in with new identity
+                await animateSvgOpacity(pill, 0.05, 1, 300);
+                break;
+            }
+            case 'removed': {
+                await flashPill(pill, 200);
+                // Shrink + fade out
+                await animateSvgOpacity(pill, 1, 0, 400);
+                pill.remove();
+                break;
+            }
+            case 'added': {
+                // Build a minimal pill and animate it in
+                const target = targetLayout.get(layoutKey(newIv));
+                const sub = newIv.substance;
+                const color = sub ? sub.color : 'rgba(245,180,60,0.7)';
+                const x1 = target ? target.x : phaseChartX(newIv.timeMinutes);
+                const y = target ? target.y : TIMELINE_ZONE.top;
+                const w = target ? target.w : 60;
+                const h = TIMELINE_ZONE.laneH;
+                const rx = TIMELINE_ZONE.pillRx;
+
+                const pillG = svgEl('g', {
+                    class: 'timeline-pill-group', opacity: '0',
+                    'data-substance-key': newIv.key,
+                    'data-time-minutes': String(newIv.timeMinutes),
+                });
+                pillG.appendChild(svgEl('rect', {
+                    x: x1.toFixed(1), y: y.toFixed(1),
+                    width: w.toFixed(1), height: String(h),
+                    rx: String(rx), fill: color, 'fill-opacity': '0.30',
+                    stroke: color, 'stroke-opacity': '0.60', 'stroke-width': '1',
+                    class: 'timeline-bar',
+                }));
+                const labelEl = svgEl('text', {
+                    x: (x1 + 7).toFixed(1), y: (y + h / 2 + 4).toFixed(1),
+                    class: 'timeline-bar-label',
+                });
+                labelEl.textContent = `${sub?.name || newIv.key} ${newIv.dose || ''}`;
+                pillG.appendChild(labelEl);
+                timelineGroup.appendChild(pillG);
+                // Animate in: scale-up feel via opacity + subtle Y offset
+                await animateSvgOpacity(pillG, 0, 1, 400);
+                break;
+            }
+        }
+
+        // --- STEP 3: SETTLE — dissolve brackets ---
+        if (brackets) {
+            await brackets.animateOut();
+        }
+        // Brief pause between entries for the staggered pick-and-place rhythm
+        await sleep(80);
+    }
+
+    // ── Final: silent re-render for DOM consistency ──
+    // The individual animations may leave transforms/positions slightly off.
+    // Re-render fully, reveal instantly, and restore biometric strips.
+    await sleep(200);
+    renderSubstanceTimeline(newInterventions, newLxCurves, curvesData);
+    preserveBiometricStrips();
+    revealTimelinePillsInstant();
+}
+
+// ---- Lx Curve Morph After Revision ----
+
+async function morphLxCurvesToRevision(oldLxCurves, newLxCurves, curvesData) {
+    const lxGroup = document.getElementById('phase-lx-curves');
+    if (!lxGroup) return;
+    const lxStrokes = lxGroup.querySelectorAll('.phase-lx-path');
+    const lxFills = lxGroup.querySelectorAll('.phase-lx-fill');
+
+    const MORPH_DURATION = 1200;
+
+    await new Promise(resolve => {
+        const startTime = performance.now();
+        (function tick(now) {
+            const rawT = Math.min(1, (now - startTime) / MORPH_DURATION);
+            const ease = rawT < 0.5 ? 2 * rawT * rawT : 1 - Math.pow(-2 * rawT + 2, 2) / 2;
+
+            for (let ci = 0; ci < curvesData.length; ci++) {
+                const oldPts = oldLxCurves[ci]?.points || [];
+                const newPts = newLxCurves[ci]?.points || [];
+                const len = Math.min(oldPts.length, newPts.length);
+                if (len === 0) continue;
+
+                const morphed = [];
+                for (let j = 0; j < len; j++) {
+                    morphed.push({
+                        hour: oldPts[j].hour,
+                        value: oldPts[j].value + (newPts[j].value - oldPts[j].value) * ease,
+                    });
+                }
+
+                if (lxStrokes[ci]) lxStrokes[ci].setAttribute('d', phasePointsToPath(morphed, true));
+                if (lxFills[ci]) lxFills[ci].setAttribute('d', phasePointsToFillPath(morphed, true));
+            }
+
+            if (rawT < 1) {
+                requestAnimationFrame(tick);
+            } else {
+                resolve();
+            }
+        })(performance.now());
+    });
+
+    // Update peak descriptors at new Lx positions
+    const baseGroup = document.getElementById('phase-baseline-curves');
+    const overlay = document.getElementById('phase-tooltip-overlay');
+    if (baseGroup) baseGroup.querySelectorAll('.peak-descriptor').forEach(el => el.remove());
+    if (overlay) overlay.querySelectorAll('.peak-descriptor').forEach(el => el.remove());
+
+    const lxCurvesForLabels = curvesData.map((c, i) => ({
+        ...c,
+        desired: newLxCurves[i].points,
+    }));
+    placePeakDescriptors(baseGroup, lxCurvesForLabels, 'desired', 0);
+}
+
+// ---- Revision Orchestrator ----
+
+async function handleRevisionPhase(curvesData) {
+    const userGoal = document.getElementById('prompt-input').value.trim();
+
+    // 1. Fire revision LLM in background
+    RevisionState.phase = 'pending';
+    RevisionState.revisionPromise = callRevisionModel(userGoal, curvesData).catch(err => {
+        console.error('[Revision] LLM error:', err.message);
+        return null;
+    });
+
+    // 2. Show play button (loading state)
+    showRevisionPlayButton();
+
+    // 3. When LLM resolves, mark as ready
+    RevisionState.revisionPromise.then(result => {
+        RevisionState.revisionResult = result;
+        if (result) {
+            RevisionState.phase = 'ready';
+            setRevisionPlayReady();
+        }
+    });
+
+    // 4. Wait for play button click
+    await new Promise(resolve => {
+        const btn = document.getElementById('revision-play-btn');
+        if (!btn) { resolve(); return; }
+
+        btn.addEventListener('click', async () => {
+            // If LLM hasn't returned yet, wait
+            if (RevisionState.phase === 'pending') {
+                btn.classList.add('loading');
+                const result = await RevisionState.revisionPromise;
+                if (!result) {
+                    console.error('[Revision] No result from LLM.');
+                    hideRevisionPlayButton();
+                    resolve();
+                    return;
+                }
+                RevisionState.revisionResult = result;
+            }
+
+            hideRevisionPlayButton();
+            RevisionState.phase = 'animating';
+
+            // 5. Validate old & new interventions
+            const rawOld = PhaseState.interventionResult.interventions || [];
+            const rawNew = RevisionState.revisionResult.interventions || [];
+            console.log('[Revision] Raw old interventions:', rawOld.length, rawOld.map(iv => iv.key));
+            console.log('[Revision] Raw new interventions:', rawNew.length, rawNew.map(iv => iv.key));
+
+            const oldIvs = validateInterventions(rawOld, curvesData);
+            const newIvs = validateInterventions(rawNew, curvesData);
+            console.log('[Revision] Validated old:', oldIvs.length, oldIvs.map(iv => `${iv.key}@${iv.timeMinutes}min ${iv.dose}`));
+            console.log('[Revision] Validated new:', newIvs.length, newIvs.map(iv => `${iv.key}@${iv.timeMinutes}min ${iv.dose}`));
+
+            RevisionState.oldInterventions = oldIvs;
+            RevisionState.newInterventions = newIvs;
+
+            // 6. Diff
+            const diff = diffInterventions(oldIvs, newIvs);
+            RevisionState.diff = diff;
+            console.log('[Revision] Diff entries:', diff.length, diff.map(d => `${d.type}: ${(d.oldIv||d.newIv).key}`));
+
+            // 7. Compute new Lx overlay
+            const oldLxCurves = PhaseState.lxCurves;
+            const newLxCurves = computeLxOverlay(newIvs, curvesData);
+            RevisionState.newLxCurves = newLxCurves;
+
+            // 8. Scan sweep → fade old → re-render new → staggered reveal
+            await animateRevisionScan(diff, newIvs, newLxCurves, curvesData);
+
+            // 9. Morph Lx curves to revised positions
+            await morphLxCurvesToRevision(oldLxCurves, newLxCurves, curvesData);
+
+            // 11. Update global state
+            PhaseState.lxCurves = newLxCurves;
+            PhaseState.interventionResult = RevisionState.revisionResult;
+            PhaseState.incrementalSnapshots = computeIncrementalLxOverlay(newIvs, curvesData);
+
+            RevisionState.phase = 'rendered';
+            PhaseState.phase = 'revision-rendered';
+            PhaseState.maxPhaseReached = 4;
+            PhaseState.viewingPhase = 4;
+            updateStepButtons();
+
             resolve();
         }, { once: true });
     });

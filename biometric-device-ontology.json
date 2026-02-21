@@ -1,0 +1,294 @@
+{
+    "version": "1.1",
+    "ontology": {
+      "units": {
+        "hr_bpm": "bpm",
+        "resting_hr_bpm": "bpm",
+        "rri_ms": "ms",
+        "hrv_rmssd_ms": "ms",
+        "hrv_sdnn_ms": "ms",
+        "hrv_hf_power_ms2": "ms^2",
+        "hrv_lf_power_ms2": "ms^2",
+        "hrv_lf_hf_ratio": "ratio",
+        "resp_rate_bpm": "breaths/min",
+        "spo2_pct": "percent",
+        "skin_temp_c": "celsius",
+        "skin_temp_delta_c": "celsius",
+        "sleep_total_min": "min",
+        "sleep_latency_min": "min",
+        "sleep_efficiency_pct": "percent",
+        "sleep_stage_min_awake": "min",
+        "sleep_stage_min_light": "min",
+        "sleep_stage_min_deep": "min",
+        "sleep_stage_min_rem": "min",
+        "sleep_wake_events_count": "count",
+        "sleep_movement_index": "index",
+        "steps_count": "count",
+        "distance_m": "m",
+        "active_energy_kcal": "kcal",
+        "floors_climbed_count": "count",
+        "altitude_m": "m",
+        "glucose_mgdl": "mg/dL",
+        "glucose_roc_mgdl_min": "mg/dL/min",
+        "tir_pct": "percent",
+        "tar_pct": "percent",
+        "tbr_pct": "percent",
+        "gmi_pct": "percent",
+        "glucose_mean_mgdl": "mg/dL",
+        "glucose_cv_pct": "percent",
+        "auc_hyper_mgdl_min": "mg/dL·min",
+        "auc_hypo_mgdl_min": "mg/dL·min",
+        "training_load_score": "score",
+        "ecg_single_lead_mv": "mV",
+        "arrhythmia_flag_afib": "flag",
+        "alert_glucose_high": "flag",
+        "alert_glucose_low": "flag",
+        "alert_glucose_rapid_rise": "flag",
+        "alert_glucose_rapid_fall": "flag",
+        "accel_xyz_mps2": "m/s^2",
+        "gyro_xyz_rps": "rad/s",
+        "ppg_waveform": "arb",
+        "bcg_waveform": "arb",
+        "resp_waveform": "arb",
+        "pressure_map": "arb",
+        "bed_temp_c": "celsius"
+      },
+      "notes": {
+        "arb": "arb = arbitrary units (device-specific scaling).",
+        "hrv_fields": "HRV is harmonized into explicit canonical metrics (RMSSD/SDNN/etc.), not a vague bucket."
+      }
+    },
+    "deviceTypes": [
+      {
+        "deviceType": "watch",
+        "signals": {
+          "raw": [
+            "ppg_waveform",
+            "accel_xyz_mps2",
+            "gyro_xyz_rps"
+          ],
+          "derived": [
+            "hr_bpm",
+            "resting_hr_bpm",
+            "rri_ms",
+            "hrv_rmssd_ms",
+            "hrv_sdnn_ms",
+            "resp_rate_bpm",
+            "spo2_pct",
+            "skin_temp_c",
+            "skin_temp_delta_c",
+            "sleep_total_min",
+            "sleep_latency_min",
+            "sleep_efficiency_pct",
+            "sleep_stage_min_awake",
+            "sleep_stage_min_light",
+            "sleep_stage_min_deep",
+            "sleep_stage_min_rem",
+            "sleep_wake_events_count",
+            "sleep_movement_index",
+            "steps_count",
+            "distance_m",
+            "active_energy_kcal",
+            "floors_climbed_count",
+            "altitude_m",
+            "training_load_score"
+          ],
+          "events": [
+            "arrhythmia_flag_afib"
+          ]
+        },
+        "optional": {
+          "raw": [
+            "ecg_single_lead_mv"
+          ],
+          "derived": [
+            "hrv_hf_power_ms2",
+            "hrv_lf_power_ms2",
+            "hrv_lf_hf_ratio"
+          ],
+          "events": []
+        }
+      },
+      {
+        "deviceType": "wrist_band",
+        "signals": {
+          "raw": [
+            "ppg_waveform",
+            "accel_xyz_mps2",
+            "gyro_xyz_rps"
+          ],
+          "derived": [
+            "hr_bpm",
+            "resting_hr_bpm",
+            "rri_ms",
+            "hrv_rmssd_ms",
+            "hrv_sdnn_ms",
+            "resp_rate_bpm",
+            "spo2_pct",
+            "skin_temp_c",
+            "skin_temp_delta_c",
+            "sleep_total_min",
+            "sleep_latency_min",
+            "sleep_efficiency_pct",
+            "sleep_stage_min_awake",
+            "sleep_stage_min_light",
+            "sleep_stage_min_deep",
+            "sleep_stage_min_rem",
+            "sleep_wake_events_count",
+            "sleep_movement_index",
+            "steps_count",
+            "distance_m",
+            "active_energy_kcal",
+            "training_load_score"
+          ],
+          "events": []
+        },
+        "optional": {
+          "raw": [],
+          "derived": [
+            "floors_climbed_count",
+            "altitude_m"
+          ],
+          "events": [
+            "arrhythmia_flag_afib"
+          ]
+        }
+      },
+      {
+        "deviceType": "ring",
+        "signals": {
+          "raw": [
+            "ppg_waveform",
+            "accel_xyz_mps2"
+          ],
+          "derived": [
+            "hr_bpm",
+            "resting_hr_bpm",
+            "rri_ms",
+            "hrv_rmssd_ms",
+            "hrv_sdnn_ms",
+            "resp_rate_bpm",
+            "spo2_pct",
+            "skin_temp_c",
+            "skin_temp_delta_c",
+            "sleep_total_min",
+            "sleep_latency_min",
+            "sleep_efficiency_pct",
+            "sleep_stage_min_awake",
+            "sleep_stage_min_light",
+            "sleep_stage_min_deep",
+            "sleep_stage_min_rem",
+            "sleep_wake_events_count",
+            "sleep_movement_index",
+            "steps_count",
+            "active_energy_kcal"
+          ],
+          "events": []
+        },
+        "optional": {
+          "raw": [],
+          "derived": [],
+          "events": []
+        }
+      },
+      {
+        "deviceType": "cgm",
+        "signals": {
+          "raw": [
+            "glucose_mgdl"
+          ],
+          "derived": [
+            "glucose_roc_mgdl_min",
+            "tir_pct",
+            "tar_pct",
+            "tbr_pct",
+            "gmi_pct",
+            "glucose_mean_mgdl",
+            "glucose_cv_pct",
+            "auc_hyper_mgdl_min",
+            "auc_hypo_mgdl_min"
+          ],
+          "events": [
+            "alert_glucose_high",
+            "alert_glucose_low",
+            "alert_glucose_rapid_rise",
+            "alert_glucose_rapid_fall"
+          ]
+        },
+        "optional": {
+          "raw": [],
+          "derived": [],
+          "events": []
+        }
+      },
+      {
+        "deviceType": "bed_sensors",
+        "signals": {
+          "raw": [
+            "bcg_waveform",
+            "resp_waveform",
+            "pressure_map"
+          ],
+          "derived": [
+            "hr_bpm",
+            "resting_hr_bpm",
+            "rri_ms",
+            "hrv_rmssd_ms",
+            "hrv_sdnn_ms",
+            "resp_rate_bpm",
+            "sleep_total_min",
+            "sleep_latency_min",
+            "sleep_efficiency_pct",
+            "sleep_stage_min_awake",
+            "sleep_stage_min_light",
+            "sleep_stage_min_deep",
+            "sleep_stage_min_rem",
+            "sleep_wake_events_count",
+            "sleep_movement_index"
+          ],
+          "events": []
+        },
+        "optional": {
+          "raw": [
+            "bed_temp_c"
+          ],
+          "derived": [],
+          "events": []
+        }
+      },
+      {
+        "deviceType": "chest_band",
+        "signals": {
+          "raw": [
+            "ecg_single_lead_mv"
+          ],
+          "derived": [
+            "hr_bpm",
+            "resting_hr_bpm",
+            "rri_ms",
+            "hrv_rmssd_ms",
+            "hrv_sdnn_ms",
+            "training_load_score"
+          ],
+          "events": []
+        },
+        "optional": {
+          "raw": [
+            "resp_waveform"
+          ],
+          "derived": [
+            "resp_rate_bpm",
+            "hrv_hf_power_ms2",
+            "hrv_lf_power_ms2",
+            "hrv_lf_hf_ratio"
+          ],
+          "events": []
+        }
+      }
+    ],
+    "harmonization_guards": {
+      "rule_no_synonyms": "A biometric key must appear exactly once in the ontology and must be reused verbatim across all device types.",
+      "rule_ui_encodings_excluded": "UI-only encodings (e.g., trend arrows) are not distinct biometrics and must be derived from canonical metrics (e.g., glucose_roc_mgdl_min).",
+      "rule_bucket_metrics_disallowed": "Vague buckets like 'hrv_time_domain' are prohibited; use explicit canonical metrics (e.g., hrv_rmssd_ms)."
+    }
+  }
