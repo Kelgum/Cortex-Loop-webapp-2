@@ -1471,22 +1471,13 @@ export async function animateSequentialLxReveal(snapshots: any, interventions: a
         });
         playheadGroup.appendChild(phLine);
 
-        // --- Push chevron ---
-        const chevronGroup = svgEl('g', { 'pointer-events': 'none', opacity: '0' });
-        const chevArrow = svgEl('path', {
-            d: 'M -8 -10 L 0 2 L 8 -10',
-            fill: 'none', 'stroke-width': '2.5',
-            'stroke-linecap': 'round', 'stroke-linejoin': 'round',
-            stroke: 'rgba(245, 200, 80, 0.8)', 'pointer-events': 'none',
+        // --- Push chevron (primary) ---
+        const chevronGroup = svgEl('g', { 'pointer-events': 'none' });
+        const chevFill = svgEl('path', {
+            d: 'M -8 -10 L 0 2 L 8 -10 Z',
+            fill: curvesData[0]?.color || '#f5c850', 'pointer-events': 'none',
         });
-        chevronGroup.appendChild(chevArrow);
-        const chevArrowInner = svgEl('path', {
-            d: 'M -4.5 -5.5 L 0 1 L 4.5 -5.5',
-            fill: 'none', 'stroke-width': '1.5',
-            'stroke-linecap': 'round', 'stroke-linejoin': 'round',
-            stroke: 'rgba(255, 255, 255, 0.6)', 'pointer-events': 'none',
-        });
-        chevronGroup.appendChild(chevArrowInner);
+        chevronGroup.appendChild(chevFill);
         playheadGroup.appendChild(chevronGroup);
 
         svg.appendChild(playheadGroup);
@@ -1522,9 +1513,31 @@ export async function animateSequentialLxReveal(snapshots: any, interventions: a
             stepBands.push(band);
         }
 
-        // Chevron tracking state (lerped for smooth motion)
-        let chevY = PHASE_CHART.padT + PHASE_CHART.plotH / 2;
-        let chevOpacity = 0;
+        // Precompute which curve changes most and second-most
+        const curveTotals: { ci: number; total: number }[] = [];
+        for (let ci = 0; ci < curvesData.length; ci++) {
+            if (!sourcePts[ci] || !targetPts[ci]) continue;
+            let totalDelta = 0;
+            for (let j = 0; j < sourcePts[ci].length; j++) {
+                totalDelta += Math.abs(targetPts[ci][j].value - sourcePts[ci][j].value);
+            }
+            curveTotals.push({ ci, total: totalDelta });
+        }
+        curveTotals.sort((a, b) => b.total - a.total);
+        const bestCurveIdx = curveTotals[0]?.ci ?? 0;
+        const secondCurveIdx = curveTotals[1]?.ci ?? null;
+
+        let chevron2Group: Element | null = null;
+        let chevFill2: Element | null = null;
+        if (secondCurveIdx != null && secondCurveIdx !== bestCurveIdx) {
+            chevron2Group = svgEl('g', { 'pointer-events': 'none' });
+            chevFill2 = svgEl('path', {
+                d: 'M -8 -10 L 0 2 L 8 -10 Z',
+                fill: curvesData[secondCurveIdx]?.color || '#94a3b8', 'pointer-events': 'none',
+            });
+            chevron2Group.appendChild(chevFill2);
+            playheadGroup.appendChild(chevron2Group);
+        }
 
         await new Promise<void>(resolveSweep => {
             const sweepStart = performance.now();
@@ -1559,55 +1572,82 @@ export async function animateSequentialLxReveal(snapshots: any, interventions: a
                     if (lxFills[ci]) lxFills[ci].setAttribute('d', phasePointsToFillPath(morphed, true));
                 }
 
-                // --- Push chevron: find curve with biggest delta at playhead ---
-                let bestDelta = 0;
-                let bestTargetY = chevY;
-                let bestPushDown = false;
-                let bestColor = 'rgba(245, 200, 80, 0.8)';
-                for (let ci = 0; ci < curvesData.length; ci++) {
-                    if (!sourcePts[ci] || !targetPts[ci]) continue;
-                    const srcVal = interpolatePointsAtTime(sourcePts[ci], playheadHour);
-                    const tgtVal = interpolatePointsAtTime(targetPts[ci], playheadHour);
-                    const delta = Math.abs(tgtVal - srcVal);
-                    if (delta > bestDelta) {
-                        bestDelta = delta;
-                        bestTargetY = phaseChartY(tgtVal);
-                        bestPushDown = tgtVal < srcVal;
-                        bestColor = curvesData[ci].color || bestColor;
+                // --- Push chevron: trace the curve that changes the most ---
+                const ci = bestCurveIdx;
+                const morphed = buildProgressiveMorphPoints(
+                    sourcePts[ci], targetPts[ci], playheadHour, BLEND_WIDTH
+                );
+                const morphedVal = interpolatePointsAtTime(morphed, playheadHour);
+                const curveY = phaseChartY(morphedVal);
+
+                const srcVal = interpolatePointsAtTime(sourcePts[ci], playheadHour);
+                const tgtVal = interpolatePointsAtTime(targetPts[ci], playheadHour);
+                const bestDelta = Math.abs(tgtVal - srcVal);
+                const bestPushDown = tgtVal < srcVal;
+                const chevronColor = step[0].substance?.color || curvesData[ci].color || '#f5c850';
+
+                // Tip of chevron path is at (0, 2). Place center so tip touches curve.
+                // scaleY=1: tip at center+2 → center = curveY - 2
+                // scaleY=-1: tip at center-2 → center = curveY + 2
+                const flipY = bestPushDown ? 1 : -1;
+                const chevY = flipY === 1 ? curveY - 2 : curveY + 2;
+
+                // No change: faded. Peak change: brightest of its color.
+                const intensity = Math.min(1, bestDelta / 3);
+                chevronGroup.setAttribute('opacity', '1');
+
+                let brightColor = chevronColor;
+                if (chevronColor.startsWith('#')) {
+                    const hex = chevronColor.slice(1);
+                    const r = parseInt(hex.substring(0, 2), 16) || 245;
+                    const g = parseInt(hex.substring(2, 4), 16) || 200;
+                    const b = parseInt(hex.substring(4, 6), 16) || 80;
+                    const max = Math.max(r, g, b, 1);
+                    const scale = 255 / max;
+                    const br = Math.round(r + (r * scale - r) * intensity);
+                    const bg = Math.round(g + (g * scale - g) * intensity);
+                    const bb = Math.round(b + (b * scale - b) * intensity);
+                    brightColor = `rgb(${br},${bg},${bb})`;
+                } else if (chevronColor.startsWith('rgb')) {
+                    const m = chevronColor.match(/[\d.]+/g);
+                    if (m && m.length >= 3) {
+                        const r = Math.round(+m[0]), g = Math.round(+m[1]), b = Math.round(+m[2]);
+                        const max = Math.max(r, g, b, 1);
+                        const scale = 255 / max;
+                        const br = Math.round(r + (r * scale - r) * intensity);
+                        const bg = Math.round(g + (g * scale - g) * intensity);
+                        const bb = Math.round(b + (b * scale - b) * intensity);
+                        brightColor = `rgb(${br},${bg},${bb})`;
                     }
                 }
 
-                // Chevron sizing: scales with delta, extra boost in slow-mo
-                const baseScale = Math.min(2.2, 0.7 + bestDelta / 15);
-                const chevScale = baseScale + smo * 0.5;
-                const pushOffset = (10 + bestDelta * 0.25) * chevScale;
-                const targetChevY = bestPushDown
-                    ? bestTargetY + pushOffset
-                    : bestTargetY - pushOffset;
+                chevFill.setAttribute('fill', brightColor);
+                chevFill.setAttribute('fill-opacity', (0.38 + intensity * 0.62).toFixed(2));
 
-                // Lerp chevron Y for smooth tracking
-                chevY += (targetChevY - chevY) * 0.25;
-
-                // Brightness ramps with delta intensity (dramatizes the effect)
-                const intensity = Math.min(1, bestDelta / 12);
-                const targetOp = bestDelta > 0.5 ? 0.3 + intensity * 0.7 : 0;
-                chevOpacity += (targetOp - chevOpacity) * 0.2;
-                chevronGroup.setAttribute('opacity', chevOpacity.toFixed(3));
-
-                // Outer stroke brightens with intensity
-                const outerOp = (0.4 + intensity * 0.6).toFixed(2);
-                const outerW = (2.0 + intensity * 1.5).toFixed(1);
-                chevArrow.setAttribute('stroke', bestColor);
-                chevArrow.setAttribute('stroke-opacity', outerOp);
-                chevArrow.setAttribute('stroke-width', outerW);
-                // Inner bright core — visible at higher intensity
-                const innerOp = (intensity * 0.8).toFixed(2);
-                chevArrowInner.setAttribute('stroke-opacity', innerOp);
-
-                // Position & orient chevron
-                const flipY = bestPushDown ? -1 : 1;
                 chevronGroup.setAttribute('transform',
-                    `translate(${playheadX.toFixed(1)}, ${chevY.toFixed(1)}) scale(${chevScale.toFixed(2)}, ${(flipY * chevScale).toFixed(2)})`);
+                    `translate(${playheadX.toFixed(1)}, ${chevY.toFixed(1)}) scale(1, ${flipY})`);
+
+                // Secondary chevron: faint unless serious motion on that curve
+                if (chevron2Group && chevFill2 && secondCurveIdx != null) {
+                    const c2 = secondCurveIdx;
+                    const c2Morphed = buildProgressiveMorphPoints(
+                        sourcePts[c2], targetPts[c2], playheadHour, BLEND_WIDTH
+                    );
+                    const c2MorphedVal = interpolatePointsAtTime(c2Morphed, playheadHour);
+                    const c2CurveY = phaseChartY(c2MorphedVal);
+                    const c2SrcVal = interpolatePointsAtTime(sourcePts[c2], playheadHour);
+                    const c2TgtVal = interpolatePointsAtTime(targetPts[c2], playheadHour);
+                    const c2Delta = Math.abs(c2TgtVal - c2SrcVal);
+                    const c2PushDown = c2TgtVal < c2SrcVal;
+                    const c2FlipY = c2PushDown ? 1 : -1;
+                    const c2ChevY = c2FlipY === 1 ? c2CurveY - 2 : c2CurveY + 2;
+
+                    const c2Intensity = Math.min(1, c2Delta / 6);
+                    const c2Opacity = (0.06 + c2Intensity * 0.42).toFixed(2);
+                    chevFill2.setAttribute('fill-opacity', c2Opacity);
+                    chevron2Group.setAttribute('transform',
+                        `translate(${playheadX.toFixed(1)}, ${c2ChevY.toFixed(1)}) scale(1, ${c2FlipY})`);
+                }
 
                 if (rawT < 1) {
                     requestAnimationFrame(tick);

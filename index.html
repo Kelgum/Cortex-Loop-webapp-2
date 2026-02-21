@@ -151,6 +151,13 @@
             <div id="phase-chart-container" class="phase-chart-container">
                 <svg id="phase-chart-svg" viewBox="0 0 1120 500" xmlns="http://www.w3.org/2000/svg">
                     <defs>
+                        <filter id="orbital-ghost" x="-40%" y="-40%" width="180%" height="180%">
+                            <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur"/>
+                            <feMerge>
+                                <feMergeNode in="blur"/>
+                                <feMergeNode in="SourceGraphic"/>
+                            </feMerge>
+                        </filter>
                         <linearGradient id="scan-line-grad" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stop-color="rgba(160,160,255,0)"/>
                             <stop offset="50%" stop-color="rgba(160,160,255,0.6)"/>

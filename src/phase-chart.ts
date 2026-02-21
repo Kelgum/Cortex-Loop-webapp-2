@@ -77,8 +77,8 @@ export function buildPhaseXAxis(): void {
     }));
 
     // Band labels — centred, very understated
-    const dayFill   = isLight ? 'rgba(100,75,20,0.42)' : 'rgba(200,165,90,0.38)';
-    const nightFill = isLight ? 'rgba(40,70,140,0.42)' : 'rgba(140,165,215,0.38)';
+    const dayFill   = isLight ? 'rgba(100,75,20,0.65)' : 'rgba(210,175,100,0.62)';
+    const nightFill = isLight ? 'rgba(40,70,140,0.65)' : 'rgba(150,175,225,0.62)';
     group.appendChild(svgEl('text', {
         x: ((day1StartX + midnightX) / 2).toFixed(1),
         y: String(bandTop + 10),
@@ -425,6 +425,17 @@ export function buildSingleYAxis(group: Element, effectLabel: string, side: 'lef
     });
     yLabel.textContent = effectLabel;
     group.appendChild(yLabel);
+}
+
+/** Y-axis effect label position — used by word cloud dismiss to fly words precisely */
+export function getYAxisLabelPosition(side: 'left' | 'right'): { x: number; y: number; anchor: string; baseline: string } {
+    const x = side === 'left' ? PHASE_CHART.padL + 6 : PHASE_CHART.padL + PHASE_CHART.plotW - 6;
+    return {
+        x,
+        y: PHASE_CHART.padT + 14,
+        anchor: side === 'left' ? 'start' : 'end',
+        baseline: 'alphabetic',
+    };
 }
 
 // ============================================

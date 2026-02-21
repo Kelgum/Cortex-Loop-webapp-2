@@ -2,6 +2,7 @@ import { PHASE_CHART, PHASE_SMOOTH_PASSES, WORD_CLOUD_PALETTE } from './constant
 import { AppState } from './state';
 import { svgEl, chartTheme, phaseChartX, phaseChartY } from './utils';
 import { smoothPhaseValues, interpolatePointsAtTime } from './curve-utils';
+import { getYAxisLabelPosition } from './phase-chart';
 
 // ---- Module-level state (mutable, exported with setters) ----
 export let _wordCloudPositions: any[] = [];
@@ -23,9 +24,12 @@ export function startWordCloudFloat(): void {
     const t0 = performance.now();
     const rampDur = 0.7;
     function tick() {
-        const t = (performance.now() - t0) / 1000;
-        const ramp = t < rampDur ? 1 - Math.pow(1 - t / rampDur, 2) : 1;
+        const now = performance.now();
+        const t = (now - t0) / 1000;
         for (const pos of _wordCloudPositions) {
+            if (now < (pos.arrivedAt ?? 0)) continue;
+            const elapsed = (now - pos.arrivedAt) / 1000;
+            const ramp = elapsed < rampDur ? 1 - Math.pow(1 - elapsed / rampDur, 2) : 1;
             const phase = pos.x * 0.037 + pos.y * 0.029;
             const dx = Math.sin(t * 0.5 + phase) * 3.5 * ramp;
             const dy = Math.cos(t * 0.4 + phase * 1.3) * 2.5 * ramp;
@@ -53,39 +57,69 @@ export function startOrbitalRings(cx: number, cy: number): any {
     const NPTS = 72;
     const singleRing = AppState.maxEffects === 1;
     const pad = 12;
+    const wobbleMax = 1.08;
+    const maxRy = (cy - PHASE_CHART.padT) / wobbleMax;
     const RX1 = PHASE_CHART.plotW / 2 - pad;
-    const RY1 = PHASE_CHART.plotH / 2 - pad;
+    const RY1 = Math.min(PHASE_CHART.plotH / 2 - pad, maxRy);
     const RX2 = RX1 + 14;
-    const RY2 = RY1 + 8;
+    const RY2 = Math.min(RY1 + 8, maxRy);
+    const bandStep = 10;
+    const ghostPhases = [0, 0.6, 1.2, 1.8, 2.4];
 
     const ot = chartTheme();
-    const ring1 = svgEl('path', {
-        fill: 'none', stroke: ot.orbitalRing1,
-        'stroke-width': '1.5', class: 'orbital-ring', opacity: '0',
-    });
+    const ghostLayers: Element[] = [];
+
+    function createRingPath(color: string, strokeWidth: string, opacity: string, filter?: string): SVGPathElement {
+        const attrs: Record<string, string> = {
+            fill: 'none', stroke: color,
+            'stroke-width': strokeWidth, 'stroke-linecap': 'round',
+            class: 'orbital-ring', opacity: '0',
+        };
+        if (filter) attrs.filter = filter;
+        return svgEl('path', attrs) as SVGPathElement;
+    }
+
+    for (let i = -2; i <= 2; i++) {
+        if (i === 0) continue;
+        const rx = RX1 + i * bandStep;
+        const ry = RY1 + i * (bandStep * 0.5);
+        const phase = ghostPhases[i + 2];
+        const ghost = createRingPath(ot.orbitalRing1, '6', '0.18', 'url(#orbital-ghost)');
+        group.insertBefore(ghost, group.firstChild);
+        ghost.animate([{ opacity: 0 }, { opacity: 0.18 }], { duration: 800, fill: 'forwards', delay: 40 * Math.abs(i) });
+        ghostLayers.push(ghost);
+    }
+    const ring1 = createRingPath(ot.orbitalRing1, '2.5', '0');
     group.insertBefore(ring1, group.firstChild);
-    ring1.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 800, fill: 'forwards' });
+    ring1.animate([{ opacity: 0 }, { opacity: 0.5 }], { duration: 800, fill: 'forwards' });
 
     let ring2: Element | null = null;
     if (!singleRing) {
-        ring2 = svgEl('path', {
-            fill: 'none', stroke: ot.orbitalRing2,
-            'stroke-width': '1.5', class: 'orbital-ring', opacity: '0',
-        });
+        for (let i = -2; i <= 2; i++) {
+            if (i === 0) continue;
+            const rx = RX2 + i * bandStep;
+            const ry = RY2 + i * (bandStep * 0.5);
+            const phase = ghostPhases[i + 2] + Math.PI * 0.3;
+            const ghost = createRingPath(ot.orbitalRing2, '6', '0.18', 'url(#orbital-ghost)');
+            group.insertBefore(ghost, group.firstChild);
+            ghost.animate([{ opacity: 0 }, { opacity: 0.18 }], { duration: 800, fill: 'forwards', delay: 120 + 40 * Math.abs(i) });
+            ghostLayers.push(ghost);
+        }
+        ring2 = createRingPath(ot.orbitalRing2, '2.5', '0');
         group.insertBefore(ring2, group.firstChild);
-        ring2.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 800, fill: 'forwards', delay: 120 });
+        ring2.animate([{ opacity: 0 }, { opacity: 0.5 }], { duration: 800, fill: 'forwards', delay: 120 });
     }
 
     let running = true;
     let animId: number;
 
     function computeD(t: number, rx: number, ry: number, phase: number): string {
-        const breathe = 1 + 0.012 * Math.sin(t * 1.2 + phase);
+        const breathe = 1 + 0.018 * Math.sin(t * 1.2 + phase);
         let d = '';
         for (let i = 0; i <= NPTS; i++) {
             const angle = (i / NPTS) * Math.PI * 2;
-            const wobble = 1 + 0.025 * Math.sin(angle * 2 + t * 0.8 + phase)
-                             + 0.015 * Math.sin(angle * 3 + t * 1.3);
+            const wobble = 1 + 0.035 * Math.sin(angle * 2 + t * 0.8 + phase)
+                             + 0.022 * Math.sin(angle * 3 + t * 1.3 + phase * 0.7);
             const px = cx + rx * breathe * wobble * Math.cos(angle);
             const py = cy + ry * breathe * wobble * Math.sin(angle);
             d += (i === 0 ? 'M' : 'L') + px.toFixed(1) + ',' + py.toFixed(1);
@@ -93,10 +127,34 @@ export function startOrbitalRings(cx: number, cy: number): any {
         return d + 'Z';
     }
 
+    const layerSpecs: { rx: number; ry: number; phase: number }[] = [];
+    for (let i = -2; i <= 2; i++) {
+        if (i === 0) continue;
+        layerSpecs.push({
+            rx: RX1 + i * bandStep,
+            ry: RY1 + i * (bandStep * 0.5),
+            phase: ghostPhases[i + 2],
+        });
+    }
+    if (!singleRing) {
+        for (let i = -2; i <= 2; i++) {
+            if (i === 0) continue;
+            layerSpecs.push({
+                rx: RX2 + i * bandStep,
+                ry: RY2 + i * (bandStep * 0.5),
+                phase: ghostPhases[i + 2] + Math.PI * 0.3,
+            });
+        }
+    }
+
     const t0 = performance.now();
     function tick() {
         if (!running) return;
         const t = (performance.now() - t0) / 1000;
+        ghostLayers.forEach((el, idx) => {
+            const s = layerSpecs[idx];
+            if (s) el.setAttribute('d', computeD(t, s.rx, s.ry, s.phase));
+        });
         ring1.setAttribute('d', computeD(t, RX1, RY1, 0));
         if (ring2) ring2.setAttribute('d', computeD(t, RX2, RY2, Math.PI));
         animId = requestAnimationFrame(tick);
@@ -104,7 +162,7 @@ export function startOrbitalRings(cx: number, cy: number): any {
     tick();
 
     _orbitalRingsState = {
-        ring1, ring2, singleRing, cx, cy, NPTS, RX1, RY1, RX2, RY2,
+        ring1, ring2, singleRing, cx, cy, NPTS, RX1, RY1, RX2, RY2, ghostLayers,
         stop() { running = false; if (animId) cancelAnimationFrame(animId); },
         getLastT() { return (performance.now() - t0) / 1000; },
     };
@@ -126,6 +184,7 @@ export async function morphRingsToCurves(curvesData: any[]): Promise<void> {
     if (!_orbitalRingsState) return;
     const rings = _orbitalRingsState;
     rings.stop();
+    (rings.ghostLayers || []).forEach((el: Element) => el.remove());
 
     const lastT = rings.getLastT();
     const N = 50;
@@ -190,6 +249,7 @@ export async function morphRingsToCurves(curvesData: any[]): Promise<void> {
     if (!tgt1) {
         rings.ring1.remove();
         if (rings.ring2) rings.ring2.remove();
+        (rings.ghostLayers || []).forEach((el: Element) => el.remove());
         _orbitalRingsState = null;
         return;
     }
@@ -369,18 +429,24 @@ export function renderWordCloud(effects: any[]): Promise<void> {
             });
         }
 
-        // Phase 3: Words spring from center to position with stagger, then float
+        // Phase 3: Words spring from center to position with stagger, wobble starts as each arrives
         const stagger = 180;
         const slideDur = 500;
         const words = group.querySelectorAll('.word-cloud-word');
         const totalEntranceDur = words.length * stagger + slideDur;
+        const startTime = performance.now();
+
+        _wordCloudPositions.forEach((pos, idx) => {
+            pos.arrivedAt = startTime + idx * stagger + slideDur;
+        });
+        startWordCloudFloat();
 
         words.forEach((word, idx) => {
+
             const targetOp = parseFloat(word.getAttribute('data-target-opacity')!);
             const finalX = parseFloat(word.getAttribute('x')!);
             const finalY = parseFloat(word.getAttribute('y')!);
 
-            // Start at center
             word.setAttribute('x', cx.toFixed(1));
             word.setAttribute('y', cy.toFixed(1));
 
@@ -400,9 +466,6 @@ export function renderWordCloud(effects: any[]): Promise<void> {
                 })();
             }, idx * stagger);
         });
-
-        // Start gentle float after entrance settles
-        setTimeout(() => startWordCloudFloat(), totalEntranceDur + 100);
 
         setTimeout(resolve, totalEntranceDur);
     });
@@ -466,61 +529,68 @@ export function dismissWordCloud(mainEffectNames: string[], mainColors: string[]
             }
         }
 
-        // Winner words: fly to Y-axis label position (top-left / top-right)
-        const flyDuration = 700;
         const cx = PHASE_CHART.padL + PHASE_CHART.plotW / 2;
         const cy = PHASE_CHART.padT + PHASE_CHART.plotH / 2;
+        const flyDuration = 650;
+        const flyDelay = 80;
 
         for (const w of winners) {
             const pos = _wordCloudPositions[w.wordIdx];
             const el = pos.el;
             const mainName = mainEffectNames[w.mainIdx];
             const isLeft = w.mainIdx === 0;
-            // Match buildSingleYAxis label position: inside plot area, top corner
-            const targetX = isLeft
-                ? PHASE_CHART.padL + 6
-                : PHASE_CHART.padL + PHASE_CHART.plotW - 6;
-            const targetY = PHASE_CHART.padT + 14;
+            const target = getYAxisLabelPosition(isLeft ? 'left' : 'right');
 
-            // Crossfade text if names differ
-            if (pos.name.toLowerCase().trim() !== mainName.toLowerCase().trim()) {
-                el.animate([{ opacity: parseFloat(el.getAttribute('opacity') || 0.8) }, { opacity: 0 }], {
-                    duration: 150, fill: 'forwards',
+            el.setAttribute('text-anchor', target.anchor);
+            el.setAttribute('dominant-baseline', target.baseline);
+            el.setAttribute('font-weight', '500');
+            el.setAttribute('letter-spacing', '0.04em');
+
+            const curX = parseFloat(el.getAttribute('x')!);
+            const curY = parseFloat(el.getAttribute('y')!);
+            const bbox = (el as SVGTextElement).getBBox();
+            const startX = isLeft ? curX - bbox.width / 2 : curX + bbox.width / 2;
+            const startY = curY + bbox.height * 0.25;
+
+            const needsCrossfade = pos.name.toLowerCase().trim() !== mainName.toLowerCase().trim();
+            if (needsCrossfade) {
+                const edgeX = isLeft ? curX - bbox.width / 2 : curX + bbox.width / 2;
+                el.animate([{ opacity: parseFloat(el.getAttribute('opacity') || '0.8') }, { opacity: 0 }], {
+                    duration: 120, fill: 'forwards',
                 });
                 setTimeout(() => {
                     el.textContent = mainName;
-                    el.setAttribute('font-size', '13');
+                    el.setAttribute('font-size', '11');
                     el.setAttribute('fill', mainColors[w.mainIdx] || WORD_CLOUD_PALETTE[0]);
-                    el.setAttribute('text-anchor', isLeft ? 'start' : 'end');
+                    el.setAttribute('x', edgeX.toFixed(1));
+                    el.setAttribute('y', startY.toFixed(1));
                     el.animate([{ opacity: 0 }, { opacity: 0.9 }], {
-                        duration: 150, fill: 'forwards',
+                        duration: 120, fill: 'forwards',
                     });
-                }, 150);
+                }, 120);
+            } else {
+                el.setAttribute('x', startX.toFixed(1));
+                el.setAttribute('y', startY.toFixed(1));
             }
 
-            // Fly to axis label position, shrink font, then fade
-            const startX = pos.x;
-            const startY = pos.y;
             const startFontSize = parseFloat(el.getAttribute('font-size'));
             const targetFontSize = 11;
+            const flyStartDelay = needsCrossfade ? 260 : flyDelay;
             const startTime = performance.now();
-            const delay = 300;
 
             (function animateFly() {
                 const elapsed = performance.now() - startTime;
-                if (elapsed < delay) { requestAnimationFrame(animateFly); return; }
-                const t = Math.min(1, (elapsed - delay) / flyDuration);
-                const ease = 1 - Math.pow(1 - t, 3);
+                if (elapsed < flyStartDelay) { requestAnimationFrame(animateFly); return; }
+                const rawT = Math.min(1, (elapsed - flyStartDelay) / flyDuration);
+                const ease = rawT < 0.5 ? 4 * rawT * rawT * rawT : 1 - Math.pow(-2 * rawT + 2, 3) / 2;
 
-                el.setAttribute('x', (startX + (targetX - startX) * ease).toFixed(1));
-                el.setAttribute('y', (startY + (targetY - startY) * ease).toFixed(1));
+                el.setAttribute('x', (startX + (target.x - startX) * ease).toFixed(1));
+                el.setAttribute('y', (startY + (target.y - startY) * ease).toFixed(1));
                 el.setAttribute('font-size', (startFontSize + (targetFontSize - startFontSize) * ease).toFixed(1));
-                el.setAttribute('font-weight', '500');
-                el.setAttribute('letter-spacing', '0.04em');
 
-                if (t >= 1) {
+                if (rawT >= 1) {
                     el.animate([{ opacity: 0.9 }, { opacity: 0 }], {
-                        duration: 120, fill: 'forwards',
+                        duration: 100, fill: 'forwards',
                     });
                 } else {
                     requestAnimationFrame(animateFly);
@@ -528,37 +598,40 @@ export function dismissWordCloud(mainEffectNames: string[], mainColors: string[]
             })();
         }
 
-        // Non-winners: simultaneous radial burst outward from center + fast fade
-        const burstDuration = 350;
+        const burstDuration = 480;
+        const burstRamp = 0.15;
+        const burstDelay = 50;
         words.forEach(word => {
             const isWinner = winners.some(w => _wordCloudPositions[w.wordIdx].el === word);
             if (isWinner) return;
 
             const curX = parseFloat(word.getAttribute('x')!);
             const curY = parseFloat(word.getAttribute('y')!);
-            // Radial direction away from center
             let dx = curX - cx;
             let dy = curY - cy;
             const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-            const burstDist = 250 + Math.random() * 100;
+            const burstDist = 220 + Math.random() * 80;
             dx = (dx / dist) * burstDist;
             dy = (dy / dist) * burstDist;
 
             const t0 = performance.now();
             (function burst() {
-                const t = Math.min(1, (performance.now() - t0) / burstDuration);
-                const ease = 1 - Math.pow(1 - t, 2); // ease-out-quad: fast start
+                const elapsed = performance.now() - t0;
+                if (elapsed < burstDelay) { requestAnimationFrame(burst); return; }
+                const rawT = Math.min(1, (elapsed - burstDelay) / burstDuration);
+                const ramp = rawT < burstRamp ? (rawT / burstRamp) * (rawT / burstRamp) : 1;
+                const ease = rawT < 0.5 ? 4 * rawT * rawT * rawT : 1 - Math.pow(-2 * rawT + 2, 3) / 2;
+                const combined = ramp * ease;
 
-                word.setAttribute('x', (curX + dx * ease).toFixed(1));
-                word.setAttribute('y', (curY + dy * ease).toFixed(1));
-                word.setAttribute('opacity', Math.max(0, 1 - t * 2).toFixed(2));
+                word.setAttribute('x', (curX + dx * combined).toFixed(1));
+                word.setAttribute('y', (curY + dy * combined).toFixed(1));
+                word.setAttribute('opacity', Math.max(0, 1 - rawT * 1.8).toFixed(2));
 
-                if (t < 1) requestAnimationFrame(burst);
+                if (rawT < 1) requestAnimationFrame(burst);
             })();
         });
 
-        // Resolve after longest animation
-        const totalTime = Math.max(flyDuration + 300 + 120, burstDuration);
+        const totalTime = Math.max(flyDuration + flyDelay + 100, burstDelay + burstDuration);
         setTimeout(() => {
             // Remove only word-cloud words — preserve orbital rings (still morphing)
             group.querySelectorAll('.word-cloud-word').forEach(el => el.remove());
