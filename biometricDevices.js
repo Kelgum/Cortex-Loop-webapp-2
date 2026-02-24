@@ -35,6 +35,13 @@ const BIOMETRIC_DEVICES = {
                 { signal: 'spo2_pct',     displayName: 'SpO2',        color: '#c92a2a', range: [90, 100], unit: '%',    stripHeight: 14 },
                 { signal: 'skin_temp_c',  displayName: 'Skin Temp',   color: '#ff6b6b', range: [33, 38],  unit: '°C',   stripHeight: 14 },
                 { signal: 'resp_rate',    displayName: 'Resp Rate',   color: '#f76707', range: [8, 25],   unit: 'br/m', stripHeight: 14 },
+                { signal: 'sleep_composite', displayName: 'Sleep', color: '#8b5cf6', range: [0, 100], unit: '', stripHeight: 24, composite: true,
+                  subChannels: [
+                    { signal: 'sleep_deep',  displayName: 'Deep',  color: '#4a5fc1', range: [0, 100] },
+                    { signal: 'sleep_rem',   displayName: 'REM',   color: '#8b5cf6', range: [0, 100] },
+                    { signal: 'sleep_light', displayName: 'Light', color: '#f9a8d4', range: [0, 100] },
+                  ]
+                },
             ],
         },
         {
@@ -50,6 +57,13 @@ const BIOMETRIC_DEVICES = {
                 { signal: 'resp_rate',    displayName: 'Resp Rate',      color: '#f76707', range: [8, 25],   unit: 'br/m', stripHeight: 14 },
                 { signal: 'spo2_pct',     displayName: 'SpO2',           color: '#c92a2a', range: [90, 100], unit: '%',    stripHeight: 14 },
                 { signal: 'training_load',displayName: 'Training Load',  color: '#d9480f', range: [0, 100],  unit: '',     stripHeight: 14 },
+                { signal: 'sleep_composite', displayName: 'Sleep', color: '#8b5cf6', range: [0, 100], unit: '', stripHeight: 24, composite: true,
+                  subChannels: [
+                    { signal: 'sleep_deep',  displayName: 'Deep',  color: '#4a5fc1', range: [0, 100] },
+                    { signal: 'sleep_rem',   displayName: 'REM',   color: '#8b5cf6', range: [0, 100] },
+                    { signal: 'sleep_light', displayName: 'Light', color: '#f9a8d4', range: [0, 100] },
+                  ]
+                },
             ],
         },
         {
@@ -65,6 +79,13 @@ const BIOMETRIC_DEVICES = {
                 { signal: 'skin_temp_delta',  displayName: 'Temp Delta',  color: '#ff8787', range: [-1.5, 1.5], unit: '°C', stripHeight: 14 },
                 { signal: 'spo2_pct',         displayName: 'SpO2',        color: '#c92a2a', range: [90, 100], unit: '%',    stripHeight: 14 },
                 { signal: 'resp_rate',        displayName: 'Resp Rate',   color: '#f76707', range: [8, 25],   unit: 'br/m', stripHeight: 14 },
+                { signal: 'sleep_composite', displayName: 'Sleep', color: '#8b5cf6', range: [0, 100], unit: '', stripHeight: 24, composite: true,
+                  subChannels: [
+                    { signal: 'sleep_deep',  displayName: 'Deep',  color: '#4a5fc1', range: [0, 100] },
+                    { signal: 'sleep_rem',   displayName: 'REM',   color: '#8b5cf6', range: [0, 100] },
+                    { signal: 'sleep_light', displayName: 'Light', color: '#f9a8d4', range: [0, 100] },
+                  ]
+                },
             ],
         },
         {
@@ -79,7 +100,13 @@ const BIOMETRIC_DEVICES = {
                 { signal: 'hrv_ms',           displayName: 'HRV',            color: '#e03e3e', range: [10, 120], unit: 'ms',   stripHeight: 16 },
                 { signal: 'resp_rate',        displayName: 'Resp Rate',      color: '#f76707', range: [8, 25],   unit: 'br/m', stripHeight: 14 },
                 { signal: 'skin_temp_delta',  displayName: 'Temp Delta',     color: '#ff8787', range: [-1.5, 1.5], unit: '°C', stripHeight: 14 },
-                { signal: 'sleep_stages',     displayName: 'Sleep Stages',   color: '#b72b2b', range: [0, 4],    unit: '',     stripHeight: 16 },
+                { signal: 'sleep_composite', displayName: 'Sleep', color: '#8b5cf6', range: [0, 100], unit: '', stripHeight: 24, composite: true,
+                  subChannels: [
+                    { signal: 'sleep_deep',  displayName: 'Deep',  color: '#4a5fc1', range: [0, 100] },
+                    { signal: 'sleep_rem',   displayName: 'REM',   color: '#8b5cf6', range: [0, 100] },
+                    { signal: 'sleep_light', displayName: 'Light', color: '#f9a8d4', range: [0, 100] },
+                  ]
+                },
             ],
         },
         {

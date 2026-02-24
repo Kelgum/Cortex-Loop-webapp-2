@@ -106,6 +106,22 @@ Rx and Controlled substances are hidden by default. The user enables them via to
 
 ## Multi-Model LLM Pipeline
 
+### Agent Naming Scheme
+
+The pipeline uses **agents** as the generic term for each LLM-powered stage (not "model" or "LLM"). The collection of agents is referred to as **The Cortex** or **The Loop**.
+
+**Individual agent names** (Chess/Strategy theme):
+
+| Stage | Agent Name | Role |
+|-------|------------|------|
+| 1 | **Scout** | Effect identification — scouts relevant pharmacodynamic effects |
+| 2 | **Strategist** | Pharmacodynamic curves — maps baseline vs desired 24-hour landscape |
+| 3 | **Chess Player** | Substance selection — prescribes protocol, anticipates interactions |
+| 4 | **Spotter** | Biometric simulation — spots/simulates wearable data |
+| 5 | **Grandmaster** | Protocol revision — re-evaluates based on biometric feedback |
+
+These names appear in the Debug Panel (e.g. "Scout", "Chess Player") and in documentation. Use "agent" when referring to the unit generically: "the Scout agent", "each pipeline agent".
+
 ### Model Tiers
 
 **Fast Models** (effect identification — Stage 1, biometric — Stage 4, revision - Stage 5):
@@ -130,25 +146,25 @@ API keys stored in `localStorage` (`cortex_key_{provider}`). Model selection sto
 
 ```
 User prompt
-  ├─→ Stage 1: Fast Model (effect identification)
+  ├─→ Stage 1: Scout (effect identification)
   │     → returns {effects: [{name, relevance}, ...]}
   │     → triggers word cloud + scan line animation
   │
-  └─→ Stage 2: Main Model (pharmacodynamic curves) [parallel with Stage 1]
+  └─→ Stage 2: Strategist (pharmacodynamic curves) [parallel with Stage 1]
         → returns {curves: [{effect, color, polarity, levels, baseline[], desired[]}, ...]}
         → triggers baseline → desired curve rendering
 
   [User clicks "Lx" button]
-  └─→ Stage 3: Intervention Model (substance selection)
+  └─→ Stage 3: Chess Player (substance selection)
         → returns {interventions: [{key, dose, timeMinutes, targetEffect}, ...], rationale}
         → triggers Lx overlay + substance timeline
 
   [User clicks "Biometric Loop" button]
-  ├─→ Stage 4: Biometric Model (simulate biometric data)
+  ├─→ Stage 4: Spotter (simulate biometric data)
   │     → returns {channels: [{signal, data: [{hour, value}, ...]}, ...]}
   │     → triggers biometric strips (oscilloscope view)
   │
-  └─→ Stage 5: Revision Model (Biometric-Informed Re-evaluation)
+  └─→ Stage 5: Grandmaster (Biometric-Informed Re-evaluation)
         → returns {interventions: [...revised], rationale}
         → triggers animated revision scan (pick-and-place animation)
 ```
@@ -159,13 +175,13 @@ Stages 1 and 2 run **in parallel**. Stage 3 may be pre-computed in the backgroun
 
 Prompts are externalized in `src/prompts.ts` using `{{placeholder}}` syntax, interpolated at runtime by `interpolatePrompt()`.
 
-| Template | Purpose |
-|----------|---------|
-| `PROMPTS.fastModel` | Stage 1: effect identification |
-| `PROMPTS.curveModel` | Stage 2: baseline/desired curves |
-| `PROMPTS.intervention` | Stage 3: substance selection |
-| `PROMPTS.biometric` | Stage 4: biometric data simulation |
-| `PROMPTS.revision` | Stage 5: intervention revision |
+| Template | Agent | Purpose |
+|----------|-------|---------|
+| `PROMPTS.fastModel` | Scout | Stage 1: effect identification |
+| `PROMPTS.curveModel` | Strategist | Stage 2: baseline/desired curves |
+| `PROMPTS.intervention` | Chess Player | Stage 3: substance selection |
+| `PROMPTS.biometric` | Spotter | Stage 4: biometric data simulation |
+| `PROMPTS.revision` | Grandmaster | Stage 5: intervention revision |
 
 ### JSON Parsing
 
@@ -310,6 +326,263 @@ The app can simulate biometric feedback based on the prescribed stack and user p
 
 ---
 
+## Global Animation Timeline Engine
+
+All animations are managed by a single `TimelineEngine` that owns one `requestAnimationFrame` loop. Every animation is a declarative **segment** on a scrubable timeline. A fixed-bottom ribbon UI shows colored segments, phase boundaries, and a draggable playhead. Seeking to any position reconstructs the exact visual state.
+
+### Architecture Overview
+
+```
+src/timeline-engine.ts      — Core engine: single rAF loop, segment registry, play/pause/seek
+src/timeline-ribbon.ts      — Canvas-based bottom ribbon UI (colored segments, playhead, tooltips)
+src/timeline-builder.ts     — Assembles segments in temporal order, registers with engine
+src/timeline-segments/      — Segment implementations by category:
+  ├── curves-segments.ts       Baseline reveal, morph to desired, arrows, peak labels, Y-axis indicators
+  ├── word-cloud-segments.ts   Word entrance, float, dismiss, ring morph
+  ├── lx-segments.ts           Transmute, per-substance sweep, cinematic playhead, pills
+  ├── biometric-segments.ts    Biometric strip reveals
+  ├── revision-segments.ts     Bracket lock-on, pick-and-place, Lx morph
+  ├── scan-line-segments.ts    Looping scan line loading indicators
+  └── transition-segments.ts   Prompt slide, axis builds, gate markers
+```
+
+### Two Operating Modes
+
+1. **Record-only mode** (first run): Imperative code in `main.ts` drives all visuals directly. The engine only tracks `currentTime` for the ribbon playhead. Segments are registered for their timing/layout but `renderAtTime()` is not called.
+2. **Engine-driven mode** (scrub/replay): When the user clicks the ribbon or presses play, `transitionToEngineDriven()` clears all SVG groups, resets segment lifecycle flags, and `renderAtTime()` reconstructs the visual state purely from segments.
+
+### The AnimationSegment Interface
+
+Every animation must implement this interface:
+
+```typescript
+interface AnimationSegment {
+  id: string;                  // Unique identifier
+  label: string;               // Display name on ribbon
+  category: SegmentCategory;   // Color category (see below)
+  startTime: number;           // ms offset on global timeline
+  duration: number;            // ms (0 = instant, Infinity = variable)
+  phaseIdx: number;            // Pipeline phase (0-4)
+
+  enter(ctx: SegmentContext): void;    // Create SVG elements
+  render(progress: 0..1, ctx: SegmentContext): void;  // Update visual state
+  exit(ctx: SegmentContext): void;     // Remove elements (backward seek cleanup)
+
+  loopPeriod?: number;         // For looping segments (scan lines)
+}
+```
+
+### Segment Lifecycle Rules (CRITICAL)
+
+The engine calls segment methods based on the current seek time:
+
+| Condition | Calls | Purpose |
+|-----------|-------|---------|
+| **Active** (`startTime <= time < endTime`) | `enter()` then `render(progress)` | Show animation at current progress |
+| **Past** (`time >= endTime`) | `enter()` then `render(1)` | Show completed final state |
+| **Future** (`time < startTime`) | `exit()` | Clean up for backward seek |
+
+**Key rules for writing segments:**
+
+1. **`enter()` must be re-entrant.** It will be called again after `exit()` during forward-then-backward-then-forward scrubbing. Always clear/reset state at the start of `enter()`.
+
+2. **`render(t)` must be idempotent.** Calling `render(0.5)` after `render(0.8)` must produce the correct visual for `t=0.5`. Never accumulate state across `render()` calls — always compute from the progress value `t` alone.
+
+3. **`exit()` must undo everything `enter()` created.** This is the backward-seek cleanup. If `enter()` creates SVG elements, `exit()` must remove them. If `enter()` modifies existing elements, `exit()` must restore them.
+
+4. **Segment ownership:** Each segment's `exit()` must ONLY clean up elements that IT created in `enter()`. Never remove elements belonging to other segments. For example, a "fade" segment should restore opacity on elements it dimmed, not remove elements created by a "create" segment.
+
+5. **Non-group artifacts:** If a segment creates elements OUTSIDE tracked SVG groups (e.g., the divider creates `#effect-divider` and `<defs>` entries), those must be explicitly cleaned up in `exit()` because `transitionToEngineDriven()` only clears tracked groups via `innerHTML = ''`.
+
+6. **`render(1)` = the completed visual state.** Past segments are NOT exited — they stay at `render(1)`. This means `render(1)` must produce a complete, stable visual. Don't rely on `exit()` to finalize anything for forward playback.
+
+7. **Snapshot pattern for non-idempotent data:** If your animation reads current DOM positions (which change over time), capture them once on the first `render()` call and interpolate from the snapshot. Example:
+   ```typescript
+   let snapshots: {...}[] | null = null;
+   render(t, ctx) {
+     if (!snapshots) snapshots = captureCurrentPositions();
+     // Interpolate from snapshots[i] using t
+   }
+   exit(ctx) { snapshots = null; }
+   ```
+
+### Segment Categories (Ribbon Colors)
+
+| Category | Dark Color | Light Color | Used For |
+|----------|-----------|-------------|----------|
+| `word-cloud` | `#6ec8ff` | `#2563eb` | Word entrance, float, dismiss, ring morph |
+| `scan-line` | `#06b6d4` | `#0891b2` | Loading indicator scan lines |
+| `curves` | `#22c55e` | `#16a34a` | Baseline, desired, arrows, peak labels, Y-axis indicators |
+| `lx-reveal` | `#f5c850` | `#d97706` | Transmute, substance sweeps, cinematic playhead |
+| `biometric` | `#ff4d4d` | `#dc2626` | Biometric strip reveals |
+| `revision` | `#a855f7` | `#9333ea` | Revision diff entries, Lx morph |
+| `transition` | `#64748b` | `#94a3b8` | Prompt slide, axis builds, transmute |
+| `gate` | `#f59e0b` | `#d97706` | User interaction pauses (zero-width markers) |
+
+### SegmentContext
+
+Segments receive a shared context object with references to SVG groups and pipeline data:
+
+```typescript
+interface SegmentContext {
+  svgRoot: SVGSVGElement;
+  groups: Record<string, SVGGElement>;  // All #phase-* groups
+  curvesData: any | null;               // From Stage 2 (Strategist)
+  interventions: any[] | null;          // Validated interventions
+  lxCurves: any[] | null;               // Final Lx overlay curves
+  incrementalSnapshots: any[] | null;   // Per-substance Lx states
+  biometricChannels: any[] | null;      // Biometric strip data
+  revisionDiff: any[] | null;           // Revision diff entries
+  wordCloudEffects: any[] | null;       // Effect names from Scout
+}
+```
+
+Context data is populated progressively as LLM calls complete. Check for `null` before using.
+
+### Variable-Duration Segments
+
+Scan lines run until an LLM returns. Register with `duration: Infinity`. When the LLM returns, call `engine.resolveDuration(segmentId, actualMs)`. This shifts all subsequent segments. On replay, the recorded duration is used.
+
+### Gate Segments
+
+User interaction pauses (Optimize button, Play button, Biometric trigger) are **zero-width markers** (`duration: 0`). During first playthrough, the engine pauses at gates until `engine.resolveGate(id)` is called. On scrub/replay, gates are skipped.
+
+### First-Run Playhead Tracking Contract (MUST FOLLOW)
+
+First run is hybrid: visuals are imperative, timeline is record-only. Any new feature/animation added to first run MUST follow these rules:
+
+1. **Record-only playhead is never authoritative for visuals.** It only mirrors time in the ribbon.
+2. **Each async animation window must have explicit playhead behavior:**
+   - running continuously (its own rAF tracker), or
+   - explicitly paused at a gate/wait.
+3. **Do not let wall-clock playhead advance during user waits.**
+   - If a flow waits for user input (stepper/confirmation), pause tracking at current timeline time.
+   - Resume by rebasing from `engine.getCurrentTime()` when wait ends.
+4. **All tracker rAF IDs must be globally discoverable and cleaned up** on resubmit/abort/phase handoff.
+5. **Never call `engine.seek()` / `engine.play()` while `TimelineState.interactionLocked` is true.**
+   - This forces engine-driven mode mid-imperative run and desyncs state.
+   - Any UI control that can seek/play (e.g. stepper "Prev") must be disabled/guarded during lock.
+6. **Replay pre-segmentation estimates must be data-driven.**
+   - If a segment is pre-added before final data exists (e.g. biometric scan lanes), estimate from real selected devices/input, then resolve with actual duration/count when data returns.
+
+### Timing Parity Rules (Imperative vs Segment Timeline)
+
+Imperative animation timing and `timeline-builder.ts` timing must match exactly.
+
+- If imperative flow has a fixed delay/gap, timeline segments must encode the same value.
+- If timeline builder uses `GAP_BETWEEN_SUBSTANCES = 200`, runtime stepper/autoplay waits must also use 200ms.
+- If reveal duration is computed (example: `600 + (channels - 1) * 80`), use the same formula for playhead tracking and segment durations.
+- Any mismatch causes cumulative ribbon drift even when visuals look correct.
+
+### Phase Index & Boundary Rules
+
+- `phaseIdx` must match the logical phase that owns the segment.
+- Gates at phase boundaries must be tagged to the destination phase consistently (example: biometric gate belongs to phase 3 boundary, not phase 2).
+- Wrong `phaseIdx` breaks `seekToPhase()` boundary math and causes stepper jumps to land in the wrong visual state.
+
+### Resubmit / Teardown Safety Checklist
+
+Before starting a new prompt run:
+
+1. Stop all playhead trackers (prompt, biometric scan, biometric reveal, revision if active).
+2. Clear any cross-module wait hooks/callbacks used for pausing/resuming trackers.
+3. Destroy old `TimelineEngine` and `TimelineRibbon`.
+4. Ensure ribbon `destroy()` removes all window/canvas/button listeners (no listener leaks across runs).
+5. Reset transient timeline state (`_bioScanWallStart`, `_bioScanTimelineStart`, etc.).
+
+### Adding a New Segment — Step by Step
+
+1. **Create the segment factory** in the appropriate file under `src/timeline-segments/`:
+   ```typescript
+   export function createMyNewSegment(startTime: number, ...data): AnimationSegment {
+     let myElements: SVGElement[] = [];  // Track what you create
+
+     return {
+       id: 'my-new-segment',
+       label: 'My Segment',
+       category: 'curves',  // Pick from SegmentCategory
+       startTime,
+       duration: 1000,      // ms
+       phaseIdx: 1,         // Which pipeline phase (0-4)
+
+       enter(ctx) {
+         const group = ctx.groups['phase-my-group'];
+         if (!group) return;
+         group.innerHTML = '';       // Clear previous state (re-entrant!)
+         myElements = [];
+
+         // Create SVG elements
+         const el = svgEl('path', { d: '...', fill: 'red' });
+         group.appendChild(el);
+         myElements.push(el);
+       },
+
+       render(t, ctx) {
+         // Pure function of t (0..1) — no accumulated state!
+         const ease = easeOutCubic(t);
+         for (const el of myElements) {
+           el.setAttribute('opacity', ease.toFixed(2));
+         }
+       },
+
+       exit(ctx) {
+         // Undo everything enter() did
+         const group = ctx.groups['phase-my-group'];
+         if (group) group.innerHTML = '';
+         myElements = [];
+       },
+     };
+   }
+   ```
+
+2. **Register the segment** in `src/timeline-builder.ts` within the appropriate `buildPhaseNSegments()` function:
+   ```typescript
+   import { createMyNewSegment } from './timeline-segments/my-segments';
+
+   export function buildPhase1Segments(engine, startTime) {
+     let t = startTime;
+     // ... existing segments ...
+     engine.addSegment(createMyNewSegment(t, ...data));
+     t += 1000; // advance cursor by segment duration
+     return t;
+   }
+   ```
+
+3. **If the segment needs new data from an LLM call**, add the field to `SegmentContext` in `timeline-engine.ts` and populate it in `main.ts` before building the segments:
+   ```typescript
+   engine.getContext().myNewData = result;
+   ```
+
+4. **If the segment uses a new SVG group**, add the group to `index.html` inside `#phase-chart-svg` and add its ID to the `groupIds` array in the `TimelineEngine` constructor.
+
+5. **If the segment creates elements outside tracked groups** (like the divider does), ensure those are cleaned up in both:
+   - The segment's own `exit()` method
+   - `transitionToEngineDriven()` in `timeline-engine.ts` (for the first transition from record-only mode)
+
+### Common Pitfalls
+
+- **Non-idempotent render():** Reading current DOM state and pushing further each frame. Use the snapshot pattern instead.
+- **Cross-segment cleanup:** A "dismiss" segment removing elements created by an "entrance" segment. Each segment owns only its own elements.
+- **Missing exit() cleanup:** If `enter()` modifies shared groups (e.g., dimming baseline strokes), `exit()` must restore them.
+- **Forgetting to clear in enter():** Always `group.innerHTML = ''` or reset tracking arrays at the start of `enter()` — it may be called multiple times during scrubbing.
+- **Elements outside groups:** The `#effect-divider`, mask definitions in `<defs>`, and similar standalone elements are NOT cleared by `transitionToEngineDriven()` unless explicitly handled.
+- **viewBox expansion:** If your segment expands the SVG viewBox (e.g., for timeline lanes or biometric strips), `exit()` must restore the previous viewBox height.
+- **Timing drift:** Imperative delay constants diverging from `timeline-builder.ts` durations/gaps.
+- **Wait-state drift:** Letting playhead tracking continue while waiting for user input (stepper/gate UI).
+- **Mode race:** Triggering timeline seek/play from custom controls while `TimelineState.interactionLocked` is true.
+- **Hardcoded pre-estimates:** Using fixed lane/strip counts for variable data (biometric/device-driven segments).
+
+### Timeline Ribbon UI
+
+The ribbon is a fixed 76px bar at the bottom of the viewport (`#timeline-ribbon`). It contains:
+- **Play/Pause** button and **Speed** selector (0.25x–4x)
+- **Time display** (current / total)
+- **Canvas** showing colored segment blocks, phase boundary markers (P0–P4), a draggable playhead, hover tooltips, and a hover playhead (FCP-style thin line following cursor)
+
+The ribbon appears when the pipeline starts and hides on reset. CSS class `body.timeline-active` adjusts the chart's max-height to make room.
+
+---
+
 ## Code Structure (Vite & TypeScript)
 
 The codebase has been refactored into a modern Vite + TypeScript setup.
@@ -333,10 +606,11 @@ The codebase has been refactored into a modern Vite + TypeScript setup.
 
 ## Debug Panel
 
-Slide-in panel (right side, 480px wide) showing the full LLM pipeline.
-- Entry types: User Input, Fast Model, Main Model, Intervention Model, Biometric Model, Revision Model, Error
-- Includes elapsed time, request/response bodies, and raw JSON toggle.
-- Allows exporting biometric logs to a JSON file.
+Slide-in panel (right side, 480px wide) showing the full pipeline (The Cortex).
+- **Agent entries**: Scout, Strategist, Chess Player, Spotter, Grandmaster (see Agent Naming Scheme)
+- User Input and Error entries for bookends
+- Includes elapsed time, request/response bodies, and raw JSON toggle
+- Allows exporting biometric logs to a JSON file
 
 ---
 
@@ -363,11 +637,12 @@ The original cartridge system remains in code (`src/cartridge.ts`, `#cartridge-s
 ## Key Design Decisions
 
 1. **Pure SVG** for all visualizations — no Canvas, no external chart libs
-2. **Multi-stage LLM pipeline** — parallel execution where possible, separated concerns.
-3. **Robust JSON extraction** — custom parser to handle LLM quirks.
-4. **requestAnimationFrame** for all continuous animations (scan line, playhead drag, morphing)
-5. **Incremental Lx reveal** — substances animate in showing cumulative effect via AUC bands.
-6. **Playhead morph** — draggable before/after comparison.
-7. **Biometric Loop** — simulates feedback, applies a pick-and-place animated revision.
-8. **Split-Screen Divider** — intuitive handling of 2-effect visualizations.
-9. **TypeScript & Modules** — organized codebase without a heavy framework, using Vite.
+2. **Multi-stage LLM pipeline** — parallel execution where possible, separated concerns
+3. **Agent naming** — "agent" as generic term; Chess theme (Scout, Strategist, Chess Player, Spotter, Grandmaster); "The Cortex" or "The Loop" for the collection
+4. **Robust JSON extraction** — custom parser to handle LLM quirks
+5. **requestAnimationFrame** for all continuous animations (scan line, playhead drag, morphing)
+6. **Incremental Lx reveal** — substances animate in showing cumulative effect via AUC bands
+7. **Playhead morph** — draggable before/after comparison
+8. **Biometric Loop** — simulates feedback, applies a pick-and-place animated revision
+9. **Split-Screen Divider** — intuitive handling of 2-effect visualizations
+10. **TypeScript & Modules** — organized codebase without a heavy framework, using Vite

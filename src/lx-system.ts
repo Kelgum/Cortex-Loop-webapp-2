@@ -6,19 +6,19 @@ import { smoothPhaseValues, phasePointsToPath, phasePointsToFillPath, buildProgr
 import { getEffectSubGroup } from './divider';
 import { placePeakDescriptors } from './phase-chart';
 import { DebugLog } from './debug-panel';
+import { showNarrationPanel, hideNarrationPanel, showSherlockStack, enableSherlockScrollMode, scrollSherlockCardToCenter, setSherlockHoverLock, showLxStepControls, hideLxStepControls, awaitLxStep } from './sherlock';
+import { buildSherlockCards } from './timeline-segments/sherlock-segments';
 
 // ============================================
 // Dependency injection for circular references
 // ============================================
 
-let _updateStepButtonsFn: any;
 let _startTimelineScanLineFn: any;
 let _stopTimelineScanLineFn: any;
 let _showBiometricTriggerFn: any;
 let _renderBiometricStripsFn: any;
 
 export function injectLxDeps(d: any) {
-    if (d.updateStepButtons) _updateStepButtonsFn = d.updateStepButtons;
     if (d.startTimelineScanLine) _startTimelineScanLineFn = d.startTimelineScanLine;
     if (d.stopTimelineScanLine) _stopTimelineScanLineFn = d.stopTimelineScanLine;
     if (d.showBiometricTrigger) _showBiometricTriggerFn = d.showBiometricTrigger;
@@ -30,6 +30,16 @@ export function injectLxDeps(d: any) {
 // ============================================
 
 export let _morphDragState: any = null;
+let _viewBoxHeightAnimRaf: number | null = null;
+let _viewBoxHeightAnimToken = 0;
+let _timelineLabelMeasureCtx: CanvasRenderingContext2D | null = null;
+const _timelineLabelWidthCache = new Map<string, number>();
+
+const TIMELINE_LABEL_FONT = `500 12.5px 'IBM Plex Mono', monospace`;
+const TIMELINE_LABEL_RX_FONT = `700 7px 'IBM Plex Mono', monospace`;
+const TIMELINE_LABEL_LETTER_SPACING_PX = 12.5 * 0.03;
+const TIMELINE_LABEL_LEFT_PAD = 6;
+const TIMELINE_LABEL_WIDTH_BUFFER_PX = 8;
 
 // ============================================
 // Pharmacokinetic Model
@@ -881,12 +891,18 @@ export function preserveBiometricStrips() {
     const bioGroup = document.getElementById('phase-biometric-strips');
     if (!bioGroup || bioGroup.children.length === 0) return;
 
+    // Keep the strip anchored at its existing Y position so timeline re-renders
+    // do not visually yank the biometric region upward.
+    const sep = bioGroup.querySelector('.biometric-separator') as SVGLineElement | null;
+    const sepY = sep ? parseFloat(sep.getAttribute('y1') || '') : NaN;
+    const anchorSepY = Number.isFinite(sepY) ? sepY : undefined;
+
     // Clear old bio clip-paths from defs
     const svg = document.getElementById('phase-chart-svg');
     if (svg) svg.querySelectorAll('defs [id^="bio-clip-"]').forEach(el => el.remove());
 
     // Re-render at correct position (instant = true, no clip animation)
-    _renderBiometricStripsFn?.(channels, true);
+    _renderBiometricStripsFn?.(channels, true, anchorSepY);
 }
 
 /** Toggle desired curves to dashed/dim when Lx takes over */
@@ -933,6 +949,58 @@ export function transmuteDesiredCurves(transmute: any) {
     }
 }
 
+function hasTimelineWarningIcon(sub: any): boolean {
+    const conf = ((sub && sub.dataConfidence) || '').toLowerCase();
+    return conf === 'estimated' || conf === 'medium';
+}
+
+function hasTimelineRxBadge(sub: any): boolean {
+    const status = ((sub && sub.regulatoryStatus) || '').toLowerCase();
+    return status === 'rx' || status === 'controlled';
+}
+
+function getTimelineCollisionLabelText(iv: any): string {
+    const sub = iv && iv.substance;
+    const name = (sub && sub.name) || (iv && iv.key) || '';
+    const dose = ((iv && iv.dose) || (sub && sub.standardDose) || '').trim();
+    const warnIcon = hasTimelineWarningIcon(sub) ? ' ⚠️' : '';
+    return dose ? `${name} ${dose}${warnIcon}` : `${name}${warnIcon}`;
+}
+
+function getTimelineMeasureCtx(): CanvasRenderingContext2D | null {
+    if (_timelineLabelMeasureCtx) return _timelineLabelMeasureCtx;
+    if (typeof document === 'undefined') return null;
+    const canvas = document.createElement('canvas');
+    _timelineLabelMeasureCtx = canvas.getContext('2d');
+    return _timelineLabelMeasureCtx;
+}
+
+function measureTextWithSpacing(text: string, font: string): number {
+    if (!text) return 0;
+    const ctx = getTimelineMeasureCtx();
+    if (!ctx) return text.length * 7.1;
+    ctx.font = font;
+    const glyphW = ctx.measureText(text).width;
+    const trackingW = Math.max(0, text.length - 1) * TIMELINE_LABEL_LETTER_SPACING_PX;
+    return glyphW + trackingW;
+}
+
+function estimateTimelineLabelRightPx(iv: any, barX: number): number {
+    const text = getTimelineCollisionLabelText(iv);
+    const sub = iv && iv.substance;
+    const hasRx = hasTimelineRxBadge(sub);
+    const cacheKey = `${text}|rx=${hasRx ? 1 : 0}`;
+    let textW = _timelineLabelWidthCache.get(cacheKey);
+    if (textW == null) {
+        textW = measureTextWithSpacing(text, TIMELINE_LABEL_FONT);
+        if (hasRx) {
+            textW += measureTextWithSpacing(' Rx', TIMELINE_LABEL_RX_FONT);
+        }
+        _timelineLabelWidthCache.set(cacheKey, textW);
+    }
+    return barX + TIMELINE_LABEL_LEFT_PAD + textW + TIMELINE_LABEL_WIDTH_BUFFER_PX;
+}
+
 /** Allocate swim lanes — pixel-space tight packing, no overlap */
 export function allocateTimelineLanes(interventions: any) {
     const sorted = [...interventions].sort((a: any, b: any) => a.timeMinutes - b.timeMinutes);
@@ -948,7 +1016,9 @@ export function allocateTimelineLanes(interventions: any) {
 
         const pxL = phaseChartX(startMin);
         const x2raw = phaseChartX(Math.min(endMin, PHASE_CHART.endMin));
-        const pxR = pxL + Math.min(Math.max(TIMELINE_ZONE.minBarW, x2raw - pxL), plotRight - pxL);
+        const barPxR = pxL + Math.min(Math.max(TIMELINE_ZONE.minBarW, x2raw - pxL), plotRight - pxL);
+        const labelPxR = estimateTimelineLabelRightPx(iv, pxL);
+        const pxR = Math.max(barPxR, labelPxR);
 
         // Find first lane with no pixel overlap
         let laneIdx = 0;
@@ -966,6 +1036,61 @@ export function allocateTimelineLanes(interventions: any) {
 /** Linear interpolation of Lx curve value at any minute (legacy wrapper) */
 export function interpolateLxValue(lxCurve: any, timeMinutes: any) {
     return interpolatePointsAtTime(lxCurve.points, timeMinutes / 60);
+}
+
+/**
+ * Smoothly animate phase-chart SVG viewBox height changes to avoid timeline "pop down".
+ */
+export function animatePhaseChartViewBoxHeight(svg: SVGSVGElement, targetHeight: number, duration = 280): Promise<void> {
+    const fallback = [0, 0, PHASE_CHART.viewW, PHASE_CHART.viewH];
+    const parsed = (svg.getAttribute('viewBox') || '')
+        .trim()
+        .split(/\s+/)
+        .map(Number);
+    const [vbX, vbY, vbW, vbH] = (parsed.length === 4 && parsed.every((n) => Number.isFinite(n)))
+        ? parsed
+        : fallback;
+
+    const targetH = Math.max(PHASE_CHART.viewH, targetHeight);
+    const startH = vbH;
+    if (duration <= 0 || Math.abs(targetH - startH) < 0.5) {
+        svg.setAttribute('viewBox', `${vbX} ${vbY} ${vbW} ${targetH}`);
+        return Promise.resolve();
+    }
+
+    if (_viewBoxHeightAnimRaf != null) {
+        cancelAnimationFrame(_viewBoxHeightAnimRaf);
+        _viewBoxHeightAnimRaf = null;
+    }
+
+    const token = ++_viewBoxHeightAnimToken;
+    return new Promise<void>((resolve) => {
+        const startTs = performance.now();
+        const tick = (now: number) => {
+            if (token !== _viewBoxHeightAnimToken) {
+                resolve();
+                return;
+            }
+
+            const t = Math.max(0, Math.min(1, (now - startTs) / duration));
+            const ease = t < 0.5
+                ? 4 * t * t * t
+                : 1 - Math.pow(-2 * t + 2, 3) / 2;
+            const h = startH + (targetH - startH) * ease;
+            svg.setAttribute('viewBox', `${vbX} ${vbY} ${vbW} ${h.toFixed(2)}`);
+
+            if (t < 1) {
+                _viewBoxHeightAnimRaf = requestAnimationFrame(tick);
+                return;
+            }
+
+            _viewBoxHeightAnimRaf = null;
+            svg.setAttribute('viewBox', `${vbX} ${vbY} ${vbW} ${targetH}`);
+            resolve();
+        };
+
+        _viewBoxHeightAnimRaf = requestAnimationFrame(tick);
+    });
 }
 
 /** Render FCP-style substance timeline below the chart */
@@ -994,7 +1119,7 @@ export function renderSubstanceTimeline(interventions: any, lxCurves: any, curve
     const laneStep = TIMELINE_ZONE.laneH + TIMELINE_ZONE.laneGap;
     const neededH = TIMELINE_ZONE.top + laneCount * laneStep + TIMELINE_ZONE.bottomPad;
     const finalH = Math.max(500, neededH);
-    svg.setAttribute('viewBox', `0 0 ${PHASE_CHART.viewW} ${finalH}`);
+    void animatePhaseChartViewBoxHeight(svg as unknown as SVGSVGElement, finalH);
 
     const plotRight = PHASE_CHART.padL + PHASE_CHART.plotW;
     const plotLeft = PHASE_CHART.padL;
@@ -1113,6 +1238,16 @@ export function renderSubstanceTimeline(interventions: any, lxCurves: any, curve
             class: 'timeline-bar-label',
         });
         label.textContent = dose ? `${name} ${dose}${warnIcon}` : `${name}${warnIcon}`;
+        // Rx badge as inline tspan after label text
+        const regStatus = sub ? (sub.regulatoryStatus || '').toLowerCase() : '';
+        if (regStatus === 'rx' || regStatus === 'controlled') {
+            const rxSpan = svgEl('tspan', {
+                fill: '#e11d48', 'font-size': '7', 'font-weight': '700',
+                dy: '-0.5',
+            });
+            rxSpan.textContent = ' Rx';
+            label.appendChild(rxSpan);
+        }
         contentG.appendChild(label);
         pillG.appendChild(contentG);
 
@@ -1164,7 +1299,7 @@ export function animateTimelineReveal(duration: any) {
  * Each step: substance label → timeline pill → playhead sweep → pause.
  * The "active" curve progressively modifies from baseline toward desired.
  */
-export async function animateSequentialLxReveal(snapshots: any, interventions: any, curvesData: any) {
+export async function animateSequentialLxReveal(snapshots: any, interventions: any, curvesData: any, narration?: { intro: string; beats: any[]; outro: string } | null) {
     const svg = document.getElementById('phase-chart-svg')!;
     const baseGroup = document.getElementById('phase-baseline-curves')!;
     const desiredGroup = document.getElementById('phase-desired-curves')!;
@@ -1174,6 +1309,22 @@ export async function animateSequentialLxReveal(snapshots: any, interventions: a
 
     // Dim desired curves to ghost AUC reference
     transmuteDesiredCurves(true);
+
+    // Pre-build the Waze cards for the full stack.
+    // buildSherlockCards sorts cards by timeMinutes to match the chronological
+    // order of snapshots (computeIncrementalLxOverlay sorts by timeMinutes).
+    const sherlockCtx = { sherlockNarration: narration, interventions, curvesData } as any;
+    const cards = buildSherlockCards(sherlockCtx);
+
+    // Show Sherlock panel (first card appears with first substance, not here)
+    console.log('[Sherlock] animateSequentialLxReveal narration:', narration);
+    if (cards.length > 0) {
+        showNarrationPanel();
+    }
+
+    // Show step controls (Play/Next) for substance-by-substance navigation
+    showLxStepControls(snapshots.length);
+
     await sleep(400);
 
     // Clear any previous Lx curves and AUC bands
@@ -1181,7 +1332,7 @@ export async function animateSequentialLxReveal(snapshots: any, interventions: a
     const bandsGroup = document.getElementById('phase-lx-bands')!;
     bandsGroup.innerHTML = '';
 
-    // Prepare the timeline zone (separator + lane backgrounds) but NO pills yet
+    // Prepare the timeline zone (separator only). Lane rows are added progressively per step.
     timelineGroup.innerHTML = '';
     const defs = svg.querySelector('defs')!;
     defs.querySelectorAll('[id^="tl-clip-"], [id^="tl-grad-"]').forEach(el => el.remove());
@@ -1193,22 +1344,35 @@ export async function animateSequentialLxReveal(snapshots: any, interventions: a
     }));
 
     const allocated = allocateTimelineLanes(interventions);
-    const laneCount = allocated.reduce((max: number, a: any) => Math.max(max, a.laneIdx + 1), 0);
+    const laneByIntervention = new Map<any, number>();
+    allocated.forEach((a: any) => laneByIntervention.set(a.iv, a.laneIdx));
     const laneStep = TIMELINE_ZONE.laneH + TIMELINE_ZONE.laneGap;
-    const neededH = TIMELINE_ZONE.top + laneCount * laneStep + TIMELINE_ZONE.bottomPad;
-    const finalH = Math.max(500, neededH);
-    svg.setAttribute('viewBox', `0 0 ${PHASE_CHART.viewW} ${finalH}`);
+    const laneStripeFill = document.body.classList.contains('light-mode')
+        ? 'rgba(0,0,0,0.03)'
+        : 'rgba(255,255,255,0.02)';
+    let visibleLaneCount = 0;
+    const ensureTimelineLaneCoverage = (targetLaneCount: number) => {
+        if (targetLaneCount <= visibleLaneCount) return;
+        visibleLaneCount = targetLaneCount;
 
-    for (let i = 0; i < laneCount; i++) {
-        const y = TIMELINE_ZONE.top + i * laneStep;
-        if (i % 2 === 1) {
+        const neededH = TIMELINE_ZONE.top + visibleLaneCount * laneStep + TIMELINE_ZONE.bottomPad;
+        const finalH = Math.max(500, neededH);
+        void animatePhaseChartViewBoxHeight(svg as unknown as SVGSVGElement, finalH);
+
+        for (let laneIdx = 1; laneIdx < visibleLaneCount; laneIdx += 2) {
+            if (timelineGroup.querySelector(`.timeline-lane-stripe[data-lane-idx="${laneIdx}"]`)) continue;
             timelineGroup.appendChild(svgEl('rect', {
-                x: String(PHASE_CHART.padL), y: y.toFixed(1),
-                width: String(PHASE_CHART.plotW), height: String(TIMELINE_ZONE.laneH),
-                fill: 'rgba(255,255,255,0.02)', 'pointer-events': 'none',
+                x: String(PHASE_CHART.padL),
+                y: (TIMELINE_ZONE.top + laneIdx * laneStep).toFixed(1),
+                width: String(PHASE_CHART.plotW),
+                height: String(TIMELINE_ZONE.laneH),
+                fill: laneStripeFill,
+                class: 'timeline-lane-stripe',
+                'data-lane-idx': String(laneIdx),
+                'pointer-events': 'none',
             }));
         }
-    }
+    };
 
     // Fade arrows out
     Array.from(arrowGroup.children).forEach((a: any) => {
@@ -1342,19 +1506,42 @@ export async function animateSequentialLxReveal(snapshots: any, interventions: a
         const conf = sub ? (sub.dataConfidence || '') : '';
         const warnIcon = (conf.toLowerCase() === 'estimated' || conf.toLowerCase() === 'medium') ? ' \u26A0\uFE0F' : '';
         const labelText = `${sub?.name || iv.key}  ${iv.dose || (sub?.standardDose || '')}${warnIcon}`;
-        pillG.appendChild(svgEl('text', {
+        const labelEl = svgEl('text', {
             x: (x1 + 6).toFixed(1),
             y: (y + h / 2 + 3.5).toFixed(1),
             class: 'timeline-bar-label',
             fill: color, 'font-size': '9',
-        })).textContent = labelText;
+        });
+        labelEl.textContent = labelText;
+        // Rx badge as inline tspan after label text
+        const regStatus = sub ? (sub.regulatoryStatus || '').toLowerCase() : '';
+        if (regStatus === 'rx' || regStatus === 'controlled') {
+            const rxSpan = svgEl('tspan', {
+                fill: '#e11d48', 'font-size': '7', 'font-weight': '700',
+                dy: '-0.5',
+            });
+            rxSpan.textContent = ' Rx';
+            labelEl.appendChild(rxSpan);
+        }
+        pillG.appendChild(labelEl);
 
         timelineGroup.appendChild(pillG);
         return pillG;
     }
 
+    const SHERLOCK_CARD_ENTRY_MS = 400;
+    const SHERLOCK_POST_CARD_PAUSE_MS = 120;
+    const SUBSTANCE_STRIP_LEAD_MS = 180;
+    const hasSherlockBeat = (idx: number): boolean => {
+        const card = cards[idx];
+        return !!(card && typeof card.text === 'string' && card.text.trim().length > 0);
+    };
+
     // Iterate through each step — one substance at a time
     for (let k = 0; k < snapshots.length; k++) {
+        // Wait for user to advance (stepping mode) or proceed (playing mode)
+        await awaitLxStep(k, snapshots.length);
+
         const snapshot = snapshots[k];
         const step = snapshot.step;
         const targetPts = snapshot.lxCurves.map((lx: any) =>
@@ -1381,6 +1568,23 @@ export async function animateSequentialLxReveal(snapshots: any, interventions: a
             duration: 200, fill: 'forwards',
         });
 
+        // Show Sherlock narration beat first. Keep a tiny pause before the strip update.
+        if (hasSherlockBeat(k)) {
+            showSherlockStack(cards, k);
+            await sleep(SHERLOCK_CARD_ENTRY_MS + SHERLOCK_POST_CARD_PAUSE_MS);
+        } else if (narration && k === 0) {
+            // Hide if there are no beats
+            hideNarrationPanel();
+        }
+
+        // Expand timeline zone only as far as this step needs.
+        const stepLaneCount = step.reduce((max: number, iv: any) => {
+            const laneIdx = laneByIntervention.get(iv);
+            if (laneIdx == null) return max;
+            return Math.max(max, laneIdx + 1);
+        }, visibleLaneCount);
+        ensureTimelineLaneCoverage(stepLaneCount);
+
         // 3. Render and reveal this substance's timeline pill
         for (let pi = 0; pi < step.length; pi++) {
             const pill = renderSinglePill(step[pi]);
@@ -1394,7 +1598,8 @@ export async function animateSequentialLxReveal(snapshots: any, interventions: a
             }
         }
 
-        await sleep(350);
+        const pillRevealLead = Math.max(SUBSTANCE_STRIP_LEAD_MS, (step.length - 1) * 100 + 140);
+        await sleep(pillRevealLead);
 
         // 4. Playhead sweep — morph curves with slow-mo near onset→peak
         const BASE_SWEEP = Math.max(1200, 2500 - k * 250);
@@ -1506,6 +1711,7 @@ export async function animateSequentialLxReveal(snapshots: any, interventions: a
                 class: 'lx-auc-band',
                 'clip-path': `url(#${bandClipId})`,
                 'data-substance-key': step[0].key,
+                'data-time-minutes': String(step[0].timeMinutes ?? ''),
                 'data-step-idx': String(k),
                 'data-curve-idx': String(ci),
             });
@@ -1676,10 +1882,34 @@ export async function animateSequentialLxReveal(snapshots: any, interventions: a
         });
         setTimeout(() => labelEl.remove(), 250);
 
-        // 6. Pause between steps (skip for last)
-        if (k < snapshots.length - 1) {
-            await sleep(400);
+        // (No longer hiding the beat; the stacked Waze cards remain visible and accumulate)
+
+        // (Pacing between steps is handled by awaitLxStep at the top of the loop)
+    }
+
+    // Hide step controls now that all substances are revealed
+    hideLxStepControls();
+
+    // If the narration returned extra beats (model mismatch), continue
+    // advancing cards so Sherlock does not appear "stuck" mid-stack.
+    const beatCount = Array.isArray(narration?.beats) ? narration!.beats.length : 0;
+    if (cards.length > 0 && beatCount > snapshots.length) {
+        for (let i = snapshots.length; i < beatCount; i++) {
+            if (hasSherlockBeat(i)) {
+                showSherlockStack(cards, i);
+                await sleep(850);
+            }
         }
+    }
+
+    // Show Sherlock narration outro — stays visible until next user interaction
+    if (narration?.outro && cards.length > 0) {
+        showSherlockStack(cards, cards.length - 1);
+    }
+
+    // Once forward narration is complete, switch to scroll mode.
+    if (cards.length > 0) {
+        enableSherlockScrollMode();
     }
 
     // After all steps: update dots/connectors to final positions
@@ -1731,8 +1961,43 @@ export function attachBandHoverListeners() {
     const bands = document.querySelectorAll('.lx-auc-band');
     const pills = document.querySelectorAll('.timeline-pill-group');
 
+    const parseCurveFromEl = (el: Element): number | null => {
+        const raw = el.getAttribute('data-curve-idx');
+        if (raw != null && raw !== '') {
+            const parsed = parseInt(raw, 10);
+            if (!isNaN(parsed) && parsed >= 0) return parsed;
+        }
+        const marker = el.querySelector('.timeline-curve-dot, .timeline-connector');
+        const markerRaw = marker?.getAttribute('data-curve-idx');
+        if (markerRaw != null && markerRaw !== '') {
+            const parsed = parseInt(markerRaw, 10);
+            if (!isNaN(parsed) && parsed >= 0) return parsed;
+        }
+        return null;
+    };
+
+    const parseTimeFromEl = (el: Element): number | null => {
+        const raw = el.getAttribute('data-time-minutes');
+        if (raw != null && raw !== '') {
+            const parsed = parseFloat(raw);
+            if (isFinite(parsed)) return parsed;
+        }
+        return null;
+    };
+
+    const onEntityClick = (el: Element) => {
+        const substanceKey = el.getAttribute('data-substance-key');
+        const curveIdx = parseCurveFromEl(el);
+        const timeMinutes = parseTimeFromEl(el);
+        // Clicking should immediately hand control back to Sherlock center-sync,
+        // so the auto-scrolled card becomes undimmed without requiring mouseleave.
+        setSherlockHoverLock(false);
+        scrollSherlockCardToCenter({ substanceKey, curveIdx, timeMinutes });
+    };
+
     bands.forEach((band) => {
         band.addEventListener('mouseenter', () => {
+            setSherlockHoverLock(true);
             const key = band.getAttribute('data-substance-key');
             bands.forEach((b) => {
                 if (b.getAttribute('data-substance-key') === key) {
@@ -1749,11 +2014,16 @@ export function attachBandHoverListeners() {
                 }
             });
         });
-        band.addEventListener('mouseleave', clearBandHoverClasses);
+        band.addEventListener('click', () => onEntityClick(band));
+        band.addEventListener('mouseleave', () => {
+            clearBandHoverClasses();
+            setSherlockHoverLock(false);
+        });
     });
 
     pills.forEach((pill) => {
         pill.addEventListener('mouseenter', () => {
+            setSherlockHoverLock(true);
             const key = pill.getAttribute('data-substance-key');
             bands.forEach((b) => {
                 if (b.getAttribute('data-substance-key') === key) {
@@ -1770,7 +2040,11 @@ export function attachBandHoverListeners() {
                 }
             });
         });
-        pill.addEventListener('mouseleave', clearBandHoverClasses);
+        pill.addEventListener('click', () => onEntityClick(pill));
+        pill.addEventListener('mouseleave', () => {
+            clearBandHoverClasses();
+            setSherlockHoverLock(false);
+        });
     });
 }
 
@@ -1838,7 +2112,6 @@ export async function handleLxPhase(curvesData: any) {
             PhaseState.phase = 'lx-rendered';
             PhaseState.maxPhaseReached = 2;
             PhaseState.viewingPhase = 2;
-            _updateStepButtonsFn?.();
 
             // Show biometric trigger after Lx completes
             await sleep(600);

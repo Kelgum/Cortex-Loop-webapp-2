@@ -80,38 +80,71 @@ export const TIMING_SEGMENTS = [
 
 export const FAST_MODELS: any = {
     anthropic: { model: 'claude-haiku-4-5-20251001', type: 'anthropic' },
-    openai:    { model: 'gpt-4.1-nano',              type: 'openai' },
-    grok:      { model: 'grok-3-mini-fast',           type: 'openai' },  // xAI uses OpenAI-compatible API
+    openai:    { model: 'o4-mini',                    type: 'openai' },
+    grok:      { model: 'grok-4-1-fast-non-reasoning', type: 'openai' },  // xAI uses OpenAI-compatible API
     gemini:    { model: 'gemini-2.5-flash-lite',      type: 'gemini' },
 };
 
 export const MAIN_MODELS: any = {
     anthropic: 'claude-opus-4-6',
-    openai:    'gpt-4o',
-    grok:      'grok-3',
-    gemini:    'gemini-2.0-flash',
+    openai:    'gpt-5.2',
+    grok:      'grok-4-0709',
+    gemini:    'gemini-3.1-pro-preview',
 };
 
 export const MODEL_OPTIONS: any = {
     anthropic: [
-        { key: 'haiku',  model: 'claude-haiku-4-5-20251001',  label: 'Haiku',  type: 'anthropic' },
-        { key: 'sonnet', model: 'claude-sonnet-4-6',           label: 'Sonnet', type: 'anthropic' },
-        { key: 'opus',   model: 'claude-opus-4-6',            label: 'Opus',   type: 'anthropic' },
+        { key: 'haiku',  model: 'claude-haiku-4-5-20251001',  label: 'Haiku 4.5',      type: 'anthropic', tier: 0 },
+        { key: 'sonnet', model: 'claude-sonnet-4-6',           label: 'Sonnet 4.6',     type: 'anthropic', tier: 1 },
+        { key: 'opus',   model: 'claude-opus-4-6',            label: 'Opus 4.6',       type: 'anthropic', tier: 2 },
     ],
     openai: [
-        { key: 'nano', model: 'gpt-4.1-nano', label: 'Nano',  type: 'openai' },
-        { key: 'mini', model: 'gpt-4.1-mini', label: 'Mini',  type: 'openai' },
-        { key: 'full', model: 'gpt-4o',       label: 'GPT-4o', type: 'openai' },
+        { key: 'o4-mini', model: 'o4-mini',     label: 'o4 Mini',  type: 'openai', tier: 0 },
+        { key: '4.1',     model: 'gpt-4.1',     label: '4.1',      type: 'openai', tier: 1 },
+        { key: '5.2',     model: 'gpt-5.2',     label: '5.2',      type: 'openai', tier: 2 },
     ],
     grok: [
-        { key: 'mini', model: 'grok-3-mini-fast', label: 'Mini', type: 'openai' },
-        { key: 'full', model: 'grok-3',           label: 'Full', type: 'openai' },
+        { key: 'fast', model: 'grok-4-1-fast-non-reasoning', label: '4.1 Fast', type: 'openai', tier: 0 },
+        { key: 'full', model: 'grok-4-0709',                 label: '4',        type: 'openai', tier: 2 },
     ],
     gemini: [
-        { key: 'flash-lite', model: 'gemini-2.5-flash-lite', label: 'Flash Lite', type: 'gemini' },
-        { key: 'flash',      model: 'gemini-2.0-flash',      label: 'Flash',      type: 'gemini' },
+        { key: 'flash-lite', model: 'gemini-2.5-flash-lite',   label: '2.5 Flash Lite', type: 'gemini', tier: 0 },
+        { key: 'flash',      model: 'gemini-3-flash-preview',  label: '3 Flash',        type: 'gemini', tier: 1 },
+        { key: 'pro',        model: 'gemini-3.1-pro-preview',  label: '3.1 Pro',        type: 'gemini', tier: 2 },
     ],
 };
+
+export const PROVIDER_LABELS: Record<string, string> = {
+    anthropic: 'Claude',
+    openai:    'ChatGPT',
+    grok:      'Grok',
+    gemini:    'Gemini',
+};
+
+export const PROVIDER_IDS = ['anthropic', 'openai', 'grok', 'gemini'];
+
+/**
+ * Map a model key from one provider to the closest tier equivalent in another.
+ */
+export function mapModelAcrossProviders(fromProvider: string, fromKey: string, toProvider: string): string {
+    const fromOpts = MODEL_OPTIONS[fromProvider] || [];
+    const toOpts = MODEL_OPTIONS[toProvider] || [];
+    if (toOpts.length === 0) return '';
+    const fromEntry = fromOpts.find((o: any) => o.key === fromKey);
+    if (!fromEntry) return toOpts[0]?.key || '';
+
+    const fromTier = fromEntry.tier;
+    let best = toOpts[0];
+    let bestDist = Math.abs(best.tier - fromTier);
+    for (const opt of toOpts) {
+        const dist = Math.abs(opt.tier - fromTier);
+        if (dist < bestDist || (dist === bestDist && opt.tier <= best.tier)) {
+            best = opt;
+            bestDist = dist;
+        }
+    }
+    return best.key;
+}
 
 export const API_ENDPOINTS: any = {
     anthropic: 'https://api.anthropic.com/v1/messages',
@@ -140,6 +173,8 @@ PHASE_CHART.totalMin = PHASE_CHART.endMin - PHASE_CHART.startMin;
 export const PHASE_STEPS = ['baseline-shown', 'curves-drawn', 'lx-rendered', 'biometric-rendered', 'revision-rendered'];
 
 export const PHASE_SMOOTH_PASSES = 3;
+
+export const DESCRIPTOR_LEVELS = [0, 11, 22, 33, 44, 56, 67, 78, 89, 100];
 
 export const WORD_CLOUD_PALETTE = [
     '#6ec8ff',
@@ -187,4 +222,13 @@ export const BIOMETRIC_ZONE = {
     laneGap: 1,
     labelWidth: 58,
     bottomPad: 8,
+};
+
+export const COMPOSITE_SLEEP = {
+    laneH: 24,
+    subChannels: [
+        { key: 'sleep_deep',  label: 'Deep',  color: '#4a5fc1' },  // indigo
+        { key: 'sleep_rem',   label: 'REM',   color: '#8b5cf6' },  // violet
+        { key: 'sleep_light', label: 'Light',  color: '#f9a8d4' },  // rose
+    ],
 };

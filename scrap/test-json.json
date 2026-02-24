@@ -1,0 +1,92 @@
+[
+  {
+    "step": 1,
+    "intensity_percent": 0,
+    "slot_1": "No",
+    "slot_2": "mental",
+    "slot_3": "effort",
+    "changed_slot": "none",
+    "full_context": "I cannot muster the energy to concentrate on anything meaningful."
+  },
+  {
+    "step": 2,
+    "intensity_percent": 11,
+    "slot_1": "Slight",
+    "slot_2": "mental",
+    "slot_3": "effort",
+    "changed_slot": "slot_1",
+    "full_context": "I can focus on very simple things but my mind wanders constantly."
+  },
+  {
+    "step": 3,
+    "intensity_percent": 22,
+    "slot_1": "Slight",
+    "slot_2": "steady",
+    "slot_3": "effort",
+    "changed_slot": "slot_2",
+    "full_context": "I can maintain my attention on basic tasks if there are no distractions."
+  },
+  {
+    "step": 4,
+    "intensity_percent": 33,
+    "slot_1": "Slight",
+    "slot_2": "steady",
+    "slot_3": "focus",
+    "changed_slot": "slot_3",
+    "full_context": "I am able to read and process information with only occasional breaks."
+  },
+  {
+    "step": 5,
+    "intensity_percent": 44,
+    "slot_1": "Clear",
+    "slot_2": "steady",
+    "slot_3": "focus",
+    "changed_slot": "slot_1",
+    "full_context": "My attention is stable and I can tackle standard work efficiently."
+  },
+  {
+    "step": 6,
+    "intensity_percent": 56,
+    "slot_1": "Clear",
+    "slot_2": "deep",
+    "slot_3": "focus",
+    "changed_slot": "slot_2",
+    "full_context": "I am engaged in my tasks and resist most incoming distractions."
+  },
+  {
+    "step": 7,
+    "intensity_percent": 67,
+    "slot_1": "Clear",
+    "slot_2": "deep",
+    "slot_3": "drive",
+    "changed_slot": "slot_3",
+    "full_context": "I feel a strong sense of momentum and easily comprehend complex concepts."
+  },
+  {
+    "step": 8,
+    "intensity_percent": 78,
+    "slot_1": "Intense",
+    "slot_2": "deep",
+    "slot_3": "drive",
+    "changed_slot": "slot_1",
+    "full_context": "I am locked into my work, effortlessly processing dense materials."
+  },
+  {
+    "step": 9,
+    "intensity_percent": 89,
+    "slot_1": "Intense",
+    "slot_2": "pure",
+    "slot_3": "drive",
+    "changed_slot": "slot_2",
+    "full_context": "I am in a tunnel of extreme concentration, oblivious to the outside world."
+  },
+  {
+    "step": 10,
+    "intensity_percent": 100,
+    "slot_1": "Intense",
+    "slot_2": "pure",
+    "slot_3": "flow",
+    "changed_slot": "slot_3",
+    "full_context": "I have merged with the task, experiencing perfect cognitive fluidity."
+  }
+]

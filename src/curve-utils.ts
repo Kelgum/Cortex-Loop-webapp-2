@@ -1,4 +1,4 @@
-import { PHASE_CHART, PHASE_SMOOTH_PASSES } from './constants';
+import { PHASE_CHART, PHASE_SMOOTH_PASSES, DESCRIPTOR_LEVELS } from './constants';
 import { phaseChartX, phaseChartY } from './utils';
 
 export function smoothPhaseValues(points: any, passes = 3) {
@@ -156,12 +156,33 @@ export function findCurveTrough(points: any) {
 }
 
 export function nearestLevel(value: any) {
-    const levels = [0, 25, 50, 75, 100];
-    let best = levels[0];
-    for (const l of levels) {
+    let best = DESCRIPTOR_LEVELS[0];
+    for (const l of DESCRIPTOR_LEVELS) {
         if (Math.abs(l - value) < Math.abs(best - value)) best = l;
     }
     return best;
+}
+
+export function levelIndex(value: number): number {
+    return DESCRIPTOR_LEVELS.indexOf(nearestLevel(value));
+}
+
+export function levelStep(value: number, direction: 1 | -1): number {
+    const idx = levelIndex(value);
+    const newIdx = Math.max(0, Math.min(DESCRIPTOR_LEVELS.length - 1, idx + direction));
+    return DESCRIPTOR_LEVELS[newIdx];
+}
+
+/** Map old 5-level descriptors {0,25,50,75,100} to 10-level format */
+export function normalizeLevels(levels: Record<string, string>): Record<string, string> {
+    const keys = Object.keys(levels).map(Number).sort((a, b) => a - b);
+    if (keys.length >= 9) return levels;
+    const normalized: Record<string, string> = {};
+    for (const newLevel of DESCRIPTOR_LEVELS) {
+        const nearest = keys.reduce((a, b) => Math.abs(b - newLevel) < Math.abs(a - newLevel) ? b : a);
+        normalized[String(newLevel)] = levels[String(nearest)] || '';
+    }
+    return normalized;
 }
 
 export function findMaxDivergence(curve: any) {

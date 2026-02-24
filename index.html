@@ -1,14 +1,18 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cortex Loop</title>
+    <title>Cortex Loop (5)</title>
     <link rel="stylesheet" href="/styles.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
 </head>
+
 <body>
     <div id="app">
 
@@ -16,59 +20,48 @@
         <div class="top-controls">
             <!-- Theme toggle -->
             <button id="theme-toggle-btn" class="top-control-btn" aria-label="Toggle light/dark mode">
-                <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"/>
+                <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z" />
                 </svg>
-                <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
-                    <circle cx="12" cy="12" r="5"/>
-                    <line x1="12" y1="1" x2="12" y2="3"/>
-                    <line x1="12" y1="21" x2="12" y2="23"/>
-                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-                    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-                    <line x1="1" y1="12" x2="3" y2="12"/>
-                    <line x1="21" y1="12" x2="23" y2="12"/>
-                    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-                    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
+                    <circle cx="12" cy="12" r="5" />
+                    <line x1="12" y1="1" x2="12" y2="3" />
+                    <line x1="12" y1="21" x2="12" y2="23" />
+                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+                    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                    <line x1="1" y1="12" x2="3" y2="12" />
+                    <line x1="21" y1="12" x2="23" y2="12" />
+                    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
                 </svg>
             </button>
 
             <!-- Debug panel toggle -->
             <button id="debug-btn" class="top-control-btn" aria-label="LLM Debug Panel">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M9.5 2a2.5 2.5 0 0 1 5 0v.5H9.5V2z"/>
-                    <path d="M12 2.5V4"/>
-                    <path d="M15.5 4h-7a3 3 0 0 0-3 3v5a7 7 0 0 0 13 0V7a3 3 0 0 0-3-3z"/>
-                    <path d="M12 18v3"/>
-                    <path d="M5.5 7H3"/>
-                    <path d="M21 7h-2.5"/>
-                    <path d="M5.5 12H3"/>
-                    <path d="M21 12h-2.5"/>
-                    <path d="M8 18l-1.5 2"/>
-                    <path d="M16 18l1.5 2"/>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9.5 2a2.5 2.5 0 0 1 5 0v.5H9.5V2z" />
+                    <path d="M12 2.5V4" />
+                    <path d="M15.5 4h-7a3 3 0 0 0-3 3v5a7 7 0 0 0 13 0V7a3 3 0 0 0-3-3z" />
+                    <path d="M12 18v3" />
+                    <path d="M5.5 7H3" />
+                    <path d="M21 7h-2.5" />
+                    <path d="M5.5 12H3" />
+                    <path d="M21 12h-2.5" />
+                    <path d="M8 18l-1.5 2" />
+                    <path d="M16 18l1.5 2" />
                 </svg>
             </button>
 
             <!-- Settings gear -->
             <button id="settings-btn" class="top-control-btn settings-btn" aria-label="Settings">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="3"/>
-                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                </svg>
-            </button>
-        </div>
-
-        <!-- Phase Step Controls (< > chevrons below gear) -->
-        <div id="phase-step-controls" class="phase-step-controls hidden">
-            <button id="phase-step-back" class="phase-step-btn" aria-label="Previous phase" disabled>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="15 18 9 12 15 6"/>
-                </svg>
-            </button>
-            <button id="phase-step-forward" class="phase-step-btn" aria-label="Next phase" disabled>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="9 6 15 12 9 18"/>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="3" />
+                    <path
+                        d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
                 </svg>
             </button>
         </div>
@@ -78,9 +71,10 @@
             <div class="debug-panel-header">
                 <h2 class="debug-panel-title">LLM Pipeline</h2>
                 <button id="debug-close" class="debug-close-btn" aria-label="Close">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="18" y1="6" x2="6" y2="18"/>
-                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
                     </svg>
                 </button>
             </div>
@@ -92,9 +86,9 @@
             <label for="llm-select">Model</label>
             <select id="llm-select" class="llm-select">
                 <option value="anthropic">Claude Opus 4.6</option>
-                <option value="openai">OpenAI GPT-4o</option>
-                <option value="grok">Grok (xAI)</option>
-                <option value="gemini">Gemini 2.0 Flash</option>
+                <option value="openai">OpenAI GPT-5.2</option>
+                <option value="grok">Grok 4 (xAI)</option>
+                <option value="gemini">Gemini 3.1 Pro</option>
             </select>
 
             <label for="effects-select" style="margin-top: 12px;">Effects</label>
@@ -103,100 +97,103 @@
                 <option value="1">1 effect</option>
             </select>
 
-            <label for="api-key-input" style="margin-top: 12px;">API Key <span id="key-provider-label" class="key-provider-label">(Anthropic)</span></label>
+            <label for="api-key-input" style="margin-top: 12px;">API Key <span id="key-provider-label"
+                    class="key-provider-label">(Anthropic)</span></label>
             <div class="api-key-row">
                 <input type="password" id="api-key-input" placeholder="sk-ant-..." autocomplete="off" />
                 <button id="api-key-save">Save</button>
             </div>
             <p class="api-key-hint">Stored locally in browser.</p>
             <p class="api-key-status" id="api-key-status"></p>
+
+            <label
+                style="margin-top: 14px; display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px;">
+                <input type="checkbox" id="sherlock-toggle" checked />
+                Sherlock narration
+            </label>
         </div>
 
         <!-- TOP: Prompt (starts vertically centered, slides up on submit) -->
         <header id="prompt-section" class="phase-centered">
             <div class="prompt-container">
-                <h1 class="logo-text">Cortex Loop (3)</h1>
+                <h1 class="logo-text">Cortex Loop (5)</h1>
                 <form id="prompt-form">
-                    <input type="text" id="prompt-input"
-                           placeholder="Describe your desired outcome..."
-                           autocomplete="off"
-                           spellcheck="false" />
+                    <input type="text" id="prompt-input" placeholder="Describe your desired outcome..."
+                        autocomplete="off" spellcheck="false" />
+                    <div class="rx-mode-container" style="display:none;">
+                        <button id="rx-mode-btn" class="rx-mode-btn" type="button">Rx</button>
+                    </div>
                     <button type="submit" id="prompt-submit" aria-label="Generate stack">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="5" y1="12" x2="19" y2="12"/>
-                            <polyline points="12 5 19 12 12 19"/>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                            <polyline points="12 5 19 12 12 19" />
                         </svg>
                     </button>
                 </form>
 
-                <!-- Include toggles (hidden initially, shown later) -->
-                <div class="include-toggles" style="display:none;">
-                    <span class="include-label">Include</span>
-                    <label class="toggle-pill">
-                        <input type="checkbox" id="toggle-rx" />
-                        <span class="toggle-pill-inner rx">Rx</span>
-                    </label>
-                    <label class="toggle-pill">
-                        <input type="checkbox" id="toggle-controlled" />
-                        <span class="toggle-pill-inner controlled">Controlled</span>
-                    </label>
-                </div>
-
-                <p id="prompt-hint" class="hint-text"><a id="hint-example" href="#">e.g. "4 hours of deep focus, no sleep impact"</a></p>
+                <p id="prompt-hint" class="hint-text"><a id="hint-example" href="#">e.g. "4 hours of deep focus, no
+                        sleep impact"</a></p>
             </div>
         </header>
 
         <!-- MAIN: Phase Chart (primary visual after prompt submit) -->
         <main id="main-content">
             <div id="phase-chart-container" class="phase-chart-container">
-                <svg id="phase-chart-svg" viewBox="0 0 1120 500" xmlns="http://www.w3.org/2000/svg">
-                    <defs>
-                        <filter id="orbital-ghost" x="-40%" y="-40%" width="180%" height="180%">
-                            <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur"/>
-                            <feMerge>
-                                <feMergeNode in="blur"/>
-                                <feMergeNode in="SourceGraphic"/>
-                            </feMerge>
-                        </filter>
-                        <linearGradient id="scan-line-grad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="rgba(160,160,255,0)"/>
-                            <stop offset="50%" stop-color="rgba(160,160,255,0.6)"/>
-                            <stop offset="100%" stop-color="rgba(160,160,255,0)"/>
-                        </linearGradient>
-                        <linearGradient id="tl-scan-line-grad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="rgba(245,200,80,0)"/>
-                            <stop offset="50%" stop-color="rgba(245,200,80,0.6)"/>
-                            <stop offset="100%" stop-color="rgba(245,200,80,0)"/>
-                        </linearGradient>
-                        <linearGradient id="bio-scan-line-grad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="rgba(255,77,77,0)"/>
-                            <stop offset="50%" stop-color="rgba(255,77,77,0.7)"/>
-                            <stop offset="100%" stop-color="rgba(255,77,77,0)"/>
-                        </linearGradient>
-                        <marker id="arrowhead" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
-                            <path class="arrowhead-path" d="M1 1 L9 4 L1 7" fill="none" stroke="rgba(255,255,255,0.7)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                        </marker>
-                    </defs>
-                    <g id="phase-grid"></g>
-                    <g id="phase-x-axis"></g>
-                    <g id="phase-y-axis-left"></g>
-                    <g id="phase-y-axis-right"></g>
-                    <g id="phase-scan-line"></g>
-                    <g id="phase-word-cloud"></g>
-                    <g id="phase-baseline-curves"></g>
-                    <g id="phase-desired-curves"></g>
-                    <g id="phase-lx-bands"></g>
-                    <g id="phase-lx-curves"></g>
-                    <g id="phase-lx-markers"></g>
-                    <g id="phase-substance-timeline"></g>
-                    <g id="phase-mission-arrows"></g>
-                    <g id="phase-yaxis-indicators"></g>
-                    <g id="phase-legend"></g>
-                    <g id="phase-tooltip-overlay"></g>
-                    <g id="phase-biometric-strips"></g>
-                </svg>
-                <button id="phase-optimize-btn" class="phase-optimize-btn hidden">Optimize</button>
-                <button id="phase-lx-btn" class="phase-lx-btn hidden">Lx</button>
+                <div class="phase-svg-wrapper">
+                    <svg id="phase-chart-svg" viewBox="0 0 1120 500" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <filter id="orbital-ghost" x="-40%" y="-40%" width="180%" height="180%">
+                                <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur" />
+                                <feMerge>
+                                    <feMergeNode in="blur" />
+                                    <feMergeNode in="SourceGraphic" />
+                                </feMerge>
+                            </filter>
+                            <linearGradient id="scan-line-grad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stop-color="rgba(160,160,255,0)" />
+                                <stop offset="50%" stop-color="rgba(160,160,255,0.6)" />
+                                <stop offset="100%" stop-color="rgba(160,160,255,0)" />
+                            </linearGradient>
+                            <linearGradient id="tl-scan-line-grad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stop-color="rgba(245,200,80,0)" />
+                                <stop offset="50%" stop-color="rgba(245,200,80,0.6)" />
+                                <stop offset="100%" stop-color="rgba(245,200,80,0)" />
+                            </linearGradient>
+                            <linearGradient id="bio-scan-line-grad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stop-color="rgba(255,77,77,0)" />
+                                <stop offset="50%" stop-color="rgba(255,77,77,0.7)" />
+                                <stop offset="100%" stop-color="rgba(255,77,77,0)" />
+                            </linearGradient>
+                            <marker id="arrowhead" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+                                <path class="arrowhead-path" d="M1 1 L9 4 L1 7" fill="none"
+                                    stroke="rgba(255,255,255,0.7)" stroke-width="1.5" stroke-linecap="round"
+                                    stroke-linejoin="round" />
+                            </marker>
+                        </defs>
+                        <g id="phase-grid"></g>
+                        <g id="phase-x-axis"></g>
+                        <g id="phase-y-axis-left"></g>
+                        <g id="phase-y-axis-right"></g>
+                        <g id="phase-scan-line"></g>
+                        <g id="phase-word-cloud"></g>
+                        <g id="phase-baseline-curves"></g>
+                        <g id="phase-baseline-editor"></g>
+                        <g id="phase-desired-curves"></g>
+                        <g id="phase-lx-bands"></g>
+                        <g id="phase-lx-curves"></g>
+                        <g id="phase-lx-markers"></g>
+                        <g id="phase-substance-timeline"></g>
+                        <g id="phase-mission-arrows"></g>
+                        <g id="phase-yaxis-indicators"></g>
+                        <g id="phase-legend"></g>
+                        <g id="phase-tooltip-overlay"></g>
+                        <g id="phase-biometric-strips"></g>
+                    </svg>
+                    <button id="phase-optimize-btn" class="phase-optimize-btn hidden">Optimize</button>
+                    <button id="phase-lx-btn" class="phase-lx-btn hidden">Lx</button>
+                    <!-- Level explainer panels are body-appended by JS (Sherlock-style) -->
+                </div>
 
                 <!-- Biometric loop trigger (red + button, shown after Lx completes) -->
                 <div id="biometric-trigger-wrap" class="biometric-trigger-wrap hidden">
@@ -212,7 +209,9 @@
                     </div>
                     <div id="bio-profile-row" class="bio-profile-row hidden">
                         <label class="bio-profile-label" for="bio-profile-input">Biometric context</label>
-                        <input type="text" id="bio-profile-input" placeholder="e.g. resting HR 62, HRV 45ms, sleep score 78" autocomplete="off" spellcheck="false" />
+                        <input type="text" id="bio-profile-input"
+                            placeholder="e.g. resting HR 62, HRV 45ms, sleep score 78" autocomplete="off"
+                            spellcheck="false" />
                         <button id="bio-submit-btn" class="bio-submit-btn">Run biometric loop</button>
                     </div>
                 </div>
@@ -242,8 +241,8 @@
                     <svg id="effect-chart-svg" viewBox="0 0 520 360" xmlns="http://www.w3.org/2000/svg">
                         <defs>
                             <linearGradient id="chart-grid-fade" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stop-color="rgba(255,255,255,0.06)"/>
-                                <stop offset="100%" stop-color="rgba(255,255,255,0.02)"/>
+                                <stop offset="0%" stop-color="rgba(255,255,255,0.06)" />
+                                <stop offset="100%" stop-color="rgba(255,255,255,0.02)" />
                             </linearGradient>
                         </defs>
                         <g id="chart-grid"></g>
@@ -263,10 +262,30 @@
             <div class="summary-pills" id="summary-pills"></div>
         </footer>
 
+        <!-- Animation Timeline Ribbon (slides up on first animation) -->
+        <div id="timeline-ribbon" class="timeline-ribbon">
+            <button id="ribbon-toggle" class="ribbon-toggle" aria-label="Hide timeline">
+                <svg width="10" height="6" viewBox="0 0 10 6" fill="currentColor">
+                    <path d="M1 1l4 4 4-4" />
+                </svg>
+            </button>
+            <div class="ribbon-controls">
+                <button id="ribbon-play-pause" class="ribbon-btn" aria-label="Play">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                        <polygon points="5,3 19,12 5,21" />
+                    </svg>
+                </button>
+                <span id="ribbon-time" class="ribbon-time">00:00.0 / 00:00.0</span>
+                <button id="ribbon-speed" class="ribbon-btn ribbon-speed">1x</button>
+            </div>
+            <canvas id="ribbon-canvas" class="ribbon-canvas"></canvas>
+        </div>
+
     </div>
 
     <script src="config.js"></script>
     <script src="biometricDevices.js"></script>
     <script type="module" src="/src/main.ts"></script>
 </body>
+
 </html>

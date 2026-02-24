@@ -342,16 +342,21 @@ export function renderWordCloud(effects: any[]): Promise<void> {
 
         const sorted = [...effects].sort((a: any, b: any) => b.relevance - a.relevance);
         const maxRel = sorted[0].relevance || 100;
+        const n = sorted.length;
+        const maxSize = 42;
+        const minSize = 10;
+        const primaryCount = Math.min(8, Math.max(1, n - 10));
 
         const measured: any[] = [];
-        for (let i = 0; i < sorted.length; i++) {
+        for (let i = 0; i < n; i++) {
             const eff = sorted[i];
             const relFrac = eff.relevance / maxRel;
-            const fontSize = 12 + Math.pow(relFrac, 0.7) * 28;
-            const fontWeight = relFrac > 0.55 ? '700' : '600';
-            const letterSpacing = relFrac > 0.55 ? '-0.04em' : '-0.02em';
+            const isPrimary = i < primaryCount;
+            const fontSize = n <= 1 ? maxSize : maxSize - (maxSize - minSize) * (i / (n - 1));
+            const fontWeight = isPrimary ? (relFrac > 0.55 ? '700' : '600') : '500';
+            const letterSpacing = isPrimary ? (relFrac > 0.55 ? '-0.04em' : '-0.02em') : '0';
             const color = WORD_CLOUD_PALETTE[i % WORD_CLOUD_PALETTE.length];
-            const opacity = 0.82 + relFrac * 0.18;
+            const opacity = isPrimary ? (0.82 + relFrac * 0.18) : (0.32 + relFrac * 0.18);
 
             const textEl = svgEl('text', {
                 x: '0', y: '0',
@@ -430,10 +435,10 @@ export function renderWordCloud(effects: any[]): Promise<void> {
         }
 
         // Phase 3: Words spring from center to position with stagger, wobble starts as each arrives
-        const stagger = 180;
+        const totalEntranceDur = 20000; // 20 seconds
         const slideDur = 500;
         const words = group.querySelectorAll('.word-cloud-word');
-        const totalEntranceDur = words.length * stagger + slideDur;
+        const stagger = words.length > 0 ? (totalEntranceDur - slideDur) / words.length : 0;
         const startTime = performance.now();
 
         _wordCloudPositions.forEach((pos, idx) => {

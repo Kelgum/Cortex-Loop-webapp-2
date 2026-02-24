@@ -1,8 +1,19 @@
-import { PHASE_CHART, PHASE_SMOOTH_PASSES, TIMELINE_ZONE, BIOMETRIC_ZONE } from './constants';
+import { PHASE_CHART, PHASE_SMOOTH_PASSES, TIMELINE_ZONE, BIOMETRIC_ZONE, DESCRIPTOR_LEVELS } from './constants';
 import { AppState, PhaseState, DividerState, BiometricState } from './state';
 import { svgEl, chartTheme, phaseChartX, phaseChartY, sleep } from './utils';
-import { smoothPhaseValues, phasePointsToPath, phasePointsToFillPath, findCurvePeak, findCurveTrough, nearestLevel, findMaxDivergence } from './curve-utils';
+import { smoothPhaseValues, phasePointsToPath, phasePointsToFillPath, findCurvePeak, findCurveTrough, nearestLevel, findMaxDivergence, normalizeLevels } from './curve-utils';
 import { getEffectSubGroup, activateDivider, cleanupDivider } from './divider';
+import { activateBaselineEditor, cleanupBaselineEditor , getLevelData } from './baseline-editor';
+
+
+export function getChartLevelDesc(curve: any, val: number): string {
+    const levelVal = nearestLevel(val);
+    if (Array.isArray(curve.levels)) {
+        const best = getLevelData(curve, val);
+        if (best) return best.label;
+    }
+    return curve.levels?.[String(levelVal)] || '';
+}
 
 // ---- Module-level state ----
 let scanLineAnimId: number | null = null;
@@ -16,7 +27,6 @@ export function injectPhaseChartDeps(deps: {
     stopOrbitalRings: () => void;
     setOrbitalRingsState: (v: any) => void;
     setWordCloudPositions: (v: any[]) => void;
-    hidePhaseStepControls: () => void;
     cleanupMorphDrag: () => void;
     hideBiometricTrigger: () => void;
     hideInterventionPlayButton: () => void;
@@ -204,6 +214,32 @@ export function highlightCurve(activeIdx: number, active: boolean): void {
 // Phase Chart: Y-Axes
 // ============================================
 
+/** Split effect label into max 2 lines for word wrapping */
+function splitEffectLabelIntoTwoLines(text: string): [string, string] {
+    const trimmed = text.trim();
+    if (!trimmed) return ['', ''];
+    const words = trimmed.split(/\s+/);
+    if (words.length === 1) {
+        if (words[0].length <= 14) return [words[0], ''];
+        const mid = Math.ceil(words[0].length / 2);
+        return [words[0].slice(0, mid), words[0].slice(mid)];
+    }
+    let bestSplit = 1;
+    let bestDiff = Infinity;
+    for (let i = 1; i < words.length; i++) {
+        const l1 = words.slice(0, i).join(' ');
+        const l2 = words.slice(i).join(' ');
+        const diff = Math.abs(l1.length - l2.length);
+        if (diff < bestDiff) {
+            bestDiff = diff;
+            bestSplit = i;
+        }
+    }
+    const line1 = words.slice(0, bestSplit).join(' ');
+    const line2 = words.slice(bestSplit).join(' ');
+    return [line1, line2];
+}
+
 export function buildPhaseYAxes(effects: string[], colors: string[], curvesData: any[]): void {
     const leftGroup = document.getElementById('phase-y-axis-left')!;
     const rightGroup = document.getElementById('phase-y-axis-right')!;
@@ -213,6 +249,14 @@ export function buildPhaseYAxes(effects: string[], colors: string[], curvesData:
     tooltipOverlay.innerHTML = '';
 
     const cols = colors || [];
+    // Normalize 5-level descriptors to 10-level format if needed
+    if (curvesData) {
+        for (const curve of curvesData) {
+            if (curve.levels && Object.keys(curve.levels).length <= 5) {
+                curve.levels = normalizeLevels(curve.levels);
+            }
+        }
+    }
     const leftLevels = curvesData && curvesData[0] && curvesData[0].levels ? curvesData[0].levels : null;
     const rightLevels = curvesData && curvesData[1] && curvesData[1].levels ? curvesData[1].levels : null;
     if (effects.length >= 1) buildSingleYAxis(leftGroup, effects[0], 'left', cols[0], leftLevels, 0, effects.length);
@@ -235,28 +279,33 @@ export function buildSingleYAxis(group: Element, effectLabel: string, side: 'lef
     }));
 
     // Collect tick data for magnetic hit areas
-    const ticks: number[] = [];
-    for (let v = 0; v <= 100; v += 25) ticks.push(v);
+    const ticks: number[] = [...DESCRIPTOR_LEVELS];
 
-    // Tick marks + labels every 25% (including 0)
+    // Tick marks + labels at each descriptor level
     const tickElements: any[] = []; // { v, y, numLabel, descriptor, guideLine, tipGroup }
     for (let ti = 0; ti < ticks.length; ti++) {
         const v = ticks[ti];
         const y = phaseChartY(v);
+        // Major ticks at ~quarter marks (0,22,44,67,89,100), minor at others
+        const isMajor = ti % 2 === 0 || v === 100;
         group.appendChild(svgEl('line', {
             x1: String(x), y1: y.toFixed(1),
-            x2: String(x + tickDir), y2: y.toFixed(1),
-            stroke: t.yTick, 'stroke-width': '1',
+            x2: String(x + (isMajor ? tickDir : tickDir * 0.6)), y2: y.toFixed(1),
+            stroke: t.yTick, 'stroke-width': isMajor ? '1' : '0.6',
         }));
 
-        const numLabel = svgEl('text', {
-            x: String(x + labelOffset), y: (y + 3).toFixed(1),
-            fill: t.yLabel,
-            'font-family': "'IBM Plex Mono', monospace",
-            'font-size': '10', 'text-anchor': textAnchor,
-        });
-        numLabel.textContent = String(v);
-        group.appendChild(numLabel);
+        // Show numeric label on alternating ticks to avoid crowding
+        let numLabel: any = null;
+        if (isMajor) {
+            numLabel = svgEl('text', {
+                x: String(x + labelOffset), y: (y + 3).toFixed(1),
+                fill: t.yLabel,
+                'font-family': "'IBM Plex Mono', monospace",
+                'font-size': '9', 'text-anchor': textAnchor,
+            });
+            numLabel.textContent = String(v);
+            group.appendChild(numLabel);
+        }
 
         const entry: any = { v, y, numLabel, descriptor: null, guideLine: null, tipGroup: null };
 
@@ -360,11 +409,13 @@ export function buildSingleYAxis(group: Element, effectLabel: string, side: 'lef
         // Hover events — emphasize number, show descriptor, guide line, dim other curves
         let guideAnim: any = null;
         hitArea.addEventListener('mouseenter', () => {
-            // Emphasize the number with curve color
-            entry.numLabel.setAttribute('fill', labelColor);
-            entry.numLabel.setAttribute('font-weight', '600');
-            entry.numLabel.style.filter = `drop-shadow(0 0 3px ${labelColor})`;
-            entry.numLabel.style.transition = 'filter 150ms ease';
+            // Emphasize the number with curve color (if label exists for this tick)
+            if (entry.numLabel) {
+                entry.numLabel.setAttribute('fill', labelColor);
+                entry.numLabel.setAttribute('font-weight', '600');
+                entry.numLabel.style.filter = `drop-shadow(0 0 3px ${labelColor})`;
+                entry.numLabel.style.transition = 'filter 150ms ease';
+            }
 
             if (entry.tipGroup) {
                 entry.tipGroup.setAttribute('opacity', '1');
@@ -393,10 +444,12 @@ export function buildSingleYAxis(group: Element, effectLabel: string, side: 'lef
             }
         });
         hitArea.addEventListener('mouseleave', () => {
-            // Restore number to default
-            entry.numLabel.setAttribute('fill', 'rgba(167, 191, 223, 0.76)');
-            entry.numLabel.setAttribute('font-weight', '400');
-            entry.numLabel.style.filter = '';
+            // Restore number to default (if label exists for this tick)
+            if (entry.numLabel) {
+                entry.numLabel.setAttribute('fill', 'rgba(167, 191, 223, 0.76)');
+                entry.numLabel.setAttribute('font-weight', '400');
+                entry.numLabel.style.filter = '';
+            }
 
             if (entry.tipGroup) {
                 entry.tipGroup.setAttribute('opacity', '0');
@@ -413,26 +466,37 @@ export function buildSingleYAxis(group: Element, effectLabel: string, side: 'lef
         });
     }
 
-    // Effect label inside plot area, top corner
+    // Effect label outside plot area, top-aligned to y-axis, larger bold text, word-wrapped to 2 lines
     const labelAnchor = side === 'left' ? 'start' : 'end';
-    const labelX = side === 'left' ? PHASE_CHART.padL + 6 : PHASE_CHART.padL + PHASE_CHART.plotW - 6;
+    const labelX = side === 'left' ? 25 : PHASE_CHART.viewW - 25;
+    const labelY = PHASE_CHART.padT + 16;
+    const lineHeight = 18;
+    const [line1, line2] = splitEffectLabelIntoTwoLines(effectLabel);
+
     const yLabel = svgEl('text', {
-        x: String(labelX), y: String(PHASE_CHART.padT + 14),
-        fill: labelColor, 'fill-opacity': '0.85',
+        x: String(labelX), y: String(labelY),
+        fill: labelColor, 'fill-opacity': '0.9',
         'font-family': "'Space Grotesk', sans-serif",
-        'font-size': '11', 'font-weight': '500', 'letter-spacing': '0.04em',
+        'font-size': '15', 'font-weight': '700', 'letter-spacing': '0.03em',
         'text-anchor': labelAnchor,
     });
-    yLabel.textContent = effectLabel;
+    const tspan1 = svgEl('tspan', { x: String(labelX), dy: '0' });
+    tspan1.textContent = line1;
+    yLabel.appendChild(tspan1);
+    if (line2) {
+        const tspan2 = svgEl('tspan', { x: String(labelX), dy: String(lineHeight) });
+        tspan2.textContent = line2;
+        yLabel.appendChild(tspan2);
+    }
     group.appendChild(yLabel);
 }
 
 /** Y-axis effect label position — used by word cloud dismiss to fly words precisely */
 export function getYAxisLabelPosition(side: 'left' | 'right'): { x: number; y: number; anchor: string; baseline: string } {
-    const x = side === 'left' ? PHASE_CHART.padL + 6 : PHASE_CHART.padL + PHASE_CHART.plotW - 6;
+    const x = side === 'left' ? 75 : PHASE_CHART.viewW - 75;
     return {
         x,
-        y: PHASE_CHART.padT + 14,
+        y: PHASE_CHART.padT + 16,
         anchor: side === 'left' ? 'start' : 'end',
         baseline: 'alphabetic',
     };
@@ -455,12 +519,17 @@ export function buildPhaseGrid(): void {
             stroke: t.grid, 'stroke-width': '1',
         }));
     }
-    for (let v = 25; v <= 100; v += 25) {
+    for (let i = 0; i < DESCRIPTOR_LEVELS.length; i++) {
+        const v = DESCRIPTOR_LEVELS[i];
+        if (v === 0) continue;
         const y = phaseChartY(v);
+        // Major lines at even indices (0,22,44,67,89,100), minor at odd
+        const isMajor = i % 2 === 0 || v === 100;
         group.appendChild(svgEl('line', {
             x1: String(PHASE_CHART.padL), y1: y.toFixed(1),
             x2: String(PHASE_CHART.padL + PHASE_CHART.plotW), y2: y.toFixed(1),
-            stroke: t.grid, 'stroke-width': '1',
+            stroke: t.grid, 'stroke-width': isMajor ? '1' : '0.5',
+            opacity: isMajor ? '1' : '0.4',
         }));
     }
 }
@@ -720,7 +789,7 @@ export function placePeakDescriptors(group: Element, curvesData: any[], pointsKe
         }
 
         const level = nearestLevel(keyPoint.value);
-        const descriptor = curve.levels[String(level)];
+        const descriptor = getChartLevelDesc(curve, keyPoint.value);
         if (!descriptor) continue;
         const px = phaseChartX(keyPoint.hour * 60);
         const py = phaseChartY(keyPoint.value);
@@ -880,7 +949,7 @@ function placeLabel(
     parent.appendChild(el);
 }
 
-function renderYAxisTransitionIndicators(curvesData: any[], animDelay: number = 0): void {
+export function renderYAxisTransitionIndicators(curvesData: any[], animDelay: number = 0): void {
     const group = document.getElementById('phase-yaxis-indicators');
     if (!group) return;
     group.innerHTML = '';
@@ -920,8 +989,8 @@ function renderChangeIndicator(
 
     const baseLevel = nearestLevel(blMatch.value);
     const desiredLevel = nearestLevel(div.value);
-    const baseDesc = curve.levels[String(baseLevel)];
-    const desiredDesc = curve.levels[String(desiredLevel)];
+    const baseDesc = getChartLevelDesc(curve, baseLevel);
+    const desiredDesc = getChartLevelDesc(curve, desiredLevel);
     if (!baseDesc || !desiredDesc || baseLevel === desiredLevel) return;
 
     const baseY = phaseChartY(baseLevel);
@@ -1055,8 +1124,8 @@ function renderKeepIndicator(
         topLevel = peakIdx < zoneLevels.length - 1 ? zoneLevels[peakIdx + 1] : peakLevel;
     }
 
-    const topDesc = curve.levels ? curve.levels[String(topLevel)] : null;
-    const botDesc = curve.levels ? curve.levels[String(botLevel)] : null;
+    const topDesc = curve.levels ? getChartLevelDesc(curve, topLevel) : null;
+    const botDesc = curve.levels ? getChartLevelDesc(curve, botLevel) : null;
     if (!topDesc && !botDesc) return;
 
     const topY = phaseChartY(topLevel);
@@ -1152,8 +1221,8 @@ export async function renderBaselineCurves(curvesData: any[]): Promise<void> {
             await sleep(200);
     }
 
-    // Place peak descriptors at each baseline curve's peak (batch for collision avoidance)
-    placePeakDescriptors(group, curvesData, 'baseline', 400);
+    // Activate interactive baseline editor (replaces static peak descriptors)
+    activateBaselineEditor(curvesData);
 
     // Activate split-screen divider for 2-effect mode
     activateDivider(curvesData);
@@ -1184,7 +1253,8 @@ export function renderBaselineCurvesInstant(curvesData: any[]): void {
         sub.appendChild(strokePath);
     }
 
-    placePeakDescriptors(group, curvesData, 'baseline', 0);
+    // Activate interactive baseline editor (replaces static peak descriptors)
+    activateBaselineEditor(curvesData);
 
     // Activate split-screen divider for 2-effect mode
     activateDivider(curvesData);
@@ -1369,9 +1439,11 @@ export function clearPromptError(): void {
 // ============================================
 
 export function resetPhaseChart(): void {
+    cleanupBaselineEditor();
     cleanupDivider();
     ['phase-x-axis', 'phase-y-axis-left', 'phase-y-axis-right', 'phase-grid',
-     'phase-scan-line', 'phase-word-cloud', 'phase-baseline-curves', 'phase-desired-curves',
+     'phase-scan-line', 'phase-word-cloud', 'phase-baseline-curves', 'phase-baseline-editor',
+     'phase-desired-curves',
      'phase-lx-bands', 'phase-lx-curves', 'phase-lx-markers', 'phase-substance-timeline',
      'phase-biometric-strips', 'phase-mission-arrows', 'phase-yaxis-indicators',
      'phase-legend', 'phase-tooltip-overlay'].forEach(id => {
@@ -1407,8 +1479,6 @@ export function resetPhaseChart(): void {
     // Clean up morph playhead and drag state
     _resetDeps?.cleanupMorphDrag();
 
-    // Reset phase step controls
-    _resetDeps?.hidePhaseStepControls();
     PhaseState.maxPhaseReached = -1;
     PhaseState.viewingPhase = -1;
 

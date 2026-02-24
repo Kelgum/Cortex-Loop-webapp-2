@@ -1010,14 +1010,16 @@ export const SUBSTANCE_DB: Record<string, any> = {
 
 export function getActiveSubstances() {
     const active: any = {};
+    const mode = AppState.rxMode;
     for (const [key, s] of Object.entries(SUBSTANCE_DB)) {
         const status = (s.regulatoryStatus || '').toLowerCase();
-        // Supplement and OTC are always allowed
-        if (status === 'supplement' || status === 'otc') {
+        const isSupplementOrOTC = status === 'supplement' || status === 'otc';
+        const isRxOrControlled = status === 'rx' || status === 'controlled';
+        if (mode === 'off' && isSupplementOrOTC) {
             active[key] = s;
-        } else if (status === 'rx' && AppState.includeRx) {
+        } else if (mode === 'rx') {
             active[key] = s;
-        } else if (status === 'controlled' && AppState.includeControlled) {
+        } else if (mode === 'rx-only' && isRxOrControlled) {
             active[key] = s;
         }
     }

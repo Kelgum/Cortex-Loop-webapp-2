@@ -1,12 +1,14 @@
-import { MODEL_OPTIONS } from './constants';
-import { AppState } from './state';
+import { MODEL_OPTIONS, PROVIDER_LABELS, PROVIDER_IDS } from './constants';
+import { AppState, switchStageProvider } from './state';
 
 const STAGES = [
-    { id: 'fast',         stageClass: 'fast-model',         label: 'Effects' },
-    { id: 'curves',       stageClass: 'main-model',         label: 'Curves' },
-    { id: 'intervention', stageClass: 'intervention-model',  label: 'Intervention' },
-    { id: 'biometric',    stageClass: 'biometric-model',     label: 'Biometric' },
-    { id: 'revision',     stageClass: 'revision-model',      label: 'Revision' },
+    { id: 'fast',              stageClass: 'fast-model',              label: 'Scout' },
+    { id: 'curves',            stageClass: 'main-model',              label: 'Strategist' },
+    { id: 'intervention',      stageClass: 'intervention-model',      label: 'Chess Player' },
+    { id: 'sherlock',          stageClass: 'sherlock-model',           label: 'Sherlock' },
+    { id: 'biometric',         stageClass: 'biometric-model',         label: 'Spotter' },
+    { id: 'revision',          stageClass: 'revision-model',          label: 'Grandmaster' },
+    { id: 'sherlockRevision',  stageClass: 'sherlock-revision-model', label: 'Sherlock (Rev)' },
 ];
 
 // SVG chevron pointing down (rotates to point right when collapsed)
@@ -102,6 +104,7 @@ export const DebugLog = {
             badge.textContent = stage.label;
             header.appendChild(badge);
 
+            // Model selector (shows full model name with version)
             const select = document.createElement('select');
             select.className = 'agent-model-select';
             select.dataset.stage = stage.id;
@@ -111,6 +114,24 @@ export const DebugLog = {
                 localStorage.setItem(`cortex_stage_${stage.id}`, select.value);
             });
             header.appendChild(select);
+
+            // Provider selector (dropdown: Claude / ChatGPT / Gemini / Grok)
+            const providerSelect = document.createElement('select');
+            providerSelect.className = 'agent-provider-select';
+            providerSelect.dataset.stage = stage.id;
+            for (const pid of PROVIDER_IDS) {
+                const o = document.createElement('option');
+                o.value = pid;
+                o.textContent = PROVIDER_LABELS[pid] || pid;
+                providerSelect.appendChild(o);
+            }
+            providerSelect.value = AppState.stageProviders[stage.id] || AppState.selectedLLM;
+            providerSelect.addEventListener('change', () => {
+                switchStageProvider(stage.id, providerSelect.value);
+                // Re-populate model dropdown for new provider
+                this._populateSelect(select, stage.id);
+            });
+            header.appendChild(providerSelect);
 
             const status = document.createElement('div');
             status.className = 'agent-card-status';
@@ -146,7 +167,7 @@ export const DebugLog = {
     },
 
     _populateSelect(select: HTMLSelectElement, stageId: string) {
-        const provider = AppState.selectedLLM;
+        const provider = AppState.stageProviders[stageId] || AppState.selectedLLM;
         const opts = MODEL_OPTIONS[provider] || [];
         select.innerHTML = '';
         for (const opt of opts) {
@@ -156,13 +177,24 @@ export const DebugLog = {
             select.appendChild(o);
         }
         const stored = AppState.stageModels[stageId];
-        select.value = opts.find((o: any) => o.key === stored) ? stored : opts[0]?.key || '';
+        const resolved = opts.find((o: any) => o.key === stored) ? stored : (opts[0]?.key || '');
+        select.value = resolved;
+
+        if (resolved && stored !== resolved) {
+            AppState.stageModels[stageId] = resolved;
+            localStorage.setItem(`cortex_stage_${stageId}`, resolved);
+        }
     },
 
     refreshSelects() {
         for (const stage of STAGES) {
             const sel = document.querySelector(`.agent-model-select[data-stage="${stage.id}"]`) as HTMLSelectElement;
             if (sel) this._populateSelect(sel, stage.id);
+            // Sync provider dropdown value
+            const provSel = document.querySelector(`.agent-provider-select[data-stage="${stage.id}"]`) as HTMLSelectElement;
+            if (provSel) {
+                provSel.value = AppState.stageProviders[stage.id] || AppState.selectedLLM;
+            }
         }
     },
 
