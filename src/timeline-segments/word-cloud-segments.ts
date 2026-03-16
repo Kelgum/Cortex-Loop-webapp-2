@@ -12,7 +12,15 @@ import { smoothPhaseValues, interpolatePointsAtTime } from '../curve-utils';
 
 // --- Word cloud entrance + float ---
 export function createWordCloudEntranceSegment(startTime: number, duration: number): AnimationSegment {
-    const wordEls: { el: SVGTextElement; cx: number; cy: number; targetX: number; targetY: number; opacity: number; staggerDelay: number }[] = [];
+    const wordEls: {
+        el: SVGTextElement;
+        cx: number;
+        cy: number;
+        targetX: number;
+        targetY: number;
+        opacity: number;
+        staggerDelay: number;
+    }[] = [];
     const STAGGER = 180;
     const SLIDE_DUR_FRAC = 0.3; // fraction of total duration per word slide
 
@@ -50,7 +58,8 @@ export function createWordCloudEntranceSegment(startTime: number, duration: numb
                 const opacity = 0.82 + relFrac * 0.18;
 
                 const textEl = svgEl('text', {
-                    x: cx.toFixed(1), y: cy.toFixed(1),
+                    x: cx.toFixed(1),
+                    y: cy.toFixed(1),
                     fill: color,
                     'font-size': fontSize.toFixed(1),
                     'font-weight': relFrac > 0.55 ? '700' : '600',
@@ -66,7 +75,8 @@ export function createWordCloudEntranceSegment(startTime: number, duration: numb
                 const bbox = textEl.getBBox();
 
                 // Golden angle spiral placement
-                let bestX = cx, bestY = cy;
+                let bestX = cx,
+                    bestY = cy;
                 if (i > 0) {
                     let found = false;
                     for (let rNorm = 0.05; rNorm <= 1; rNorm += 0.04) {
@@ -75,14 +85,20 @@ export function createWordCloudEntranceSegment(startTime: number, duration: numb
                             const angle = i * GOLDEN_ANGLE + (ai / angSteps) * Math.PI * 2;
                             const tx = cx + cloudRx * rNorm * Math.cos(angle);
                             const ty = cy + cloudRy * rNorm * Math.sin(angle);
-                            if ((tx - cx) ** 2 / (cloudRx ** 2) + (ty - cy) ** 2 / (cloudRy ** 2) > 1) continue;
-                            const collides = placed.some(p =>
-                                tx - bbox.width / 2 - PAD < p.x + p.w / 2 &&
-                                tx + bbox.width / 2 + PAD > p.x - p.w / 2 &&
-                                ty - bbox.height / 2 - PAD < p.y + p.h / 2 &&
-                                ty + bbox.height / 2 + PAD > p.y - p.h / 2
+                            if ((tx - cx) ** 2 / cloudRx ** 2 + (ty - cy) ** 2 / cloudRy ** 2 > 1) continue;
+                            const collides = placed.some(
+                                p =>
+                                    tx - bbox.width / 2 - PAD < p.x + p.w / 2 &&
+                                    tx + bbox.width / 2 + PAD > p.x - p.w / 2 &&
+                                    ty - bbox.height / 2 - PAD < p.y + p.h / 2 &&
+                                    ty + bbox.height / 2 + PAD > p.y - p.h / 2,
                             );
-                            if (!collides) { bestX = tx; bestY = ty; found = true; break; }
+                            if (!collides) {
+                                bestX = tx;
+                                bestY = ty;
+                                found = true;
+                                break;
+                            }
                         }
                         if (found) break;
                     }
@@ -90,8 +106,11 @@ export function createWordCloudEntranceSegment(startTime: number, duration: numb
 
                 placed.push({ x: bestX, y: bestY, w: bbox.width, h: bbox.height });
                 wordEls.push({
-                    el: textEl, cx, cy,
-                    targetX: bestX, targetY: bestY,
+                    el: textEl,
+                    cx,
+                    cy,
+                    targetX: bestX,
+                    targetY: bestY,
                     opacity,
                     staggerDelay: i * STAGGER,
                 });
@@ -144,8 +163,12 @@ export function createOrbitalRingsSegment(startTime: number, duration: number): 
     let ring1: SVGPathElement | null = null;
     let ring2: SVGPathElement | null = null;
     const ghostLayers: SVGPathElement[] = [];
-    let RX1 = 0, RY1 = 0, RX2 = 0, RY2 = 0;
-    let cx = 0, cy = 0;
+    let RX1 = 0,
+        RY1 = 0,
+        RX2 = 0,
+        RY2 = 0;
+    let cx = 0,
+        cy = 0;
     const NPTS = 72;
     const bandStep = 10;
 
@@ -154,8 +177,8 @@ export function createOrbitalRingsSegment(startTime: number, duration: number): 
         let d = '';
         for (let i = 0; i <= NPTS; i++) {
             const angle = (i / NPTS) * Math.PI * 2;
-            const wobble = 1 + 0.035 * Math.sin(angle * 2 + t * 0.8 + phase)
-                + 0.022 * Math.sin(angle * 3 + t * 1.3 + phase * 0.7);
+            const wobble =
+                1 + 0.035 * Math.sin(angle * 2 + t * 0.8 + phase) + 0.022 * Math.sin(angle * 3 + t * 1.3 + phase * 0.7);
             const px = cx + rx * breathe * wobble * Math.cos(angle);
             const py = cy + ry * breathe * wobble * Math.sin(angle);
             d += (i === 0 ? 'M' : 'L') + px.toFixed(1) + ',' + py.toFixed(1);
@@ -194,8 +217,10 @@ export function createOrbitalRingsSegment(startTime: number, duration: number): 
             for (let i = -2; i <= 2; i++) {
                 if (i === 0) continue;
                 const ghost = svgEl('path', {
-                    fill: 'none', stroke: ot.orbitalRing1,
-                    'stroke-width': '6', opacity: '0.18',
+                    fill: 'none',
+                    stroke: ot.orbitalRing1,
+                    'stroke-width': '6',
+                    opacity: '0.18',
                     filter: 'url(#orbital-ghost)',
                     class: 'orbital-ring',
                 }) as SVGPathElement;
@@ -204,8 +229,10 @@ export function createOrbitalRingsSegment(startTime: number, duration: number): 
             }
 
             ring1 = svgEl('path', {
-                fill: 'none', stroke: ot.orbitalRing1,
-                'stroke-width': '2.5', opacity: '0.5',
+                fill: 'none',
+                stroke: ot.orbitalRing1,
+                'stroke-width': '2.5',
+                opacity: '0.5',
                 class: 'orbital-ring',
             }) as SVGPathElement;
             group.insertBefore(ring1, group.firstChild);
@@ -214,8 +241,10 @@ export function createOrbitalRingsSegment(startTime: number, duration: number): 
                 for (let i = -2; i <= 2; i++) {
                     if (i === 0) continue;
                     const ghost = svgEl('path', {
-                        fill: 'none', stroke: ot.orbitalRing2,
-                        'stroke-width': '6', opacity: '0.18',
+                        fill: 'none',
+                        stroke: ot.orbitalRing2,
+                        'stroke-width': '6',
+                        opacity: '0.18',
                         filter: 'url(#orbital-ghost)',
                         class: 'orbital-ring',
                     }) as SVGPathElement;
@@ -223,8 +252,10 @@ export function createOrbitalRingsSegment(startTime: number, duration: number): 
                     ghostLayers.push(ghost);
                 }
                 ring2 = svgEl('path', {
-                    fill: 'none', stroke: ot.orbitalRing2,
-                    'stroke-width': '2.5', opacity: '0.5',
+                    fill: 'none',
+                    stroke: ot.orbitalRing2,
+                    'stroke-width': '2.5',
+                    opacity: '0.5',
                     class: 'orbital-ring',
                 }) as SVGPathElement;
                 group.insertBefore(ring2, group.firstChild);
@@ -241,7 +272,10 @@ export function createOrbitalRingsSegment(startTime: number, duration: number): 
             for (let i = -2; i <= 2; i++) {
                 if (i === 0) continue;
                 if (ghostLayers[gIdx]) {
-                    ghostLayers[gIdx].setAttribute('d', computeD(elapsed, RX1 + i * bandStep, RY1 + i * (bandStep * 0.5), ghostPhases[i + 2]));
+                    ghostLayers[gIdx].setAttribute(
+                        'd',
+                        computeD(elapsed, RX1 + i * bandStep, RY1 + i * (bandStep * 0.5), ghostPhases[i + 2]),
+                    );
                 }
                 gIdx++;
             }
@@ -249,7 +283,15 @@ export function createOrbitalRingsSegment(startTime: number, duration: number): 
                 for (let i = -2; i <= 2; i++) {
                     if (i === 0) continue;
                     if (ghostLayers[gIdx]) {
-                        ghostLayers[gIdx].setAttribute('d', computeD(elapsed, RX2 + i * bandStep, RY2 + i * (bandStep * 0.5), ghostPhases[i + 2] + Math.PI * 0.3));
+                        ghostLayers[gIdx].setAttribute(
+                            'd',
+                            computeD(
+                                elapsed,
+                                RX2 + i * bandStep,
+                                RY2 + i * (bandStep * 0.5),
+                                ghostPhases[i + 2] + Math.PI * 0.3,
+                            ),
+                        );
                     }
                     gIdx++;
                 }
@@ -277,7 +319,9 @@ export function createWordCloudDismissSegment(startTime: number): AnimationSegme
     const TOTAL = Math.max(FLY_DUR + 100, BURST_DUR + 50);
 
     // Snapshot original word positions on first render call for idempotent animation
-    let wordSnapshots: { el: SVGElement; startX: number; startY: number; startOpacity: number; dx: number; dy: number }[] | null = null;
+    let wordSnapshots:
+        | { el: SVGElement; startX: number; startY: number; startOpacity: number; dx: number; dy: number }[]
+        | null = null;
 
     function captureSnapshots(group: SVGGElement) {
         const words = group.querySelectorAll('.word-cloud-word');
@@ -381,6 +425,61 @@ export function createRingsToCurvesMorphSegment(startTime: number): AnimationSeg
             group.querySelectorAll('.orbital-ring[filter]').forEach((ghost: any) => {
                 ghost.setAttribute('opacity', '0.18');
             });
+        },
+    };
+}
+
+// --- Hook sentence (HTML element above chart) ---
+export function createHookSentenceSegment(startTime: number, duration: number): AnimationSegment {
+    let hookEl: HTMLElement | null = null;
+
+    return {
+        id: 'hook-sentence',
+        label: 'Hook',
+        category: 'word-cloud',
+        startTime,
+        duration,
+        phaseIdx: 0,
+
+        enter(_ctx) {
+            hookEl = document.getElementById('hook-sentence');
+            const sentence = _ctx.hookSentence;
+            if (!hookEl || !sentence) {
+                hookEl = null;
+                return;
+            }
+            hookEl.textContent = sentence;
+            hookEl.style.opacity = '0';
+            hookEl.style.transform = '';
+        },
+
+        render(t, _ctx) {
+            if (!hookEl) return;
+
+            const fadeInEnd = 0.3;
+            const fadeOutStart = 0.7;
+
+            if (t <= fadeInEnd) {
+                const lt = t / fadeInEnd;
+                const ease = 1 - Math.pow(1 - lt, 3);
+                hookEl.style.opacity = (0.92 * ease).toFixed(3);
+            } else if (t <= fadeOutStart) {
+                const lt = (t - fadeInEnd) / (fadeOutStart - fadeInEnd);
+                const breathe = 0.88 + 0.06 * Math.sin(lt * Math.PI * 4);
+                hookEl.style.opacity = breathe.toFixed(3);
+            } else {
+                const lt = (t - fadeOutStart) / (1 - fadeOutStart);
+                const ease = 1 - lt;
+                hookEl.style.opacity = (0.92 * ease).toFixed(3);
+            }
+        },
+
+        exit(_ctx) {
+            if (hookEl) {
+                hookEl.textContent = '';
+                hookEl.style.opacity = '0';
+                hookEl = null;
+            }
         },
     };
 }

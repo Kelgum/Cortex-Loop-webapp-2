@@ -1,78 +1,85 @@
+/**
+ * Constants — Layout dimensions, color palettes, model option tables, and API endpoint URLs.
+ * Exports: PHASE_CHART, TIMELINE_ZONE, COMPILE_ZONE, BIOMETRIC_ZONE, MODEL_OPTIONS, API_ENDPOINTS, WORD_CLOUD_PALETTE, PHASE_STEPS
+ * Depends on: (none — leaf module)
+ */
 export const SVG_NS = 'http://www.w3.org/2000/svg';
 export const CENTER = 400;
-export const FRONT_RADIUS = 220;
-export const BACK_RADIUS = 220;
-export const LABEL_RADIUS = 310;
-export const TIMING_ARC_RADIUS = 355;
-export const DAYS_IN_CARTRIDGE = 5;
-export const MAX_PER_LAYER = 20;
 
-/**
- * Compute the shortest angular delta (CW or CCW) from one angle to another.
- * Returns a value in the range [-180, +180].
- */
-export function shortestAngleDelta(fromDeg: any, toDeg: any) {
-    const delta = toDeg - fromDeg;
-    return ((delta + 180) % 360 + 360) % 360 - 180;
+// ── Per-substance color differentiation ──────────────────────────
+// Curated palettes per class: every color is hand-picked for strong visual
+// contrast on dark backgrounds (#0a0a0f).
+// indices 1–7 pick from the palette, overflow wraps with a lightness bump.
+// Colors widen beyond the strict class hue for real perceptual distinctness.
+export const CLASS_PALETTE: Record<string, string[]> = {
+    //                       hero         2            3            4            5            6            7            8
+    Stimulant: ['#ff4757', '#ff9f43', '#f7b731', '#fc5c65', '#fa8231', '#eb3b5a', '#e66767', '#d63031'],
+    'Depressant/Sleep': ['#4a6078', '#778beb', '#cf6a87', '#546de5', '#a4b0be', '#5352ed', '#7e8ce0', '#70a1ff'],
+    Nootropic: ['#1e90ff', '#00d2d3', '#a29bfe', '#e056fd', '#6c5ce7', '#48dbfb', '#55efc4', '#fd79a8'],
+    Adaptogen: ['#2ed573', '#badc58', '#7bed9f', '#a3cb38', '#55efc4', '#26de81', '#009432', '#20bf6b'],
+    'Psychedelic/Atypical': ['#9b59b6', '#e056fd', '#fd79a8', '#be2edd', '#d980fa', '#6c5ce7', '#a55eea', '#f8a5c2'],
+    'Mineral/Electrolyte': ['#ffa502', '#ff793f', '#f6e58d', '#fab1a0', '#f0932b', '#ffda79', '#cc8e35', '#ffbe76'],
+    'Vitamin/Amino': ['#eccc68', '#e77f67', '#f6e58d', '#f8c291', '#badc58', '#fdcb6e', '#f9ca24', '#ffeaa7'],
+    'Psychiatric/Other': ['#747d8c', '#778beb', '#cf6a87', '#a4b0be', '#70a1ff', '#95afc0', '#636e72', '#57606f'],
+    unknown: ['#94a3b8', '#778ca3', '#a4b0be', '#70a1ff', '#636e72', '#b2bec3', '#95afc0', '#c8d6e5'],
+};
+
+/** Pick a color for a known DB substance by its index within the class.
+ *  Index 0 gets the curated hero color; 1–7 pick from the palette;
+ *  overflow indices wrap with alternating lightness shifts. */
+export function substanceColorFromIndex(className: string, index: number): string {
+    const palette = CLASS_PALETTE[className] || CLASS_PALETTE['unknown'];
+    if (index < palette.length) return palette[index];
+    // Overflow: wrap around palette, alternate darken/lighten to stay distinct
+    const base = palette[index % palette.length];
+    const round = Math.floor(index / palette.length);
+    const bump = (round % 2 === 0 ? -12 : 12) * round;
+    return adjustHexLightness(base, bump);
 }
 
-export const CartridgeConfig: any = {
-    capsulesPerLayer: 13,
-    totalCapsules: 26,
-    angularSpacing: 360 / 13,
-    halfSpacing: (360 / 13) / 2,
-    frontCapsule: { width: 26, height: 60, rx: 13 },
-    backCapsule: { width: 20, height: 48, rx: 10 },
-    capsuleGroups: [],
+/** Deterministic color for a dynamic substance (not in DB) via name hash. */
+export function substanceColorFromHash(className: string, key: string): string {
+    const palette = CLASS_PALETTE[className] || CLASS_PALETTE['unknown'];
+    let hash = 5381;
+    for (let i = 0; i < key.length; i++) hash = ((hash << 5) + hash + key.charCodeAt(i)) >>> 0;
+    return palette[(hash % (palette.length - 1)) + 1]; // skip hero, pick from 1…N-1
+}
 
-    recalculate(perLayer: any) {
-        this.capsulesPerLayer = perLayer;
-        this.totalCapsules = perLayer * 2;
-        this.angularSpacing = 360 / perLayer;
-        this.halfSpacing = this.angularSpacing / 2;
-
-        const arcLength = 2 * Math.PI * FRONT_RADIUS * (this.angularSpacing / 360);
-        const frontW = Math.max(10, Math.min(26, arcLength * 0.50));
-        const frontH = frontW * 2.3;
-        this.frontCapsule = { width: frontW, height: frontH, rx: frontW / 2 };
-
-        const backW = frontW * 0.77;
-        const backH = frontH * 0.8;
-        this.backCapsule = { width: backW, height: backH, rx: backW / 2 };
-    },
-};
-
-export const CLASS_COLORS: any = {
-    'Stimulant':            { fill: '#ff4757', glow: 'rgba(255,71,87,0.4)' },
-    'Depressant/Sleep':     { fill: '#2f3542', glow: 'rgba(47,53,66,0.4)' },
-    'Nootropic':            { fill: '#1e90ff', glow: 'rgba(30,144,255,0.4)' },
-    'Adaptogen':            { fill: '#2ed573', glow: 'rgba(46,213,115,0.4)' },
-    'Psychedelic/Atypical': { fill: '#9b59b6', glow: 'rgba(155,89,182,0.4)' },
-    'Mineral/Electrolyte':  { fill: '#ffa502', glow: 'rgba(255,165,2,0.4)' },
-    'Vitamin/Amino':        { fill: '#eccc68', glow: 'rgba(236,204,104,0.4)' },
-    'Psychiatric/Other':    { fill: '#747d8c', glow: 'rgba(116,125,140,0.4)' },
-    'unknown':              { fill: '#94a3b8', glow: 'rgba(148,163,184,0.4)' },
-};
-// Backward compat alias — old code references CATEGORY_COLORS
-export const CATEGORY_COLORS = CLASS_COLORS;
+/** Shift a hex color's lightness by `amount` percentage points (can be negative). */
+function adjustHexLightness(hex: string, amount: number): string {
+    const r = parseInt(hex.slice(1, 3), 16) / 255;
+    const g = parseInt(hex.slice(3, 5), 16) / 255;
+    const b = parseInt(hex.slice(5, 7), 16) / 255;
+    const max = Math.max(r, g, b),
+        min = Math.min(r, g, b);
+    let h = 0,
+        s = 0,
+        l = (max + min) / 2;
+    if (max !== min) {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+        else if (max === g) h = ((b - r) / d + 2) / 6;
+        else h = ((r - g) / d + 4) / 6;
+    }
+    l = Math.max(0.25, Math.min(0.82, l + amount / 100)); // clamp: visible on dark bg, never washed out
+    return `hsl(${(h * 360).toFixed(0)}, ${(s * 100).toFixed(0)}%, ${(l * 100).toFixed(0)}%)`;
+}
 
 export const EFFECT_TYPES: any = {
-    'Focus & Cognition': { classes: ['Stimulant', 'Nootropic'],               color: '#60a5fa', glow: 'rgba(96,165,250,0.3)' },
-    'Stress Resilience':  { classes: ['Adaptogen'],                            color: '#c084fc', glow: 'rgba(192,132,252,0.3)' },
-    'Baseline Support':   { classes: ['Mineral/Electrolyte', 'Vitamin/Amino'], color: '#4ade80', glow: 'rgba(74,222,128,0.3)' },
-    'Sedation':           { classes: ['Depressant/Sleep'],                     color: '#2dd4bf', glow: 'rgba(45,212,191,0.3)' },
-    'Rx Effect':          { classes: ['Psychiatric/Other'],                    color: '#fb7185', glow: 'rgba(251,113,133,0.3)' },
-    'Altered State':      { classes: ['Psychedelic/Atypical'],                 color: '#fbbf24', glow: 'rgba(251,191,36,0.3)' },
+    'Focus & Cognition': { classes: ['Stimulant', 'Nootropic'], color: '#60a5fa', glow: 'rgba(96,165,250,0.3)' },
+    'Stress Resilience': { classes: ['Adaptogen'], color: '#c084fc', glow: 'rgba(192,132,252,0.3)' },
+    'Baseline Support': {
+        classes: ['Mineral/Electrolyte', 'Vitamin/Amino'],
+        color: '#4ade80',
+        glow: 'rgba(74,222,128,0.3)',
+    },
+    Sedation: { classes: ['Depressant/Sleep'], color: '#2dd4bf', glow: 'rgba(45,212,191,0.3)' },
+    'Rx Effect': { classes: ['Psychiatric/Other'], color: '#fb7185', glow: 'rgba(251,113,133,0.3)' },
+    'Altered State': { classes: ['Psychedelic/Atypical'], color: '#fbbf24', glow: 'rgba(251,191,36,0.3)' },
 };
 
 export const TIMING_HOURS: any = { morning: 8, midday: 12, evening: 17, bedtime: 21 };
-
-export const TIMING_SEGMENTS = [
-    { label: 'MORNING',  startAngle: -90,  endAngle: 0,    color: '#f59e0b' },
-    { label: 'MIDDAY',   startAngle: 0,    endAngle: 90,   color: '#f97316' },
-    { label: 'EVENING',  startAngle: 90,   endAngle: 180,  color: '#8b5cf6' },
-    { label: 'BEDTIME',  startAngle: 180,  endAngle: 270,  color: '#06b6d4' },
-];
 
 // ============================================
 // FAST / MAIN MODEL CONFIGURATION
@@ -80,48 +87,62 @@ export const TIMING_SEGMENTS = [
 
 export const FAST_MODELS: any = {
     anthropic: { model: 'claude-haiku-4-5-20251001', type: 'anthropic' },
-    openai:    { model: 'o4-mini',                    type: 'openai' },
-    grok:      { model: 'grok-4-1-fast-non-reasoning', type: 'openai' },  // xAI uses OpenAI-compatible API
-    gemini:    { model: 'gemini-2.5-flash-lite',      type: 'gemini' },
+    openai: { model: 'gpt-5.3-chat-latest', type: 'openai' },
+    grok: { model: 'grok-4-1-fast-non-reasoning', type: 'openai' }, // xAI uses OpenAI-compatible API
+    gemini: { model: 'gemini-2.5-flash-lite', type: 'gemini' },
 };
 
 export const MAIN_MODELS: any = {
     anthropic: 'claude-opus-4-6',
-    openai:    'gpt-5.2',
-    grok:      'grok-4-0709',
-    gemini:    'gemini-3.1-pro-preview',
+    openai: 'gpt-5.4',
+    grok: 'grok-4-0709',
+    gemini: 'gemini-3.1-pro-preview',
 };
 
 export const MODEL_OPTIONS: any = {
     anthropic: [
-        { key: 'haiku',  model: 'claude-haiku-4-5-20251001',  label: 'Haiku 4.5',      type: 'anthropic', tier: 0 },
-        { key: 'sonnet', model: 'claude-sonnet-4-6',           label: 'Sonnet 4.6',     type: 'anthropic', tier: 1 },
-        { key: 'opus',   model: 'claude-opus-4-6',            label: 'Opus 4.6',       type: 'anthropic', tier: 2 },
+        { key: 'haiku', model: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', type: 'anthropic', tier: 0 },
+        { key: 'sonnet', model: 'claude-sonnet-4-6', label: 'Sonnet 4.6', type: 'anthropic', tier: 1 },
+        { key: 'opus', model: 'claude-opus-4-6', label: 'Opus 4.6', type: 'anthropic', tier: 2 },
     ],
     openai: [
-        { key: 'o4-mini', model: 'o4-mini',     label: 'o4 Mini',  type: 'openai', tier: 0 },
-        { key: '4.1',     model: 'gpt-4.1',     label: '4.1',      type: 'openai', tier: 1 },
-        { key: '5.2',     model: 'gpt-5.2',     label: '5.2',      type: 'openai', tier: 2 },
+        { key: '5.3-instant', model: 'gpt-5.3-chat-latest', label: '5.3 Instant', type: 'openai', tier: 0 },
+        { key: '5.4', model: 'gpt-5.4', label: '5.4', type: 'openai', tier: 1 },
+        {
+            key: '5.4-thinking',
+            model: 'gpt-5.4',
+            label: '5.4 Thinking',
+            type: 'openai',
+            tier: 2,
+            reasoningEffort: 'high',
+        },
     ],
     grok: [
         { key: 'fast', model: 'grok-4-1-fast-non-reasoning', label: '4.1 Fast', type: 'openai', tier: 0 },
-        { key: 'full', model: 'grok-4-0709',                 label: '4',        type: 'openai', tier: 2 },
+        { key: 'full', model: 'grok-4-0709', label: '4', type: 'openai', tier: 2 },
     ],
     gemini: [
-        { key: 'flash-lite', model: 'gemini-2.5-flash-lite',   label: '2.5 Flash Lite', type: 'gemini', tier: 0 },
-        { key: 'flash',      model: 'gemini-3-flash-preview',  label: '3 Flash',        type: 'gemini', tier: 1 },
-        { key: 'pro',        model: 'gemini-3.1-pro-preview',  label: '3.1 Pro',        type: 'gemini', tier: 2 },
+        { key: 'flash-lite', model: 'gemini-2.5-flash-lite', label: '2.5 Flash Lite', type: 'gemini', tier: 0 },
+        {
+            key: 'flash-lite-preview',
+            model: 'gemini-3.1-flash-lite-preview',
+            label: '3.1 Flash Lite Preview',
+            type: 'gemini',
+            tier: 0,
+        },
+        { key: 'flash-preview', model: 'gemini-3-flash-preview', label: '3 Flash Preview', type: 'gemini', tier: 1 },
+        { key: 'pro-preview', model: 'gemini-3.1-pro-preview', label: '3.1 Pro Preview', type: 'gemini', tier: 2 },
     ],
 };
 
 export const PROVIDER_LABELS: Record<string, string> = {
     anthropic: 'Claude',
-    openai:    'ChatGPT',
-    grok:      'Grok',
-    gemini:    'Gemini',
+    openai: 'ChatGPT',
+    grok: 'Grok',
+    gemini: 'Gemini',
 };
 
-export const PROVIDER_IDS = ['anthropic', 'openai', 'grok', 'gemini'];
+export const PROVIDER_IDS = ['gemini', 'anthropic', 'openai', 'grok'];
 
 /**
  * Map a model key from one provider to the closest tier equivalent in another.
@@ -138,7 +159,7 @@ export function mapModelAcrossProviders(fromProvider: string, fromKey: string, t
     let bestDist = Math.abs(best.tier - fromTier);
     for (const opt of toOpts) {
         const dist = Math.abs(opt.tier - fromTier);
-        if (dist < bestDist || (dist === bestDist && opt.tier <= best.tier)) {
+        if (dist < bestDist || (dist === bestDist && opt.tier < best.tier)) {
             best = opt;
             bestDist = dist;
         }
@@ -148,8 +169,8 @@ export function mapModelAcrossProviders(fromProvider: string, fromKey: string, t
 
 export const API_ENDPOINTS: any = {
     anthropic: 'https://api.anthropic.com/v1/messages',
-    openai:    'https://api.openai.com/v1/chat/completions',
-    grok:      'https://api.x.ai/v1/chat/completions',
+    openai: 'https://api.openai.com/v1/chat/completions',
+    grok: 'https://api.x.ai/v1/chat/completions',
 };
 
 // ============================================
@@ -157,9 +178,14 @@ export const API_ENDPOINTS: any = {
 // ============================================
 
 export const PHASE_CHART: any = {
-    viewW: 1120, viewH: 500,
-    padL: 150, padR: 150, padT: 50, padB: 50,
-    startHour: 6, endHour: 30,   // 6:00am to 6:00am next day (30 = 24+6)
+    viewW: 1120,
+    viewH: 500,
+    padL: 150,
+    padR: 150,
+    padT: 50,
+    padB: 50,
+    startHour: 6,
+    endHour: 30, // 6:00am to 6:00am next day (30 = 24+6)
     maxEffect: 100,
     sampleInterval: 15,
 };
@@ -173,6 +199,14 @@ PHASE_CHART.totalMin = PHASE_CHART.endMin - PHASE_CHART.startMin;
 export const PHASE_STEPS = ['baseline-shown', 'curves-drawn', 'lx-rendered', 'biometric-rendered', 'revision-rendered'];
 
 export const PHASE_SMOOTH_PASSES = 3;
+
+/**
+ * Gap-adaptive Lx coverage fraction.
+ * At peak intervention effect, the Lx curve can cover up to this fraction of
+ * the baseline→desired gap for each curve.  0.95 = 95% coverage, leaving a
+ * small visual margin so Lx sits just below the desired curve.
+ */
+export const LX_GAP_COVERAGE = 0.95;
 
 export const DESCRIPTOR_LEVELS = [0, 11, 22, 33, 44, 56, 67, 78, 89, 100];
 
@@ -188,8 +222,8 @@ export const WORD_CLOUD_PALETTE = [
 ];
 
 export const TIMELINE_ZONE = {
-    separatorY: 454,   // thin line just below plot area
-    top: 457,          // first track starts here
+    separatorY: 454, // thin line just below plot area
+    top: 457, // first track starts here
     laneH: 20,
     laneGap: 1,
     pillRx: 3,
@@ -202,12 +236,17 @@ export const TIMELINE_ZONE = {
 // ============================================
 
 export const CHART: any = {
-    viewW: 520, viewH: 360,
-    padL: 50, padR: 20, padT: 30, padB: 40,
-    startHour: 6, endHour: 24,   // 06:00 – 24:00
+    viewW: 520,
+    viewH: 360,
+    padL: 50,
+    padR: 20,
+    padT: 30,
+    padB: 40,
+    startHour: 6,
+    endHour: 24, // 06:00 – 24:00
     maxEffect: 100,
     baselineLevel: 15,
-    sampleInterval: 10,          // minutes between curve sample points
+    sampleInterval: 10, // minutes between curve sample points
 };
 
 CHART.plotW = CHART.viewW - CHART.padL - CHART.padR;
@@ -215,6 +254,19 @@ CHART.plotH = CHART.viewH - CHART.padT - CHART.padB;
 CHART.startMin = CHART.startHour * 60;
 CHART.endMin = CHART.endHour * 60;
 CHART.totalMin = CHART.endMin - CHART.startMin;
+
+export const COMPILE_ZONE = {
+    ringRadius: 120, // cartridge ring radius (slot centers sit here)
+    hubRadius: 30, // central hub radius
+    slotW: 28, // pill slot width
+    slotH: 12, // pill slot height
+    slotRx: 4, // slot corner radius
+    spokeWidth: 0.5, // spoke line width
+    deviceW: 320, // device body width
+    deviceH: 400, // device body height
+    deviceRx: 24, // device body corner radius
+    heroScale: 1.2, // final centered scale
+};
 
 export const BIOMETRIC_ZONE = {
     separatorPad: 8,
@@ -224,11 +276,32 @@ export const BIOMETRIC_ZONE = {
     bottomPad: 8,
 };
 
+export const SPOTTER_MARKER = {
+    hairlineDash: '2 3', // dashed vertical hairline pattern
+    hairlineOpacity: 0.25, // default hairline opacity
+    hairlineHoverOpacity: 0.55, // hairline opacity on hover
+    anchorR: 2.5, // dot radius on waveform
+    anchorGlowR: 6, // glow ring radius around dot
+    flagH: 11, // flag label pill height
+    flagRx: 3, // flag label corner radius
+    flagPadX: 4, // flag label horizontal padding
+    flagIconSize: 8, // emoji icon font size in flag
+    flagLabelSize: 7, // label font size in flag
+    flagLabelMaxChars: 12, // max chars before truncation
+    flagGap: 3, // min gap between flag labels
+    hitAreaW: 22, // invisible hover hit area width
+    zoomFactor: 3, // horizontal zoom multiplier on strip hover
+    infoPillH: 14, // compact info pill height above strip
+    infoPillRx: 4, // info pill corner radius
+    infoPillPadX: 5, // info pill horizontal padding
+    infoPillGap: 3, // gap between strip top and info pill
+};
+
 export const COMPOSITE_SLEEP = {
     laneH: 24,
     subChannels: [
-        { key: 'sleep_deep',  label: 'Deep',  color: '#4a5fc1' },  // indigo
-        { key: 'sleep_rem',   label: 'REM',   color: '#8b5cf6' },  // violet
-        { key: 'sleep_light', label: 'Light',  color: '#f9a8d4' },  // rose
+        { key: 'sleep_deep', label: 'Deep', color: '#4a5fc1' }, // indigo
+        { key: 'sleep_rem', label: 'REM', color: '#8b5cf6' }, // violet
+        { key: 'sleep_light', label: 'Light', color: '#f9a8d4' }, // rose
     ],
 };

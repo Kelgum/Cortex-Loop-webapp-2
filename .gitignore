@@ -3,3 +3,5 @@ config.js
 .DS_Store
 node_modules/
 dist/
+.cortex-debug/
+saved-cycles/

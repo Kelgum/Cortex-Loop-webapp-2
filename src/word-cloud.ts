@@ -1,3 +1,8 @@
+/**
+ * Word Cloud — Orbital word cloud animation for effects display, including entrance, float, ring morph, and dismissal.
+ * Exports: renderWordCloud, dismissWordCloud, startOrbitalRings, stopOrbitalRings, morphRingsToCurves, skipWordCloudEntrance
+ * Depends on: constants (PHASE_CHART, WORD_CLOUD_PALETTE), state (AppState), utils, curve-utils, phase-chart
+ */
 import { PHASE_CHART, PHASE_SMOOTH_PASSES, WORD_CLOUD_PALETTE } from './constants';
 import { AppState } from './state';
 import { svgEl, chartTheme, phaseChartX, phaseChartY } from './utils';
@@ -8,6 +13,13 @@ import { getYAxisLabelPosition } from './phase-chart';
 export let _wordCloudPositions: any[] = [];
 export let _orbitalRingsState: any = null;
 let _wordCloudFloatId: number | null = null;
+let _hookFadeInId: number | null = null;
+let _hookReadyForBreathe = false;
+let _wordCloudRenderToken = 0;
+let _wordCloudEntranceTimeouts: number[] = [];
+let _wordCloudCompletionTimeoutId: number | null = null;
+let _hookDelayTimeoutId: number | null = null;
+let _activeWordCloudResolve: (() => void) | null = null;
 
 export function setWordCloudPositions(v: any[]): void {
     _wordCloudPositions = v;
@@ -15,6 +27,68 @@ export function setWordCloudPositions(v: any[]): void {
 
 export function setOrbitalRingsState(v: any): void {
     _orbitalRingsState = v;
+}
+
+function clearWordCloudEntranceTimers(): void {
+    for (const id of _wordCloudEntranceTimeouts) {
+        window.clearTimeout(id);
+    }
+    _wordCloudEntranceTimeouts = [];
+
+    if (_wordCloudCompletionTimeoutId != null) {
+        window.clearTimeout(_wordCloudCompletionTimeoutId);
+        _wordCloudCompletionTimeoutId = null;
+    }
+
+    if (_hookDelayTimeoutId != null) {
+        window.clearTimeout(_hookDelayTimeoutId);
+        _hookDelayTimeoutId = null;
+    }
+}
+
+function resolveWordCloudEntrancePromise(): void {
+    clearWordCloudEntranceTimers();
+    const done = _activeWordCloudResolve;
+    _activeWordCloudResolve = null;
+    if (done) done();
+}
+
+function finalizeWordCloudEntrance(token: number): void {
+    if (token !== _wordCloudRenderToken) return;
+    _wordCloudRenderToken += 1; // Invalidate any queued callbacks for this run.
+    resolveWordCloudEntrancePromise();
+}
+
+export function skipWordCloudEntrance(): void {
+    if (!_activeWordCloudResolve) return;
+
+    const token = _wordCloudRenderToken;
+
+    if (_hookFadeInId) {
+        cancelAnimationFrame(_hookFadeInId);
+        _hookFadeInId = null;
+    }
+    _hookReadyForBreathe = true;
+
+    const group = document.getElementById('phase-word-cloud');
+    if (group) {
+        const words = Array.from(group.querySelectorAll('.word-cloud-word')) as SVGTextElement[];
+        words.forEach(word => {
+            const finalX = word.getAttribute('data-cx') || word.getAttribute('x') || '0';
+            const finalY = word.getAttribute('data-cy') || word.getAttribute('y') || '0';
+            const targetOpacity = word.getAttribute('data-target-opacity') || '0.85';
+            word.setAttribute('x', finalX);
+            word.setAttribute('y', finalY);
+            word.setAttribute('opacity', targetOpacity);
+        });
+    }
+
+    const hookEl = document.getElementById('hook-sentence');
+    if (hookEl && hookEl.textContent) {
+        hookEl.style.opacity = '0.92';
+    }
+
+    finalizeWordCloudEntrance(token);
 }
 
 // ---- Word Cloud Float Animation ----
@@ -35,6 +109,14 @@ export function startWordCloudFloat(): void {
             const dy = Math.cos(t * 0.4 + phase * 1.3) * 2.5 * ramp;
             pos.el.setAttribute('x', (pos.x + dx).toFixed(1));
             pos.el.setAttribute('y', (pos.y + dy).toFixed(1));
+        }
+        // Subtle breathe on hook sentence — only after fade-in completes (avoids flicker)
+        if (_hookReadyForBreathe) {
+            const hookEl = document.getElementById('hook-sentence');
+            if (hookEl && hookEl.textContent) {
+                const breathe = 0.88 + 0.06 * Math.sin(t * 1.5);
+                hookEl.style.opacity = breathe.toFixed(3);
+            }
         }
         _wordCloudFloatId = requestAnimationFrame(tick);
     }
@@ -71,9 +153,12 @@ export function startOrbitalRings(cx: number, cy: number): any {
 
     function createRingPath(color: string, strokeWidth: string, opacity: string, filter?: string): SVGPathElement {
         const attrs: Record<string, string> = {
-            fill: 'none', stroke: color,
-            'stroke-width': strokeWidth, 'stroke-linecap': 'round',
-            class: 'orbital-ring', opacity: '0',
+            fill: 'none',
+            stroke: color,
+            'stroke-width': strokeWidth,
+            'stroke-linecap': 'round',
+            class: 'orbital-ring',
+            opacity: '0',
         };
         if (filter) attrs.filter = filter;
         return svgEl('path', attrs) as SVGPathElement;
@@ -86,7 +171,11 @@ export function startOrbitalRings(cx: number, cy: number): any {
         const phase = ghostPhases[i + 2];
         const ghost = createRingPath(ot.orbitalRing1, '6', '0.18', 'url(#orbital-ghost)');
         group.insertBefore(ghost, group.firstChild);
-        ghost.animate([{ opacity: 0 }, { opacity: 0.18 }], { duration: 800, fill: 'forwards', delay: 40 * Math.abs(i) });
+        ghost.animate([{ opacity: 0 }, { opacity: 0.18 }], {
+            duration: 800,
+            fill: 'forwards',
+            delay: 40 * Math.abs(i),
+        });
         ghostLayers.push(ghost);
     }
     const ring1 = createRingPath(ot.orbitalRing1, '2.5', '0');
@@ -102,7 +191,11 @@ export function startOrbitalRings(cx: number, cy: number): any {
             const phase = ghostPhases[i + 2] + Math.PI * 0.3;
             const ghost = createRingPath(ot.orbitalRing2, '6', '0.18', 'url(#orbital-ghost)');
             group.insertBefore(ghost, group.firstChild);
-            ghost.animate([{ opacity: 0 }, { opacity: 0.18 }], { duration: 800, fill: 'forwards', delay: 120 + 40 * Math.abs(i) });
+            ghost.animate([{ opacity: 0 }, { opacity: 0.18 }], {
+                duration: 800,
+                fill: 'forwards',
+                delay: 120 + 40 * Math.abs(i),
+            });
             ghostLayers.push(ghost);
         }
         ring2 = createRingPath(ot.orbitalRing2, '2.5', '0');
@@ -118,8 +211,8 @@ export function startOrbitalRings(cx: number, cy: number): any {
         let d = '';
         for (let i = 0; i <= NPTS; i++) {
             const angle = (i / NPTS) * Math.PI * 2;
-            const wobble = 1 + 0.035 * Math.sin(angle * 2 + t * 0.8 + phase)
-                             + 0.022 * Math.sin(angle * 3 + t * 1.3 + phase * 0.7);
+            const wobble =
+                1 + 0.035 * Math.sin(angle * 2 + t * 0.8 + phase) + 0.022 * Math.sin(angle * 3 + t * 1.3 + phase * 0.7);
             const px = cx + rx * breathe * wobble * Math.cos(angle);
             const py = cy + ry * breathe * wobble * Math.sin(angle);
             d += (i === 0 ? 'M' : 'L') + px.toFixed(1) + ',' + py.toFixed(1);
@@ -162,9 +255,24 @@ export function startOrbitalRings(cx: number, cy: number): any {
     tick();
 
     _orbitalRingsState = {
-        ring1, ring2, singleRing, cx, cy, NPTS, RX1, RY1, RX2, RY2, ghostLayers,
-        stop() { running = false; if (animId) cancelAnimationFrame(animId); },
-        getLastT() { return (performance.now() - t0) / 1000; },
+        ring1,
+        ring2,
+        singleRing,
+        cx,
+        cy,
+        NPTS,
+        RX1,
+        RY1,
+        RX2,
+        RY2,
+        ghostLayers,
+        stop() {
+            running = false;
+            if (animId) cancelAnimationFrame(animId);
+        },
+        getLastT() {
+            return (performance.now() - t0) / 1000;
+        },
     };
     return _orbitalRingsState;
 }
@@ -196,8 +304,8 @@ export async function morphRingsToCurves(curvesData: any[]): Promise<void> {
         for (let i = 0; i < N; i++) {
             const frac = i / (N - 1);
             const angle = Math.PI * (1 - frac);
-            const wobble = 1 + 0.025 * Math.sin(angle * 2 + lastT * 0.8 + phase)
-                             + 0.015 * Math.sin(angle * 3 + lastT * 1.3);
+            const wobble =
+                1 + 0.025 * Math.sin(angle * 2 + lastT * 0.8 + phase) + 0.015 * Math.sin(angle * 3 + lastT * 1.3);
             pts.push({
                 x: rings.cx + rx * breathe * wobble * Math.cos(angle),
                 y: rings.cy + ry * breathe * wobble * Math.sin(angle),
@@ -206,8 +314,8 @@ export async function morphRingsToCurves(curvesData: any[]): Promise<void> {
         for (let i = 0; i < N; i++) {
             const frac = i / (N - 1);
             const angle = -Math.PI * frac;
-            const wobble = 1 + 0.025 * Math.sin(angle * 2 + lastT * 0.8 + phase)
-                             + 0.015 * Math.sin(angle * 3 + lastT * 1.3);
+            const wobble =
+                1 + 0.025 * Math.sin(angle * 2 + lastT * 0.8 + phase) + 0.015 * Math.sin(angle * 3 + lastT * 1.3);
             pts.push({
                 x: rings.cx + rx * breathe * wobble * Math.cos(angle),
                 y: rings.cy + ry * breathe * wobble * Math.sin(angle),
@@ -325,13 +433,36 @@ export async function morphRingsToCurves(curvesData: any[]): Promise<void> {
     // to prevent a flicker gap between ring disappearance and curve appearance.
 }
 
-export function renderWordCloud(effects: any[]): Promise<void> {
+export function renderWordCloud(effects: any[], hookSentence?: string | null): Promise<void> {
     return new Promise(resolve => {
+        // Defensive teardown: if a previous cloud run is still active, finish it first.
+        if (_activeWordCloudResolve) {
+            finalizeWordCloudEntrance(_wordCloudRenderToken);
+        }
+
+        const token = ++_wordCloudRenderToken;
+        _activeWordCloudResolve = resolve;
+
         const group = document.getElementById('phase-word-cloud')!;
         group.innerHTML = '';
         _wordCloudPositions = [];
+        clearWordCloudEntranceTimers();
+        if (_hookFadeInId) {
+            cancelAnimationFrame(_hookFadeInId);
+            _hookFadeInId = null;
+        }
+        _hookReadyForBreathe = false;
+        // Reset hook sentence HTML element
+        const hookEl = document.getElementById('hook-sentence');
+        if (hookEl) {
+            hookEl.textContent = '';
+            hookEl.style.opacity = '0';
+        }
 
-        if (!effects || effects.length === 0) { resolve(); return; }
+        if (!effects || effects.length === 0) {
+            finalizeWordCloudEntrance(token);
+            return;
+        }
 
         const cx = PHASE_CHART.padL + PHASE_CHART.plotW / 2;
         const cy = PHASE_CHART.padT + PHASE_CHART.plotH / 2;
@@ -356,10 +487,11 @@ export function renderWordCloud(effects: any[]): Promise<void> {
             const fontWeight = isPrimary ? (relFrac > 0.55 ? '700' : '600') : '500';
             const letterSpacing = isPrimary ? (relFrac > 0.55 ? '-0.04em' : '-0.02em') : '0';
             const color = WORD_CLOUD_PALETTE[i % WORD_CLOUD_PALETTE.length];
-            const opacity = isPrimary ? (0.82 + relFrac * 0.18) : (0.32 + relFrac * 0.18);
+            const opacity = isPrimary ? 0.82 + relFrac * 0.18 : 0.32 + relFrac * 0.18;
 
             const textEl = svgEl('text', {
-                x: '0', y: '0',
+                x: '0',
+                y: '0',
                 fill: color,
                 'font-size': fontSize.toFixed(1),
                 'font-weight': fontWeight,
@@ -383,7 +515,8 @@ export function renderWordCloud(effects: any[]): Promise<void> {
 
         for (let i = 0; i < measured.length; i++) {
             const m = measured[i];
-            let bestX = cx, bestY = cy;
+            let bestX = cx,
+                bestY = cy;
 
             if (i === 0) {
                 bestX = cx;
@@ -397,13 +530,14 @@ export function renderWordCloud(effects: any[]): Promise<void> {
                         const tx = cx + cloudRx * rNorm * Math.cos(angle);
                         const ty = cy + cloudRy * rNorm * Math.sin(angle);
 
-                        if ((tx - cx) ** 2 / (cloudRx ** 2) + (ty - cy) ** 2 / (cloudRy ** 2) > 1) continue;
+                        if ((tx - cx) ** 2 / cloudRx ** 2 + (ty - cy) ** 2 / cloudRy ** 2 > 1) continue;
 
-                        const collides = placed.some(p =>
-                            tx - m.w / 2 - PAD < p.x + p.w / 2 &&
-                            tx + m.w / 2 + PAD > p.x - p.w / 2 &&
-                            ty - m.h / 2 - PAD < p.y + p.h / 2 &&
-                            ty + m.h / 2 + PAD > p.y - p.h / 2
+                        const collides = placed.some(
+                            p =>
+                                tx - m.w / 2 - PAD < p.x + p.w / 2 &&
+                                tx + m.w / 2 + PAD > p.x - p.w / 2 &&
+                                ty - m.h / 2 - PAD < p.y + p.h / 2 &&
+                                ty + m.h / 2 + PAD > p.y - p.h / 2,
                         );
                         if (!collides) {
                             bestX = tx;
@@ -429,8 +563,13 @@ export function renderWordCloud(effects: any[]): Promise<void> {
             m.textEl.setAttribute('data-cy', bestY.toFixed(1));
 
             _wordCloudPositions.push({
-                el: m.textEl, x: bestX, y: bestY, w: m.w, h: m.h,
-                name: m.eff.name, relevance: m.eff.relevance,
+                el: m.textEl,
+                x: bestX,
+                y: bestY,
+                w: m.w,
+                h: m.h,
+                name: m.eff.name,
+                relevance: m.eff.relevance,
             });
         }
 
@@ -447,7 +586,6 @@ export function renderWordCloud(effects: any[]): Promise<void> {
         startWordCloudFloat();
 
         words.forEach((word, idx) => {
-
             const targetOp = parseFloat(word.getAttribute('data-target-opacity')!);
             const finalX = parseFloat(word.getAttribute('x')!);
             const finalY = parseFloat(word.getAttribute('y')!);
@@ -455,9 +593,11 @@ export function renderWordCloud(effects: any[]): Promise<void> {
             word.setAttribute('x', cx.toFixed(1));
             word.setAttribute('y', cy.toFixed(1));
 
-            setTimeout(() => {
+            const entranceTimeoutId = window.setTimeout(() => {
+                if (token !== _wordCloudRenderToken) return;
                 const t0 = performance.now();
                 (function slide() {
+                    if (token !== _wordCloudRenderToken) return;
                     const t = Math.min(1, (performance.now() - t0) / slideDur);
                     const c1 = 1.70158;
                     const c3 = c1 + 1;
@@ -470,9 +610,41 @@ export function renderWordCloud(effects: any[]): Promise<void> {
                     if (t < 1) requestAnimationFrame(slide);
                 })();
             }, idx * stagger);
+            _wordCloudEntranceTimeouts.push(entranceTimeoutId);
         });
 
-        setTimeout(resolve, totalEntranceDur);
+        // Hook sentence: populate HTML element above chart, fade in after 1200ms
+        if (hookSentence) {
+            const hEl = document.getElementById('hook-sentence');
+            if (hEl) {
+                _hookReadyForBreathe = false;
+                hEl.textContent = hookSentence;
+                hEl.style.opacity = '0';
+                hEl.style.transform = '';
+
+                _hookDelayTimeoutId = window.setTimeout(() => {
+                    if (token !== _wordCloudRenderToken) return;
+                    const t0 = performance.now();
+                    const fadeDur = 600;
+                    _hookFadeInId = requestAnimationFrame(function fadeIn() {
+                        if (token !== _wordCloudRenderToken) return;
+                        const rawT = Math.min(1, (performance.now() - t0) / fadeDur);
+                        const ease = 1 - Math.pow(1 - rawT, 3);
+                        hEl.style.opacity = (0.92 * ease).toFixed(3);
+                        if (rawT < 1) {
+                            _hookFadeInId = requestAnimationFrame(fadeIn);
+                        } else {
+                            _hookFadeInId = null;
+                            _hookReadyForBreathe = true;
+                        }
+                    });
+                }, 1200);
+            }
+        }
+
+        _wordCloudCompletionTimeoutId = window.setTimeout(() => {
+            finalizeWordCloudEntrance(token);
+        }, totalEntranceDur);
     });
 }
 
@@ -483,7 +655,31 @@ export function dismissWordCloud(mainEffectNames: string[], mainColors: string[]
 
         stopWordCloudFloat();
 
-        if (words.length === 0) { resolve(); return; }
+        // Fade out hook sentence (HTML element above chart)
+        if (_hookFadeInId) {
+            cancelAnimationFrame(_hookFadeInId);
+            _hookFadeInId = null;
+        }
+        _hookReadyForBreathe = false;
+        const hEl = document.getElementById('hook-sentence');
+        if (hEl && hEl.textContent) {
+            const startOp = parseFloat(hEl.style.opacity || '0');
+            const t0 = performance.now();
+            (function fadeOut() {
+                const rawT = Math.min(1, (performance.now() - t0) / 300);
+                hEl.style.opacity = (startOp * (1 - rawT)).toFixed(3);
+                if (rawT < 1) requestAnimationFrame(fadeOut);
+                else {
+                    hEl.textContent = '';
+                    hEl.style.opacity = '0';
+                }
+            })();
+        }
+
+        if (words.length === 0) {
+            resolve();
+            return;
+        }
 
         // Fuzzy match: find the best cloud word for each main effect
         const winners: { wordIdx: number; mainIdx: number }[] = [];
@@ -499,20 +695,32 @@ export function dismissWordCloud(mainEffectNames: string[], mainColors: string[]
                 const wName = _wordCloudPositions[wi].name.toLowerCase().trim();
 
                 // Exact match
-                if (wName === target) { bestIdx = wi; bestScore = 100; break; }
+                if (wName === target) {
+                    bestIdx = wi;
+                    bestScore = 100;
+                    break;
+                }
                 // Includes match
                 if (wName.includes(target) || target.includes(wName)) {
                     const score = 80;
-                    if (score > bestScore) { bestScore = score; bestIdx = wi; }
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestIdx = wi;
+                    }
                     continue;
                 }
                 // Partial word overlap
                 const wWords = wName.split(/\s+/);
                 const tWords = target.split(/\s+/);
-                const overlap = wWords.filter((w: string) => tWords.some((t: string) => t.includes(w) || w.includes(t))).length;
+                const overlap = wWords.filter((w: string) =>
+                    tWords.some((t: string) => t.includes(w) || w.includes(t)),
+                ).length;
                 if (overlap > 0) {
                     const score = 50 + overlap * 15;
-                    if (score > bestScore) { bestScore = score; bestIdx = wi; }
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestIdx = wi;
+                    }
                 }
             }
 
@@ -538,6 +746,7 @@ export function dismissWordCloud(mainEffectNames: string[], mainColors: string[]
         const cy = PHASE_CHART.padT + PHASE_CHART.plotH / 2;
         const flyDuration = 650;
         const flyDelay = 80;
+        let maxFlyTime = flyDuration + flyDelay;
 
         for (const w of winners) {
             const pos = _wordCloudPositions[w.wordIdx];
@@ -561,7 +770,8 @@ export function dismissWordCloud(mainEffectNames: string[], mainColors: string[]
             if (needsCrossfade) {
                 const edgeX = isLeft ? curX - bbox.width / 2 : curX + bbox.width / 2;
                 el.animate([{ opacity: parseFloat(el.getAttribute('opacity') || '0.8') }, { opacity: 0 }], {
-                    duration: 120, fill: 'forwards',
+                    duration: 120,
+                    fill: 'forwards',
                 });
                 setTimeout(() => {
                     el.textContent = mainName;
@@ -570,7 +780,8 @@ export function dismissWordCloud(mainEffectNames: string[], mainColors: string[]
                     el.setAttribute('x', edgeX.toFixed(1));
                     el.setAttribute('y', startY.toFixed(1));
                     el.animate([{ opacity: 0 }, { opacity: 0.9 }], {
-                        duration: 120, fill: 'forwards',
+                        duration: 120,
+                        fill: 'forwards',
                     });
                 }, 120);
             } else {
@@ -582,21 +793,52 @@ export function dismissWordCloud(mainEffectNames: string[], mainColors: string[]
             const targetFontSize = 11;
             const flyStartDelay = needsCrossfade ? 260 : flyDelay;
             const startTime = performance.now();
+            maxFlyTime = Math.max(maxFlyTime, flyStartDelay + flyDuration);
+
+            const axisGroup = document.getElementById(isLeft ? 'phase-y-axis-left' : 'phase-y-axis-right');
+            const axisLabel = axisGroup
+                ? Array.from(axisGroup.querySelectorAll('text')).find(
+                      node => node.getAttribute('font-size') === '15' && node.getAttribute('font-weight') === '700',
+                  )
+                : null;
+            const axisBox = (axisLabel as SVGTextElement | null)?.getBBox?.();
+            const staticLeft = axisBox ? axisBox.x : isLeft ? 25 : PHASE_CHART.viewW - 135;
+            const staticRight = axisBox ? axisBox.x + axisBox.width : isLeft ? 135 : PHASE_CHART.viewW - 25;
+            const dx = target.x - startX;
+            const overlapX = isLeft ? staticRight : staticLeft;
+            const overlapEaseUnclamped = Math.abs(dx) < 0.001 ? 0.84 : (overlapX - startX) / dx;
+            const overlapEase = Math.min(0.95, Math.max(0.2, overlapEaseUnclamped));
+            // Reach opacity 0 before the moving label enters the static-label overlap zone.
+            const fadeEndEase = Math.max(0.1, overlapEase - 0.06);
+            const fadeStartEase = Math.max(0, fadeEndEase - 0.28);
+            let canceledOpacityEffects = false;
 
             (function animateFly() {
                 const elapsed = performance.now() - startTime;
-                if (elapsed < flyStartDelay) { requestAnimationFrame(animateFly); return; }
+                if (elapsed < flyStartDelay) {
+                    requestAnimationFrame(animateFly);
+                    return;
+                }
+                if (!canceledOpacityEffects) {
+                    // Cancel fill:'forwards' WebAnimations so attribute-based opacity updates take effect.
+                    el.getAnimations().forEach(anim => anim.cancel());
+                    canceledOpacityEffects = true;
+                }
                 const rawT = Math.min(1, (elapsed - flyStartDelay) / flyDuration);
                 const ease = rawT < 0.5 ? 4 * rawT * rawT * rawT : 1 - Math.pow(-2 * rawT + 2, 3) / 2;
+                const fadeT =
+                    ease <= fadeStartEase
+                        ? 0
+                        : Math.min(1, (ease - fadeStartEase) / Math.max(0.001, fadeEndEase - fadeStartEase));
+                const opacity = 0.9 * (1 - fadeT);
 
                 el.setAttribute('x', (startX + (target.x - startX) * ease).toFixed(1));
                 el.setAttribute('y', (startY + (target.y - startY) * ease).toFixed(1));
                 el.setAttribute('font-size', (startFontSize + (targetFontSize - startFontSize) * ease).toFixed(1));
+                el.setAttribute('opacity', opacity.toFixed(2));
 
                 if (rawT >= 1) {
-                    el.animate([{ opacity: 0.9 }, { opacity: 0 }], {
-                        duration: 100, fill: 'forwards',
-                    });
+                    el.setAttribute('opacity', '0');
                 } else {
                     requestAnimationFrame(animateFly);
                 }
@@ -622,7 +864,10 @@ export function dismissWordCloud(mainEffectNames: string[], mainColors: string[]
             const t0 = performance.now();
             (function burst() {
                 const elapsed = performance.now() - t0;
-                if (elapsed < burstDelay) { requestAnimationFrame(burst); return; }
+                if (elapsed < burstDelay) {
+                    requestAnimationFrame(burst);
+                    return;
+                }
                 const rawT = Math.min(1, (elapsed - burstDelay) / burstDuration);
                 const ramp = rawT < burstRamp ? (rawT / burstRamp) * (rawT / burstRamp) : 1;
                 const ease = rawT < 0.5 ? 4 * rawT * rawT * rawT : 1 - Math.pow(-2 * rawT + 2, 3) / 2;
@@ -636,9 +881,9 @@ export function dismissWordCloud(mainEffectNames: string[], mainColors: string[]
             })();
         });
 
-        const totalTime = Math.max(flyDuration + flyDelay + 100, burstDelay + burstDuration);
+        const totalTime = Math.max(maxFlyTime + 100, burstDelay + burstDuration);
         setTimeout(() => {
-            // Remove only word-cloud words — preserve orbital rings (still morphing)
+            // Remove word-cloud words — preserve orbital rings (still morphing)
             group.querySelectorAll('.word-cloud-word').forEach(el => el.remove());
             _wordCloudPositions = [];
             resolve();

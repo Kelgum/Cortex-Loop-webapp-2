@@ -1,47 +1,119 @@
+/**
+ * Main — App entry point: prompt submission handler, phase orchestration, settings UI, and timeline engine wiring.
+ * Exports: handlePromptSubmit, initSettings, initThemeToggle, initRxMode, refreshChartTheme
+ * Depends on: state, constants, utils, phase-chart, lx-system, word-cloud, biometric, sherlock, timeline-engine, timeline-ribbon, timeline-builder
+ */
 import '../styles.css';
 
 import { PHASE_CHART } from './constants';
-import { AppState, PhaseState, DividerState, TimelineState, syncStageModelsForProvider } from './state';
-import { sleep } from './utils';
-import { chartTheme } from './utils';
-import { injectPhaseChartDeps, startBioScanLine, stopBioScanLine } from './phase-chart';
-import { injectLxDeps, cleanupMorphDrag } from './lx-system';
 import {
-    stopOrbitalRings, _orbitalRingsState, setOrbitalRingsState,
-    _wordCloudPositions, setWordCloudPositions,
-    startOrbitalRings, renderWordCloud, dismissWordCloud, morphRingsToCurves,
+    AppState,
+    PhaseState,
+    DividerState,
+    TimelineState,
+    MultiDayState,
+    AgentMatchState,
+    isTurboActive,
+} from './state';
+import { sleep, isLightMode } from './utils';
+import { chartTheme } from './utils';
+import { clearPromptError, configurePhaseChartRuntime, resetPhaseChart, showPromptError } from './phase-chart-ui';
+import { cleanupMorphDrag, configureLxRuntime } from './lx-system';
+import {
+    stopOrbitalRings,
+    _orbitalRingsState,
+    setOrbitalRingsState,
+    _wordCloudPositions,
+    setWordCloudPositions,
+    startOrbitalRings,
+    stopWordCloudFloat,
+    renderWordCloud,
+    skipWordCloudEntrance,
+    dismissWordCloud,
+    morphRingsToCurves,
 } from './word-cloud';
 import {
-    clearPromptError, showPromptError, resetPhaseChart,
-    buildPhaseXAxis, buildPhaseYAxes, buildPhaseGrid,
-    startScanLine, stopScanLine,
-    renderBaselineCurvesInstant, renderBaselineCurves,
-    renderPhaseLegend, morphToDesiredCurves,
-    startTimelineScanLine, stopTimelineScanLine,
+    buildPhaseXAxis,
+    buildPhaseYAxes,
+    buildPhaseGrid,
+    startScanLine,
+    stopScanLine,
+    renderBaselineCurvesInstant,
+    renderBaselineCurves,
+    renderPhaseLegend,
+    morphToDesiredCurves,
+    startTimelineScanLine,
+    stopTimelineScanLine,
 } from './phase-chart';
 import { callFastModel, callMainModelForCurves, callInterventionModel, callSherlockModel } from './llm-pipeline';
+import { validateInterventions, computeIncrementalLxOverlay, animateSequentialLxReveal } from './lx-system';
 import {
-    validateInterventions, computeIncrementalLxOverlay,
-    animateSequentialLxReveal,
-} from './lx-system';
-import { showBiometricTrigger, showInterventionPlayButton, showInterventionPlayButtonLoading, hideInterventionPlayButton, setInterventionPlayClickHandler, showBiometricOnVcrPanel, hideRevisionPlayButton, injectBiometricDeps, renderBiometricStrips } from './biometric';
+    showBiometricTrigger,
+    showInterventionPlayButton,
+    hideInterventionPlayButton,
+    showBiometricOnVcrPanel,
+    hideRevisionPlayButton,
+    configureBiometricRuntime,
+    renderBiometricStrips,
+    hideBiometricTrigger,
+} from './biometric';
 import { BiometricState, RevisionState, SherlockState } from './state';
-import { clearNarration, showNarrationPanel, showNarrationLoading, hideNarrationPanel, showLxStepControls, triggerLxPlay } from './sherlock';
+import { clearNarration, hideNarrationPanel, showLxStepControls } from './sherlock';
 import { cleanupBaselineEditor } from './baseline-editor';
 import { DebugLog } from './debug-panel';
+import {
+    clearRuntimeBug,
+    initRuntimeErrorBanner,
+    reportRuntimeBug,
+    reportRuntimeCacheWarning,
+} from './runtime-error-banner';
+import { extractCurvesData, extractInterventionsData } from './llm-response-shape';
+import { normalizeSherlockNarration } from './sherlock-narration';
+import { describeStageClasses, reconcileEnabledCacheDependencies } from './cache-policy';
+import { initAnalogyOverlay } from './analogy-overlay';
 
 // Timeline engine imports
 import { TimelineEngine } from './timeline-engine';
 import { TimelineRibbon } from './timeline-ribbon';
+import { PipelineTimeline } from './pipeline-timeline';
 import {
-    buildPhase0Segments, addWordCloudSegments,
-    addPostCurveSegments, buildPhase1Segments,
-    addTimelineScanLine, buildPhase2Segments,
-    addBioScanLine, buildPhase3Segments,
+    buildPhase0Segments,
+    addWordCloudSegments,
+    addPostCurveSegments,
+    buildPhase1Segments,
+    addTimelineScanLine,
+    buildPhase2Segments,
+    addBioScanLine,
+    buildPhase3Segments,
     buildPhase4Segments,
 } from './timeline-builder';
-
-declare const BIOMETRIC_DEVICES: any;
+import { BIOMETRIC_DEVICES } from './biometric-devices';
+import { getAppDom } from './dom';
+import { sessionSettingsStore, settingsStore, STORAGE_KEYS } from './settings-store';
+import { TaskGroup } from './task-group';
+import { initDebugBundleExport } from './debug-bundle';
+import { LLMCache } from './llm-cache';
+import { initCycleUi } from './cycle-ui';
+import { getLoadedCycleId, getLoadedCyclePrompt } from './cycle-store';
+import { initAgentDesigner } from './creator-agent-designer';
+import { initAgentBrowser } from './creator-agent-browser';
+import { rankCreatorAgents, showAgentMatchPanel, resetAgentMatch } from './creator-agent-matcher';
+import { getAgentById } from './creator-agents/index';
+import {
+    activateCurveSculptor,
+    deactivateCurveSculptor,
+    isSculptorActive,
+    refreshSculptorRxFilter,
+} from './curve-sculptor';
+import {
+    activateSubstanceWall,
+    deactivateSubstanceWall,
+    isWallActive,
+    refreshWallRxFilter,
+    getWallPhase,
+    expandWallDepth,
+} from './substance-wall';
+import type { TimelineEngineHandle } from './contracts';
 const HARD_RESET_PENDING_PROMPT_KEY = 'cortex_pending_prompt_after_hard_reset_v1';
 
 type PendingPromptPayload = {
@@ -50,6 +122,10 @@ type PendingPromptPayload = {
     timestamp: number;
 };
 
+type StrategistOutcome = { ok: true; result: any; settledAt: number } | { ok: false; error: any; settledAt: number };
+
+type StrategistVcrState = 'hidden' | 'loading' | 'analysis-baseline' | 'baseline-optimize' | 'optimizing' | 'handoff';
+
 function storePendingPromptForHardReset(prompt: string): void {
     const payload: PendingPromptPayload = {
         prompt,
@@ -57,7 +133,7 @@ function storePendingPromptForHardReset(prompt: string): void {
         timestamp: Date.now(),
     };
     try {
-        sessionStorage.setItem(HARD_RESET_PENDING_PROMPT_KEY, JSON.stringify(payload));
+        sessionSettingsStore.setJson(HARD_RESET_PENDING_PROMPT_KEY, payload);
     } catch {
         // Ignore storage failures; fallback is normal reload without auto-submit.
     }
@@ -65,9 +141,9 @@ function storePendingPromptForHardReset(prompt: string): void {
 
 function consumePendingPromptAfterHardReset(): PendingPromptPayload | null {
     try {
-        const raw = sessionStorage.getItem(HARD_RESET_PENDING_PROMPT_KEY);
+        const raw = sessionSettingsStore.getString(HARD_RESET_PENDING_PROMPT_KEY);
         if (!raw) return null;
-        sessionStorage.removeItem(HARD_RESET_PENDING_PROMPT_KEY);
+        sessionSettingsStore.remove(HARD_RESET_PENDING_PROMPT_KEY);
         const parsed = JSON.parse(raw);
         if (!parsed || typeof parsed.prompt !== 'string') return null;
         return parsed as PendingPromptPayload;
@@ -76,224 +152,553 @@ function consumePendingPromptAfterHardReset(): PendingPromptPayload | null {
     }
 }
 
-// ============================================
-// Dependency Injection Wiring
-// ============================================
+const STRATEGIST_PLAY_ICON =
+    '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg>';
+const STRATEGIST_PLAY_VCR_HIDDEN_CLASS = 'vcr-hidden';
+const STRATEGIST_PLAY_VCR_COMPACT_CLASS = 'vcr-compact';
+const STRATEGIST_VCR_LOADING_CLASS = 'vcr-loading';
+const STRATEGIST_VCR_HANDOFF_OUT_CLASS = 'vcr-handoff-out';
+const STRATEGIST_LABEL_TRANSIT_DELAY = 280;
+const STRATEGIST_LABEL_SETTLE_DELAY = 380;
+let _strategistPanel: HTMLElement | null = null;
+let _strategistPlayBtn: HTMLButtonElement | null = null;
+let _strategistPlayHandler: (() => void) | null = null;
+let _strategistLeftLabel: HTMLElement | null = null;
+let _strategistRightLabel: HTMLElement | null = null;
+let _strategistLabelTransitTimer: number | null = null;
+let _strategistPillResyncTimer: number | null = null;
+let _strategistFontSyncBound = false;
+let _strategistVcrState: StrategistVcrState = 'hidden';
+let _strategistEarlyReady = false;
+let _strategistQueuedFirstClick = false;
+let _strategistSkipRequested = false;
 
-injectPhaseChartDeps({ stopOrbitalRings, setOrbitalRingsState, setWordCloudPositions, cleanupMorphDrag, hideBiometricTrigger: () => { try { (document.getElementById('biometric-trigger') as any)?.classList.add('hidden'); } catch { } }, hideInterventionPlayButton, hideRevisionPlayButton, BiometricState, RevisionState } as any);
-injectLxDeps({ renderBiometricStrips });
-
-function extractSherlockBeatText(beat: any): string {
-    if (typeof beat === 'string') return beat.trim();
-    if (!beat || typeof beat !== 'object') return '';
-    const candidates = [beat.text, beat.line, beat.narration, beat.message];
-    for (const candidate of candidates) {
-        if (typeof candidate === 'string' && candidate.trim().length > 0) {
-            return candidate.trim();
-        }
+function ensureStrategistPlayButton(): HTMLButtonElement | null {
+    if (_strategistPlayBtn && document.body.contains(_strategistPlayBtn)) {
+        return _strategistPlayBtn;
     }
-    return '';
+
+    const wrapper = document.querySelector('.phase-svg-wrapper');
+    if (!wrapper) return null;
+
+    // Create the VCR-style envelope
+    const panel = document.createElement('div');
+    panel.className = `strategist-vcr-panel ${STRATEGIST_PLAY_VCR_HIDDEN_CLASS}`;
+
+    // Left label (inside panel, order: 1)
+    const leftLabel = document.createElement('span');
+    leftLabel.className = 'vcr-step-label vcr-step-left';
+    panel.appendChild(leftLabel);
+    _strategistLeftLabel = leftLabel;
+
+    // Play button (inside panel, order: 2)
+    const btn = document.createElement('button');
+    btn.id = 'strategist-play-btn';
+    btn.className = 'strategist-play-btn loading';
+    btn.title = 'Play';
+    btn.innerHTML = STRATEGIST_PLAY_ICON;
+    btn.addEventListener('click', () => {
+        if (_strategistPlayHandler) _strategistPlayHandler();
+    });
+    panel.appendChild(btn);
+
+    // Right label (inside panel, order: 3)
+    const rightLabel = document.createElement('span');
+    rightLabel.className = 'vcr-step-label vcr-step-right';
+    panel.appendChild(rightLabel);
+    _strategistRightLabel = rightLabel;
+
+    wrapper.appendChild(panel);
+    _strategistPanel = panel;
+    _strategistPlayBtn = btn;
+    bindStrategistFontResync();
+    return btn;
 }
 
-function fallbackSherlockBeat(iv: any): string {
-    const substanceName = iv?.substance?.name || iv?.key || 'This move';
-    const rationale = typeof iv?.rationale === 'string' ? iv.rationale.trim() : '';
-    if (rationale) return rationale;
-
-    const impacts = iv?.impacts && typeof iv.impacts === 'object'
-        ? Object.entries(iv.impacts)
-            .map(([key, value]) => ({ key, abs: Math.abs(Number(value) || 0) }))
-            .sort((a, b) => b.abs - a.abs)
-        : [];
-    const topImpact = impacts[0]?.key;
-
-    if (topImpact) {
-        return `${topImpact} is the pressure point. ${substanceName} is deployed to correct it.`;
+function queueStrategistPillResync(): void {
+    updateStrategistPillWidth();
+    requestAnimationFrame(() => updateStrategistPillWidth());
+    if (_strategistPillResyncTimer != null) {
+        window.clearTimeout(_strategistPillResyncTimer);
     }
-    return `${substanceName} is now positioned to reinforce the target state.`;
+    _strategistPillResyncTimer = window.setTimeout(() => {
+        _strategistPillResyncTimer = null;
+        updateStrategistPillWidth();
+    }, 140);
 }
 
-function normalizeSherlockNarration(raw: any, interventions: any[], enabled: boolean): any {
-    const base = (raw && typeof raw === 'object') ? raw : {};
-    const rawBeats = Array.isArray(base.beats) ? base.beats : [];
+function bindStrategistFontResync(): void {
+    if (_strategistFontSyncBound) return;
+    const fontSet = (document as any).fonts as FontFaceSet | undefined;
+    if (!fontSet || typeof fontSet.addEventListener !== 'function') return;
+    _strategistFontSyncBound = true;
 
-    let beats = rawBeats
-        .map((beat: any, idx: number) => {
-            const text = extractSherlockBeatText(beat);
-            if (!text) return null;
-            const substanceKey = (beat && typeof beat === 'object' && typeof beat.substanceKey === 'string')
-                ? beat.substanceKey
-                : interventions[idx]?.key;
-            if (beat && typeof beat === 'object') {
-                return { ...beat, text, substanceKey };
-            }
-            return { substanceKey, text };
+    fontSet.addEventListener('loadingdone', () => {
+        if (!_strategistPanel || !_strategistPanel.classList.contains('visible')) return;
+        queueStrategistPillResync();
+    });
+
+    fontSet.ready
+        .then(() => {
+            if (_strategistPanel) queueStrategistPillResync();
         })
-        .filter(Boolean);
-
-    if (beats.length === 0 && enabled && interventions.length > 0) {
-        beats = interventions.map((iv: any) => ({
-            substanceKey: iv?.key,
-            text: fallbackSherlockBeat(iv),
-        }));
-    }
-
-    if (beats.length === 0) return null;
-
-    const outro = typeof base.outro === 'string' && base.outro.trim().length > 0
-        ? base.outro.trim()
-        : 'Route locked. Execute the protocol.';
-
-    return { ...base, beats, outro };
+        .catch(() => {});
 }
 
-function isCurveLike(item: any): boolean {
-    if (!item || typeof item !== 'object') return false;
-    if (typeof item.effect !== 'string' || item.effect.trim().length === 0) return false;
-    if (!Array.isArray(item.baseline) || !Array.isArray(item.desired)) return false;
-    return true;
+function measureStrategistLabelWidth(label: HTMLElement | null): number {
+    if (!label) return 0;
+    const text = (label.textContent || '').trim();
+    if (!text) {
+        label.style.setProperty('--vcr-label-max', '0px');
+        return 0;
+    }
+    if (!_strategistPanel) {
+        const fallback = Math.max(0, Math.ceil(label.getBoundingClientRect().width));
+        label.style.setProperty('--vcr-label-max', `${fallback}px`);
+        return fallback;
+    }
+    const probe = document.createElement('span');
+    probe.className = label.className;
+    probe.textContent = text;
+    probe.style.position = 'absolute';
+    probe.style.left = '-9999px';
+    probe.style.top = '-9999px';
+    probe.style.visibility = 'hidden';
+    probe.style.pointerEvents = 'none';
+    probe.style.opacity = '0';
+    probe.style.transform = 'none';
+    probe.style.maxWidth = 'none';
+    _strategistPanel.appendChild(probe);
+    const probeWidth = Math.max(0, Math.ceil(probe.getBoundingClientRect().width));
+    probe.remove();
+    const renderedWidth = Math.max(0, Math.ceil(label.scrollWidth || 0));
+    const width = Math.max(probeWidth, renderedWidth) + 2;
+    label.style.setProperty('--vcr-label-max', `${width}px`);
+    return width;
 }
 
-function extractCurvesData(raw: any): any[] {
-    if (Array.isArray(raw)) {
-        const arr = raw.filter(isCurveLike);
-        if (arr.length > 0) return arr;
+/** Update strategist envelope width/offset so center button stays anchored while wings resize smoothly. */
+function updateStrategistPillWidth(): void {
+    if (!_strategistPanel) return;
+    requestAnimationFrame(() => {
+        if (!_strategistPanel) return;
+        const leftW = measureStrategistLabelWidth(_strategistLeftLabel);
+        const rightW = measureStrategistLabelWidth(_strategistRightLabel);
+        const playW = _strategistPlayBtn?.getBoundingClientRect().width || 52;
+        const pillW = leftW + rightW + playW + 48;
+        const pillOffset = (rightW - leftW) / 2;
+        _strategistPanel.style.setProperty('--strategist-pill-w', Math.max(pillW, 84) + 'px');
+        _strategistPanel.style.setProperty('--strategist-pill-offset', `${pillOffset.toFixed(1)}px`);
+    });
+}
+
+function showStrategistPlayButtonLoading(): void {
+    const btn = ensureStrategistPlayButton();
+    if (!btn || !_strategistPanel) return;
+    _strategistPlayHandler = null;
+    _strategistVcrState = 'loading';
+    _strategistEarlyReady = false;
+    _strategistQueuedFirstClick = false;
+    _strategistSkipRequested = false;
+
+    // Reset panel state
+    _strategistPanel.classList.remove(STRATEGIST_VCR_HANDOFF_OUT_CLASS);
+    _strategistPanel.classList.remove(STRATEGIST_PLAY_VCR_HIDDEN_CLASS);
+    _strategistPanel.classList.remove(STRATEGIST_PLAY_VCR_COMPACT_CLASS);
+    _strategistPanel.classList.remove('visible');
+    _strategistPanel.classList.add(STRATEGIST_VCR_LOADING_CLASS);
+
+    // Button in loading spinner mode
+    btn.classList.add('loading');
+    btn.innerHTML = STRATEGIST_PLAY_ICON;
+
+    // Left label: "Effects" (what system is working on) — pulsing via CSS
+    if (_strategistLeftLabel) {
+        _strategistLeftLabel.textContent = 'Analysis';
+        _strategistLeftLabel.classList.remove('vcr-label-transit-out', 'vcr-label-transit-in');
+        _strategistLeftLabel.classList.add('vcr-label-visible');
     }
 
-    if (!raw || typeof raw !== 'object') return [];
+    // Right label: empty during genesis loading
+    if (_strategistRightLabel) {
+        _strategistRightLabel.textContent = '';
+        _strategistRightLabel.classList.remove('vcr-label-visible', 'vcr-label-transit-out', 'vcr-label-transit-in');
+    }
 
-    const candidates = [raw.curves, raw.data, raw.pharmacodynamic_curves];
-    for (const candidate of candidates) {
-        if (Array.isArray(candidate)) {
-            const arr = candidate.filter(isCurveLike);
-            if (arr.length > 0) return arr;
+    updateStrategistPillWidth();
+    // Fade in
+    requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+            _strategistPanel!.classList.add('visible');
+        }),
+    );
+}
+
+/** As soon as Strategist resolves, stop spinner and show play + baseline cue. */
+function setStrategistBaselineReadyEarly(): void {
+    if (_strategistEarlyReady) return;
+    _strategistEarlyReady = true;
+    setStrategistPlayButtonReady('Baseline', () => {
+        _strategistQueuedFirstClick = true;
+        _strategistSkipRequested = true;
+        skipWordCloudEntrance();
+    });
+}
+
+function fadeOutHookSentenceFast(durationMs: number = 220): Promise<void> {
+    const hook = document.getElementById('hook-sentence') as HTMLElement | null;
+    if (!hook) return Promise.resolve();
+
+    const hasText = !!(hook.textContent || '').trim();
+    if (!hasText) {
+        hook.style.opacity = '0';
+        return Promise.resolve();
+    }
+
+    const rawStart = parseFloat(hook.style.opacity || '0.92');
+    const startOpacity = Number.isFinite(rawStart) ? rawStart : 0.92;
+    const t0 = performance.now();
+
+    return new Promise<void>(resolve => {
+        (function tick(now: number) {
+            const rawT = Math.min(1, (now - t0) / Math.max(1, durationMs));
+            hook.style.opacity = (startOpacity * (1 - rawT)).toFixed(3);
+            if (rawT < 1) {
+                requestAnimationFrame(tick);
+                return;
+            }
+            hook.textContent = '';
+            hook.style.opacity = '0';
+            resolve();
+        })(performance.now());
+    });
+}
+
+function setStrategistPlayButtonReady(descriptor: string, onClick: () => void): void {
+    const btn = ensureStrategistPlayButton();
+    if (!btn || !_strategistPanel) return;
+    if (_strategistLabelTransitTimer != null) {
+        window.clearTimeout(_strategistLabelTransitTimer);
+        _strategistLabelTransitTimer = null;
+    }
+    _strategistPlayHandler = onClick;
+    _strategistVcrState = descriptor === 'Optimize' ? 'baseline-optimize' : 'analysis-baseline';
+
+    // Exit loading state on panel
+    _strategistPanel.classList.remove(STRATEGIST_VCR_LOADING_CLASS);
+
+    // Button: stop spinner, show play icon
+    btn.classList.remove('loading');
+    btn.innerHTML = STRATEGIST_PLAY_ICON;
+    btn.title = 'Play';
+
+    // Left label: "Analysis" visible (was pulsing during loading, now static)
+    if (_strategistLeftLabel) {
+        _strategistLeftLabel.getAnimations().forEach(a => a.cancel());
+        _strategistLeftLabel.textContent = 'Analysis';
+        _strategistLeftLabel.classList.remove('vcr-label-transit-out', 'vcr-label-transit-in');
+        _strategistLeftLabel.classList.add('vcr-label-visible');
+    }
+
+    // Right label: descriptor (e.g. "Analysis")
+    if (_strategistRightLabel) {
+        _strategistRightLabel.getAnimations().forEach(a => a.cancel());
+        _strategistRightLabel.style.transition = 'none';
+        _strategistRightLabel.textContent = descriptor;
+        _strategistRightLabel.classList.remove('vcr-label-transit-out', 'vcr-label-transit-in');
+        _strategistRightLabel.classList.add('vcr-label-visible');
+        void _strategistRightLabel.offsetWidth;
+        _strategistRightLabel.style.transition = '';
+    }
+    updateStrategistPillWidth();
+}
+
+/** First strategist click: Baseline flows right→left; right label becomes Optimize. */
+function animateStrategistBaselineToOptimizeReady(): Promise<void> {
+    const left = _strategistLeftLabel;
+    const right = _strategistRightLabel;
+    if (!left || !right) return Promise.resolve();
+    _strategistVcrState = 'baseline-optimize';
+
+    if (_strategistLabelTransitTimer != null) {
+        window.clearTimeout(_strategistLabelTransitTimer);
+        _strategistLabelTransitTimer = null;
+    }
+
+    // Turbo: skip animation, just set final state
+    if (isTurboActive()) {
+        left.textContent = 'Baseline';
+        left.classList.add('vcr-label-visible');
+        right.textContent = 'Optimize';
+        right.classList.add('vcr-label-visible');
+        updateStrategistPillWidth();
+        return Promise.resolve();
+    }
+
+    // Phase 1: both labels exit leftward; Baseline appears to pass through play into the left slot.
+    right.classList.remove('vcr-label-visible', 'vcr-label-transit-in');
+    right.classList.add('vcr-label-transit-out');
+    left.classList.remove('vcr-label-visible', 'vcr-label-transit-in');
+    left.classList.add('vcr-label-transit-out');
+    updateStrategistPillWidth();
+
+    return new Promise<void>(resolve => {
+        _strategistLabelTransitTimer = window.setTimeout(() => {
+            left.classList.remove('vcr-label-transit-out');
+            right.classList.remove('vcr-label-transit-out');
+
+            left.textContent = 'Baseline';
+            left.classList.add('vcr-label-transit-in');
+
+            right.textContent = 'Optimize';
+            requestAnimationFrame(() => right.classList.add('vcr-label-visible'));
+            updateStrategistPillWidth();
+
+            _strategistLabelTransitTimer = window.setTimeout(() => {
+                left.classList.remove('vcr-label-transit-in');
+                left.classList.add('vcr-label-visible');
+                _strategistLabelTransitTimer = null;
+                updateStrategistPillWidth();
+                resolve();
+            }, STRATEGIST_LABEL_SETTLE_DELAY);
+        }, STRATEGIST_LABEL_TRANSIT_DELAY);
+    });
+}
+
+/** Second strategist click: Baseline fades; Optimize flows left and resolves as Optimizing… */
+function animateStrategistOptimizingTransit(): Promise<void> {
+    if (_strategistLabelTransitTimer != null) {
+        window.clearTimeout(_strategistLabelTransitTimer);
+        _strategistLabelTransitTimer = null;
+    }
+    _strategistVcrState = 'optimizing';
+
+    // Turbo: skip animation
+    if (isTurboActive()) {
+        if (_strategistLeftLabel) {
+            _strategistLeftLabel.textContent = 'Optimizing\u2026';
+            _strategistLeftLabel.classList.add('vcr-label-visible');
         }
+        if (_strategistRightLabel) _strategistRightLabel.textContent = '';
+        updateStrategistPillWidth();
+        return Promise.resolve();
     }
 
-    if (isCurveLike(raw)) return [raw];
+    // Phase 1: current labels exit leftward.
+    _strategistRightLabel?.classList.remove('vcr-label-visible', 'vcr-label-transit-in');
+    _strategistRightLabel?.classList.add('vcr-label-transit-out');
+    _strategistLeftLabel?.classList.remove('vcr-label-visible', 'vcr-label-transit-in');
+    _strategistLeftLabel?.classList.add('vcr-label-transit-out');
+    updateStrategistPillWidth();
 
-    // Fallback: occasionally providers wrap curve objects under dynamic keys.
-    const objectValues = Object.values(raw);
-    const flatCurves = objectValues.filter(isCurveLike) as any[];
-    if (flatCurves.length > 0) return flatCurves;
+    return new Promise<void>(resolve => {
+        _strategistLabelTransitTimer = window.setTimeout(() => {
+            if (_strategistLeftLabel) {
+                _strategistLeftLabel.classList.remove('vcr-label-transit-out');
+                _strategistLeftLabel.textContent = 'Optimizing\u2026';
+                _strategistLeftLabel.classList.add('vcr-label-transit-in');
+            }
+            if (_strategistRightLabel) {
+                _strategistRightLabel.classList.remove('vcr-label-transit-out');
+                _strategistRightLabel.textContent = '';
+            }
+            updateStrategistPillWidth();
 
-    return [];
+            _strategistLabelTransitTimer = window.setTimeout(() => {
+                if (_strategistLeftLabel) {
+                    _strategistLeftLabel.classList.remove('vcr-label-transit-in');
+                    _strategistLeftLabel.classList.add('vcr-label-visible');
+                }
+                _strategistLabelTransitTimer = null;
+                updateStrategistPillWidth();
+                resolve();
+            }, STRATEGIST_LABEL_SETTLE_DELAY);
+        }, STRATEGIST_LABEL_TRANSIT_DELAY);
+    });
 }
 
-function parseInterventionTime(value: any): number | null {
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    if (typeof value !== 'string') return null;
-    const trimmed = value.trim();
-    if (!trimmed) return null;
+/** Handoff: Optimizing fades out and left wing shrinks to play-button envelope before VCR swap. */
+function animateStrategistOptimizingCollapseOut(): Promise<void> {
+    const panel = _strategistPanel;
+    if (!panel) return Promise.resolve();
+    _strategistVcrState = 'handoff';
 
-    const numeric = Number(trimmed);
-    if (Number.isFinite(numeric)) return numeric;
-
-    const hhmm = trimmed.match(/^(\d{1,2}):(\d{2})(?:\s*([ap]m))?$/i);
-    if (!hhmm) return null;
-    let hours = Number(hhmm[1]);
-    const mins = Number(hhmm[2]);
-    if (!Number.isFinite(hours) || !Number.isFinite(mins) || mins < 0 || mins > 59) return null;
-    const meridiem = (hhmm[3] || '').toLowerCase();
-    if (meridiem === 'pm' && hours < 12) hours += 12;
-    if (meridiem === 'am' && hours === 12) hours = 0;
-    if (hours < 0 || hours > 23) return null;
-    return hours * 60 + mins;
-}
-
-function looksInterventionLike(item: any): boolean {
-    if (!item || typeof item !== 'object') return false;
-    const key = item.key || item.substanceKey || item.substance_id;
-    const timeVal = item.timeMinutes ?? item.time_min ?? item.timeMinute ?? item.minute ?? item.time;
-    return !!key && parseInterventionTime(timeVal) !== null;
-}
-
-function normalizeIntervention(item: any): any | null {
-    if (!item || typeof item !== 'object') return null;
-    const key = item.key || item.substanceKey || item.substance_id;
-    const timeVal = item.timeMinutes ?? item.time_min ?? item.timeMinute ?? item.minute ?? item.time;
-    const timeMinutes = parseInterventionTime(timeVal);
-    if (!key || timeMinutes === null) return null;
-
-    const normalized: any = {
-        ...item,
-        key,
-        timeMinutes,
-    };
-
-    if (normalized.dose == null && item.amount != null) normalized.dose = item.amount;
-    if (normalized.impacts == null && item.impactVector && typeof item.impactVector === 'object') {
-        normalized.impacts = item.impactVector;
-    }
-    if (normalized.rationale == null && typeof item.reason === 'string') normalized.rationale = item.reason;
-    if (normalized.rationale == null && typeof item.explanation === 'string') normalized.rationale = item.explanation;
-
-    return normalized;
-}
-
-function extractInterventionsData(raw: any): any[] {
-    const candidates: any[] = [];
-    if (Array.isArray(raw)) candidates.push(raw);
-    if (raw && typeof raw === 'object') {
-        if (Array.isArray(raw.interventions)) candidates.push(raw.interventions);
-        if (Array.isArray(raw.protocol)) candidates.push(raw.protocol);
-        if (Array.isArray(raw.actions)) candidates.push(raw.actions);
-        if (raw.plan && typeof raw.plan === 'object' && Array.isArray(raw.plan.interventions)) {
-            candidates.push(raw.plan.interventions);
-        }
-        if (looksInterventionLike(raw)) candidates.push([raw]);
+    if (_strategistLabelTransitTimer != null) {
+        window.clearTimeout(_strategistLabelTransitTimer);
+        _strategistLabelTransitTimer = null;
     }
 
-    for (const candidate of candidates) {
-        const normalized = candidate
-            .map((iv: any) => normalizeIntervention(iv))
-            .filter(Boolean);
-        if (normalized.length > 0) return normalized;
+    // Turbo: skip animation
+    if (isTurboActive()) {
+        hideStrategistPlayButtonImmediate();
+        return Promise.resolve();
     }
 
-    if (raw && typeof raw === 'object') {
-        const values = Object.values(raw);
-        const normalized = values
-            .map((iv: any) => normalizeIntervention(iv))
-            .filter(Boolean);
-        if (normalized.length > 0) return normalized;
+    if (_strategistRightLabel) {
+        _strategistRightLabel.classList.remove('vcr-label-visible', 'vcr-label-transit-in', 'vcr-label-transit-out');
+        _strategistRightLabel.textContent = '';
     }
+    if (_strategistLeftLabel) {
+        _strategistLeftLabel.classList.remove('vcr-label-visible', 'vcr-label-transit-in');
+        _strategistLeftLabel.classList.add('vcr-label-transit-out');
+    }
+    updateStrategistPillWidth();
 
-    return [];
+    return new Promise<void>(resolve => {
+        window.setTimeout(() => {
+            hideStrategistPlayButtonImmediate();
+            resolve();
+        }, STRATEGIST_LABEL_TRANSIT_DELAY + 60);
+    });
 }
+
+function clearStrategistLabels(): void {
+    if (_strategistLabelTransitTimer != null) {
+        window.clearTimeout(_strategistLabelTransitTimer);
+        _strategistLabelTransitTimer = null;
+    }
+    if (_strategistPillResyncTimer != null) {
+        window.clearTimeout(_strategistPillResyncTimer);
+        _strategistPillResyncTimer = null;
+    }
+    if (_strategistLeftLabel) {
+        _strategistLeftLabel.classList.remove('vcr-label-visible', 'vcr-label-transit-out', 'vcr-label-transit-in');
+        _strategistLeftLabel.textContent = '';
+    }
+    if (_strategistRightLabel) {
+        _strategistRightLabel.classList.remove('vcr-label-visible', 'vcr-label-transit-out', 'vcr-label-transit-in');
+        _strategistRightLabel.textContent = '';
+    }
+}
+
+function hideStrategistPlayButton(persistAsMini: boolean = false): void {
+    _strategistPlayHandler = null;
+    _strategistVcrState = persistAsMini ? 'handoff' : 'hidden';
+    _strategistEarlyReady = false;
+    _strategistQueuedFirstClick = false;
+    _strategistSkipRequested = false;
+    clearStrategistLabels();
+    const panel = _strategistPanel;
+    if (!panel) return;
+
+    panel.classList.remove('visible');
+    panel.classList.remove(STRATEGIST_VCR_LOADING_CLASS);
+
+    if (persistAsMini) {
+        panel.classList.remove(STRATEGIST_PLAY_VCR_HIDDEN_CLASS);
+        panel.classList.add(STRATEGIST_PLAY_VCR_COMPACT_CLASS);
+    } else {
+        panel.classList.remove(STRATEGIST_PLAY_VCR_COMPACT_CLASS);
+        panel.classList.add(STRATEGIST_PLAY_VCR_HIDDEN_CLASS);
+    }
+
+    if (_strategistPlayBtn) {
+        _strategistPlayBtn.classList.remove('loading');
+    }
+}
+
+function hideStrategistPlayButtonImmediate(): void {
+    _strategistPlayHandler = null;
+    _strategistVcrState = 'hidden';
+    _strategistEarlyReady = false;
+    _strategistQueuedFirstClick = false;
+    _strategistSkipRequested = false;
+    clearStrategistLabels();
+    const panel = _strategistPanel;
+    if (!panel) return;
+
+    // Handoff to canonical VCR: fade out in place, do not drop below the anchor.
+    panel.classList.add(STRATEGIST_VCR_HANDOFF_OUT_CLASS);
+    panel.classList.remove('visible');
+    panel.classList.remove(STRATEGIST_VCR_LOADING_CLASS);
+    panel.classList.remove(STRATEGIST_PLAY_VCR_COMPACT_CLASS);
+    panel.classList.add(STRATEGIST_PLAY_VCR_HIDDEN_CLASS);
+
+    window.setTimeout(() => {
+        panel.classList.remove(STRATEGIST_VCR_HANDOFF_OUT_CLASS);
+    }, 320);
+
+    if (_strategistPlayBtn) {
+        _strategistPlayBtn.classList.remove('loading');
+    }
+}
+
+function resetBiometricFlowState(): void {
+    BiometricState.selectedDevices = [];
+    BiometricState.profileText = '';
+    BiometricState.profileDraftText = '';
+    BiometricState.profileDraftStatus = 'idle';
+    BiometricState.profileDraftError = null;
+    BiometricState.profileDirty = false;
+    BiometricState.profileSource = 'fallback';
+    BiometricState.profileDraftTensionDirectives = [];
+    BiometricState.biometricResult = null;
+    BiometricState.channels = [];
+    BiometricState.phase = 'idle';
+    delete (BiometricState as any)._pois;
+}
+
+function resetRevisionFlowState(): void {
+    RevisionState.revisionPromise = null;
+    RevisionState.revisionResult = null;
+    RevisionState.oldInterventions = null;
+    RevisionState.newInterventions = null;
+    RevisionState.diff = null;
+    RevisionState.newLxCurves = null;
+    RevisionState.referenceBundle = null;
+    RevisionState.fitMetricsBefore = null;
+    RevisionState.fitMetricsAfter = null;
+    RevisionState.phase = 'idle';
+}
+
+configurePhaseChartRuntime({
+    stopOrbitalRings,
+    setOrbitalRingsState,
+    setWordCloudPositions,
+    cleanupMorphDrag,
+    hideBiometricTrigger,
+    hideInterventionPlayButton,
+    hideRevisionPlayButton,
+    resetBiometricState: resetBiometricFlowState,
+    resetRevisionState: resetRevisionFlowState,
+    deactivateCurveSculptor,
+    deactivateSubstanceWall,
+});
+configureLxRuntime({ renderBiometricStrips });
 
 function stopPromptPlayheadTracker() {
-    const rafId = TimelineState._promptPlayheadRafId;
+    const rafId = TimelineState.playheadTrackers.prompt.rafId;
     if (rafId != null) {
         cancelAnimationFrame(rafId);
-        TimelineState._promptPlayheadRafId = null;
+        TimelineState.playheadTrackers.prompt.rafId = null;
     }
 }
 
 function stopBioScanPlayheadTracker() {
-    const rafId = TimelineState._bioScanPlayheadRafId;
+    const rafId = TimelineState.playheadTrackers.bioScan.rafId;
     if (rafId != null) {
         cancelAnimationFrame(rafId);
-        TimelineState._bioScanPlayheadRafId = null;
+        TimelineState.playheadTrackers.bioScan.rafId = null;
     }
 }
 
 function stopBioRevealPlayheadTracker() {
-    const rafId = TimelineState._bioRevealPlayheadRafId;
+    const rafId = TimelineState.playheadTrackers.bioReveal.rafId;
     if (rafId != null) {
         cancelAnimationFrame(rafId);
-        TimelineState._bioRevealPlayheadRafId = null;
+        TimelineState.playheadTrackers.bioReveal.rafId = null;
     }
 }
 
 function startBioRevealPlayheadTracker(
-    engine: TimelineEngine,
+    engine: TimelineEngineHandle,
     revealStartTime: number,
     revealDurationMs: number,
     revealEndTime: number,
 ) {
     stopBioRevealPlayheadTracker();
-    const wallStart = performance.now();
+    TimelineState.playheadTrackers.bioReveal.wallStart = performance.now();
+    TimelineState.playheadTrackers.bioReveal.timelineStart = revealStartTime;
 
     const tick = () => {
         if (TimelineState.engine !== engine) {
@@ -301,7 +706,7 @@ function startBioRevealPlayheadTracker(
             return;
         }
 
-        const elapsed = performance.now() - wallStart;
+        const elapsed = performance.now() - (TimelineState.playheadTrackers.bioReveal.wallStart ?? performance.now());
         if (elapsed >= revealDurationMs) {
             engine.advanceTimeTo(revealEndTime);
             stopBioRevealPlayheadTracker();
@@ -309,37 +714,37 @@ function startBioRevealPlayheadTracker(
         }
 
         engine.advanceTimeTo(revealStartTime + elapsed);
-        TimelineState._bioRevealPlayheadRafId = requestAnimationFrame(tick);
+        TimelineState.playheadTrackers.bioReveal.rafId = requestAnimationFrame(tick);
     };
 
-    TimelineState._bioRevealPlayheadRafId = requestAnimationFrame(tick);
+    TimelineState.playheadTrackers.bioReveal.rafId = requestAnimationFrame(tick);
 }
 
-function startBioScanPlayheadTracker(engine: TimelineEngine, timelineStart: number) {
+function startBioScanPlayheadTracker(engine: TimelineEngineHandle, timelineStart: number) {
     stopBioScanPlayheadTracker();
 
-    TimelineState._bioScanWallStart = performance.now();
-    TimelineState._bioScanTimelineStart = timelineStart;
+    TimelineState.playheadTrackers.bioScan.wallStart = performance.now();
+    TimelineState.playheadTrackers.bioScan.timelineStart = timelineStart;
 
     const tick = () => {
-        const wallStart = TimelineState._bioScanWallStart;
+        const wallStart = TimelineState.playheadTrackers.bioScan.wallStart;
         if (wallStart == null || TimelineState.engine !== engine) {
             stopBioScanPlayheadTracker();
             return;
         }
         const elapsed = performance.now() - wallStart;
-        engine.advanceTimeTo(TimelineState._bioScanTimelineStart + elapsed);
-        TimelineState._bioScanPlayheadRafId = requestAnimationFrame(tick);
+        engine.advanceTimeTo((TimelineState.playheadTrackers.bioScan.timelineStart ?? timelineStart) + elapsed);
+        TimelineState.playheadTrackers.bioScan.rafId = requestAnimationFrame(tick);
     };
 
-    TimelineState._bioScanPlayheadRafId = requestAnimationFrame(tick);
+    TimelineState.playheadTrackers.bioScan.rafId = requestAnimationFrame(tick);
 }
 
 function estimateBioScanLaneCount(): number {
     const selected = BiometricState.selectedDevices;
     if (!Array.isArray(selected) || selected.length === 0) return 5;
 
-    const devices = BIOMETRIC_DEVICES?.devices;
+    const devices = BIOMETRIC_DEVICES.devices;
     if (!Array.isArray(devices)) return 5;
 
     let laneCount = 0;
@@ -351,58 +756,50 @@ function estimateBioScanLaneCount(): number {
     return Math.max(1, laneCount || 5);
 }
 
-injectBiometricDeps({
-    startBioScanLine,
-    stopBioScanLine,
+configureBiometricRuntime({
     onBioScanStart: () => {
         const engine = TimelineState.engine;
         if (!engine) return;
+        const timelineEngine = engine as TimelineEngine;
         stopBioRevealPlayheadTracker();
         const channelCount = estimateBioScanLaneCount(); // estimate; actual count resolved on stop
-        addBioScanLine(engine, TimelineState.cursor, channelCount);
+        addBioScanLine(timelineEngine, TimelineState.cursor, channelCount);
         // Track playhead continuously while biometric scan is active.
         startBioScanPlayheadTracker(engine, TimelineState.cursor);
     },
     onBioScanStop: (channelCount: number) => {
         const engine = TimelineState.engine;
         stopBioScanPlayheadTracker();
-        const wallStart = TimelineState._bioScanWallStart;
-        TimelineState._bioScanWallStart = null;
-        TimelineState._bioScanTimelineStart = null;
+        const wallStart = TimelineState.playheadTrackers.bioScan.wallStart;
+        TimelineState.playheadTrackers.bioScan.wallStart = null;
+        TimelineState.playheadTrackers.bioScan.timelineStart = null;
         if (!engine || wallStart == null) return;
+        const timelineEngine = engine as TimelineEngine;
         const bioScanDuration = performance.now() - wallStart;
         const phase2EndTime = TimelineState.cursor;
-        TimelineState.cursor = buildPhase3Segments(
-            engine, TimelineState.cursor, bioScanDuration, channelCount,
-        );
+        TimelineState.cursor = buildPhase3Segments(timelineEngine, TimelineState.cursor, bioScanDuration, channelCount);
         const bioRevealStartTime = phase2EndTime + bioScanDuration;
         const bioRevealDuration = 600 + Math.max(0, channelCount - 1) * 80;
         const bioRevealEndTime = TimelineState.cursor;
 
         // Land at reveal start, then advance while strip reveal animation runs.
         engine.advanceTimeTo(bioRevealStartTime);
-        startBioRevealPlayheadTracker(
-            engine,
-            bioRevealStartTime,
-            bioRevealDuration,
-            bioRevealEndTime,
-        );
+        startBioRevealPlayheadTracker(engine, bioRevealStartTime, bioRevealDuration, bioRevealEndTime);
     },
     onBioScanAbort: () => {
         stopBioScanPlayheadTracker();
         stopBioRevealPlayheadTracker();
-        TimelineState._bioScanWallStart = null;
-        TimelineState._bioScanTimelineStart = null;
+        TimelineState.playheadTrackers.bioScan.wallStart = null;
+        TimelineState.playheadTrackers.bioScan.timelineStart = null;
     },
     onRevisionPlay: (diff: any[]) => {
         const engine = TimelineState.engine;
         if (!engine) return;
+        const timelineEngine = engine as TimelineEngine;
         engine.resolveGate('biometric-gate');
-        TimelineState.cursor = buildPhase4Segments(
-            engine, TimelineState.cursor, diff,
-        );
+        TimelineState.cursor = buildPhase4Segments(timelineEngine, TimelineState.cursor, diff);
         engine.resolveGate('revision-gate');
-        // We do NOT manually advance timeline here. 
+        // We do NOT manually advance timeline here.
         // Biometric.ts performs iterative UI sweep, and advances it at the end.
     },
     onRevisionPlayContext: (narration: any) => {
@@ -423,14 +820,15 @@ injectBiometricDeps({
 export async function handlePromptSubmit(e) {
     e.preventDefault();
 
-    const input = document.getElementById('prompt-input') as HTMLInputElement;
-    const prompt = input.value.trim();
+    const { prompt: promptDom, phaseChart } = getAppDom();
+    const prompt = promptDom.input.value.trim();
     if (!prompt || PhaseState.isProcessing) return;
 
+    PhaseState.userGoal = prompt;
+    LLMCache.startLiveFlow();
+
     const shouldHardResetBeforeNewPrompt =
-        document.body.classList.contains('phase-engaged')
-        || PhaseState.maxPhaseReached >= 0
-        || !!TimelineState.engine;
+        document.body.classList.contains('phase-engaged') || PhaseState.maxPhaseReached >= 0 || !!TimelineState.engine;
     if (shouldHardResetBeforeNewPrompt) {
         storePendingPromptForHardReset(prompt);
         window.location.reload();
@@ -441,17 +839,20 @@ export async function handlePromptSubmit(e) {
     stopPromptPlayheadTracker();
     stopBioScanPlayheadTracker();
     stopBioRevealPlayheadTracker();
-    TimelineState._bioScanWallStart = null;
-    TimelineState._bioScanTimelineStart = null;
-    (window as any).__onLxStepWait = null;
-    (window as any).__onLxStepWaitOwner = null;
+    TimelineState.playheadTrackers.bioScan.wallStart = null;
+    TimelineState.playheadTrackers.bioScan.timelineStart = null;
+    TimelineState.onLxStepWait = null;
+    TimelineState.onLxStepWaitOwner = null;
+    TimelineState.runTasks?.cancelAll();
+    TimelineState.runTasks = new TaskGroup();
 
+    hideStrategistPlayButton();
     clearPromptError();
     PhaseState.isProcessing = true;
     PhaseState.phase = 'loading';
     document.body.classList.add('phase-engaged');
-    document.getElementById('prompt-hint').style.opacity = '0';
-    (document.getElementById('prompt-submit') as HTMLButtonElement).disabled = true;
+    promptDom.hint.style.opacity = '0';
+    promptDom.submit.disabled = true;
 
     // Reset phase chart and Sherlock narration if resubmitting
     resetPhaseChart();
@@ -461,18 +862,21 @@ export async function handlePromptSubmit(e) {
     if (TimelineState.engine) {
         TimelineState.engine.destroy();
         TimelineState.ribbon?.destroy();
+        TimelineState.pipelineTimeline?.destroy();
         TimelineState.engine = null;
         TimelineState.ribbon = null;
+        TimelineState.pipelineTimeline = null;
         TimelineState.active = false;
     }
 
     // Initialize timeline engine
-    const svgRoot = document.getElementById('phase-chart-svg') as unknown as SVGSVGElement;
-    const engine = new TimelineEngine(svgRoot);
-    (window as any).__timelineEngine = engine;
+    const engine = new TimelineEngine(phaseChart.svg);
+    // TimelineState.engine is set below during engine init
     const ribbon = new TimelineRibbon(engine);
+    const pipelineTimeline = new PipelineTimeline();
     TimelineState.engine = engine;
     TimelineState.ribbon = ribbon;
+    TimelineState.pipelineTimeline = pipelineTimeline;
     TimelineState.active = true;
     TimelineState.interactionLocked = true;
 
@@ -480,6 +884,7 @@ export async function handlePromptSubmit(e) {
     const scanLineStartTime = buildPhase0Segments(engine);
     const scanLineWallStart = performance.now();
     ribbon.show();
+    pipelineTimeline.show();
 
     // --- First-run playhead tracking ---
     // During first-run, the engine is in recordOnly mode.
@@ -494,6 +899,8 @@ export async function handlePromptSubmit(e) {
     let _wallBase = performance.now();
     let _playheadPaused = false;
     let _playheadRafId: number | null = null;
+    let _pendingPlayGateId: string | null = null;
+    let _pendingPlayGateResolved = false;
 
     function advancePlayhead() {
         if (_playheadPaused) return;
@@ -504,10 +911,10 @@ export async function handlePromptSubmit(e) {
         function frame() {
             advancePlayhead();
             _playheadRafId = requestAnimationFrame(frame);
-            TimelineState._promptPlayheadRafId = _playheadRafId;
+            TimelineState.playheadTrackers.prompt.rafId = _playheadRafId;
         }
         _playheadRafId = requestAnimationFrame(frame);
-        TimelineState._promptPlayheadRafId = _playheadRafId;
+        TimelineState.playheadTrackers.prompt.rafId = _playheadRafId;
     }
     function stopPlayheadTracker() {
         stopPromptPlayheadTracker();
@@ -515,10 +922,10 @@ export async function handlePromptSubmit(e) {
             cancelAnimationFrame(_playheadRafId);
             _playheadRafId = null;
         }
-        TimelineState._promptPlayheadRafId = null;
-        if ((window as any).__onLxStepWaitOwner === engine) {
-            (window as any).__onLxStepWait = null;
-            (window as any).__onLxStepWaitOwner = null;
+        TimelineState.playheadTrackers.prompt.rafId = null;
+        if (TimelineState.onLxStepWaitOwner === engine) {
+            TimelineState.onLxStepWait = null;
+            TimelineState.onLxStepWaitOwner = null;
         }
     }
     /** Jump playhead to a specific timeline position (at a milestone) and reset wall base */
@@ -538,21 +945,42 @@ export async function handlePromptSubmit(e) {
         _wallBase = performance.now();
         _playheadPaused = false;
     }
-    (window as any).__onLxStepWaitOwner = engine;
-    (window as any).__onLxStepWait = (waiting: boolean) => {
+    TimelineState.onLxStepWaitOwner = engine;
+    TimelineState.onLxStepWait = (waiting: boolean) => {
         if (TimelineState.engine !== engine) return;
         if (waiting) {
             pausePlayhead(engine.getCurrentTime());
-        } else if (_playheadPaused) {
-            resumePlayhead(engine.getCurrentTime());
+        } else {
+            if (_pendingPlayGateId && !_pendingPlayGateResolved) {
+                engine.resolveGate(_pendingPlayGateId);
+                _pendingPlayGateResolved = true;
+            }
+            if (_playheadPaused) {
+                resumePlayhead(engine.getCurrentTime());
+            }
         }
     };
     startPlayheadTracker();
 
     // Log user input to debug panel
     DebugLog.clear();
+
+    // Clean up multi-day state (release viewBox lock, hide ribbon)
+    MultiDayState.lockedViewBoxHeight = null;
+    MultiDayState.maxTimelineLanes = 0;
+    MultiDayState.phase = 'idle';
+    MultiDayState.days = [];
+    MultiDayState.currentDay = 0;
+    MultiDayState.bioCorrectedBaseline = null;
+    MultiDayState.knightOutput = null;
+    MultiDayState.startWeekday = null;
+    const mdRibbon = document.getElementById('multi-day-ribbon');
+    if (mdRibbon) mdRibbon.classList.remove('visible', 'loading');
+    document.body.classList.remove('multi-day-active');
+
     DebugLog.addEntry({
-        stage: 'User Input', stageClass: 'user-input',
+        stage: 'User Input',
+        stageClass: 'user-input',
         model: AppState.selectedLLM,
         userPrompt: prompt,
     });
@@ -570,9 +998,13 @@ export async function handlePromptSubmit(e) {
     // === Fire both API calls in parallel ===
     const fastModelPromise = callFastModel(prompt);
     const mainModelPromise = callMainModelForCurves(prompt);
+    const strategistOutcomePromise: Promise<StrategistOutcome> = mainModelPromise.then(
+        result => ({ ok: true, result, settledAt: performance.now() }),
+        error => ({ ok: false, error, settledAt: performance.now() }),
+    );
+    let strategistOutcome: StrategistOutcome | null = null;
 
-    // Start scanning line
-    await sleep(400);
+    // Start scanning line immediately so loading feedback is always visible.
     startScanLine();
     PhaseState.phase = 'scanning';
 
@@ -583,16 +1015,27 @@ export async function handlePromptSubmit(e) {
         const rawEffects = fastResult.effects || [];
         if (rawEffects.length === 0) throw new Error('Fast model returned no effects.');
         // Normalize: handle both new format [{name, relevance}] and legacy ["string"]
-        wordCloudEffects = rawEffects.map(e =>
-            typeof e === 'string' ? { name: e, relevance: 80 } : e
-        );
+        wordCloudEffects = rawEffects.map(e => (typeof e === 'string' ? { name: e, relevance: 80 } : e));
+        // Extract hook sentence from Scout result
+        const hookSentence =
+            typeof fastResult.hookSentence === 'string' && fastResult.hookSentence.trim().length > 0
+                ? fastResult.hookSentence.trim()
+                : null;
+        PhaseState.hookSentence = hookSentence;
+        engine.getContext().hookSentence = hookSentence;
+        // Extract cycle filename from Scout result
+        PhaseState.cycleFilename =
+            typeof fastResult.cycleFilename === 'string' && fastResult.cycleFilename.trim().length > 0
+                ? fastResult.cycleFilename.trim().slice(0, 60)
+                : prompt.slice(0, 40).trim();
     } catch (err) {
+        hideStrategistPlayButton();
         stopScanLine();
         stopPlayheadTracker();
         TimelineState.interactionLocked = false;
         showPromptError(err instanceof Error ? err.message : String(err));
         PhaseState.isProcessing = false;
-        (document.getElementById('prompt-submit') as HTMLButtonElement).disabled = false;
+        promptDom.submit.disabled = false;
         return;
     }
 
@@ -601,63 +1044,115 @@ export async function handlePromptSubmit(e) {
     // Populate engine context with word cloud effects
     engine.getContext().wordCloudEffects = wordCloudEffects;
 
+    // Fire agent matching LLM call in parallel (resolves while curves/Lx animate)
+    AgentMatchState.phase = 'ranking';
+    const agentMatchPromise = rankCreatorAgents(prompt, wordCloudEffects).catch(err => {
+        console.warn('[AgentMatcher] ranking failed:', err);
+        return [];
+    });
+
     // Show word cloud + orbital rings (skip if too few effects)
     const cloudCx = PHASE_CHART.padL + PHASE_CHART.plotW / 2;
     const cloudCy = PHASE_CHART.padT + PHASE_CHART.plotH / 2;
     let hasCloud = false;
+    let cloudDone = true;
 
     if (wordCloudEffects.length >= 3) {
         PhaseState.phase = 'word-cloud';
-        addWordCloudSegments(engine, scanLineStartTime, wordCloudEffects);
-        const cloudPromise = renderWordCloud(wordCloudEffects);
-        startOrbitalRings(cloudCx, cloudCy);
-        await cloudPromise;
         hasCloud = true;
+        cloudDone = false;
+        // Turbo: skip word cloud + orbital rings entirely — don't render them at all
+        if (isTurboActive()) {
+            _strategistSkipRequested = true;
+            cloudDone = true;
+        }
+        addWordCloudSegments(engine, scanLineStartTime, wordCloudEffects);
+
+        if (!isTurboActive()) {
+            const cloudPromise = renderWordCloud(wordCloudEffects, PhaseState.hookSentence);
+            startOrbitalRings(cloudCx, cloudCy);
+            const cloudDonePromise = cloudPromise.then(() => {
+                cloudDone = true;
+            });
+            showStrategistPlayButtonLoading();
+
+            const firstEvent = await Promise.race([
+                cloudDonePromise.then(() => ({ type: 'cloud' as const })),
+                strategistOutcomePromise.then(outcome => ({ type: 'strategist' as const, outcome })),
+            ]);
+
+            if (firstEvent.type === 'strategist') {
+                strategistOutcome = firstEvent.outcome;
+                if (strategistOutcome.ok) {
+                    setStrategistBaselineReadyEarly();
+                }
+            }
+
+            await cloudDonePromise;
+        }
+    } else {
+        hideStrategistPlayButton();
     }
 
-    // === MAIN MODEL RETURNS: Transition to chart ===
-    let curvesResult;
-    try {
-        curvesResult = await mainModelPromise;
-    } catch (err) {
-        stopScanLine();
+    if (!strategistOutcome) {
+        strategistOutcome = await strategistOutcomePromise;
+    }
+    if (strategistOutcome.ok) {
+        setStrategistBaselineReadyEarly();
+    }
+
+    stopScanLine();
+    const scanLineDuration = Math.max(0, strategistOutcome.settledAt - scanLineWallStart);
+
+    if (!strategistOutcome.ok) {
+        const strategistError = (strategistOutcome as { ok: false; error: any }).error;
+        hideStrategistPlayButton();
         stopOrbitalRings();
         stopPlayheadTracker();
         TimelineState.interactionLocked = false;
-        document.getElementById('phase-word-cloud').innerHTML = '';
-        showPromptError(err instanceof Error ? err.message : String(err));
+        phaseChart.groups['phase-word-cloud'].replaceChildren();
+        showPromptError(strategistError instanceof Error ? strategistError.message : String(strategistError));
         PhaseState.isProcessing = false;
-        (document.getElementById('prompt-submit') as HTMLButtonElement).disabled = false;
+        promptDom.submit.disabled = false;
         return;
     }
+
+    const curvesResult = strategistOutcome.result;
 
     // Robust extraction: handle array, wrapped object, or single-curve object responses.
     const curvesData = extractCurvesData(curvesResult);
 
     if (curvesData.length === 0) {
+        hideStrategistPlayButton();
         stopScanLine();
         stopOrbitalRings();
         stopPlayheadTracker();
         TimelineState.interactionLocked = false;
-        document.getElementById('phase-word-cloud').innerHTML = '';
-        const keys = Array.isArray(curvesResult) ? `[array of ${curvesResult.length}]` : Object.keys(curvesResult || {}).join(', ');
-        console.error('[CortexLoop] Curve result had no usable curves. Parsed keys:', keys, 'Full result:', curvesResult);
-        showPromptError(`Main model returned no usable curve objects. Parsed keys: ${keys || '(empty)'}. Expected curve fields include effect, baseline[], and desired[]. Check debug panel for raw response.`);
+        phaseChart.groups['phase-word-cloud'].replaceChildren();
+        const keys = Array.isArray(curvesResult)
+            ? `[array of ${curvesResult.length}]`
+            : Object.keys(curvesResult || {}).join(', ');
+        console.error(
+            '[CortexLoop] Curve result had no usable curves. Parsed keys:',
+            keys,
+            'Full result:',
+            curvesResult,
+        );
+        showPromptError(
+            `Main model returned no usable curve objects. Parsed keys: ${keys || '(empty)'}. Expected curve fields include effect, baseline[], and desired[]. Check debug panel for raw response.`,
+        );
         PhaseState.isProcessing = false;
-        (document.getElementById('prompt-submit') as HTMLButtonElement).disabled = false;
+        promptDom.submit.disabled = false;
         return;
     }
 
-    // Stop scanning line
-    stopScanLine();
-
     // Record scan line actual duration and add post-curve segments to timeline
-    const scanLineDuration = performance.now() - scanLineWallStart;
     engine.getContext().curvesData = curvesData;
     let timelineCursor = addPostCurveSegments(engine, scanLineStartTime, scanLineDuration, hasCloud);
 
     // Milestone: scan line resolved, post-curve animations start
-    setPlayheadMilestone(scanLineStartTime + scanLineDuration);
+    // Preserve monotonic playhead time if cloud animation continued after strategist settled.
+    setPlayheadMilestone(Math.max(engine.getCurrentTime(), scanLineStartTime + scanLineDuration));
 
     // Dismiss word cloud + morph rings into baseline curves (in parallel)
     const mainEffects = curvesData.map(c => c.effect);
@@ -669,16 +1164,21 @@ export async function handlePromptSubmit(e) {
         const effects = mainEffects.slice(0, AppState.maxEffects);
         PhaseState.effects = effects;
         buildPhaseYAxes(effects, mainColors, curvesData);
-        document.getElementById('phase-y-axis-left').classList.add('revealed');
+        phaseChart.groups['phase-y-axis-left'].classList.add('revealed');
         if (effects.length > 1) {
-            document.getElementById('phase-y-axis-right').classList.add('revealed');
+            phaseChart.groups['phase-y-axis-right'].classList.add('revealed');
         }
         buildPhaseGrid();
 
-        await Promise.all([
-            dismissWordCloud(mainEffects, mainColors),
-            morphRingsToCurves(curvesData),
-        ]);
+        if (_strategistSkipRequested) {
+            stopWordCloudFloat();
+            if (!isTurboActive()) await fadeOutHookSentenceFast(240);
+            stopOrbitalRings();
+            phaseChart.groups['phase-word-cloud'].replaceChildren();
+        } else {
+            await Promise.all([dismissWordCloud(mainEffects, mainColors), morphRingsToCurves(curvesData)]);
+        }
+        _strategistSkipRequested = false;
 
         // Render real baseline DOM elements BEFORE removing rings — no flicker gap
         renderBaselineCurvesInstant(curvesData);
@@ -691,22 +1191,26 @@ export async function handlePromptSubmit(e) {
             setOrbitalRingsState(null);
         }
         buildPhaseXAxis();
-        document.getElementById('phase-x-axis').classList.add('revealed');
+        phaseChart.groups['phase-x-axis'].classList.add('revealed');
     } else {
         // No cloud — standard flow
         const effects = mainEffects.slice(0, AppState.maxEffects);
         PhaseState.effects = effects;
         buildPhaseYAxes(effects, mainColors, curvesData);
-        document.getElementById('phase-y-axis-left').classList.add('revealed');
+        phaseChart.groups['phase-y-axis-left'].classList.add('revealed');
         if (effects.length > 1) {
-            document.getElementById('phase-y-axis-right').classList.add('revealed');
+            phaseChart.groups['phase-y-axis-right'].classList.add('revealed');
         }
         buildPhaseGrid();
-        await sleep(300);
-        await renderBaselineCurves(curvesData);
+        if (isTurboActive()) {
+            renderBaselineCurvesInstant(curvesData);
+        } else {
+            await sleep(300);
+            await renderBaselineCurves(curvesData);
+        }
         renderPhaseLegend(curvesData, 'baseline');
         buildPhaseXAxis();
-        document.getElementById('phase-x-axis').classList.add('revealed');
+        phaseChart.groups['phase-x-axis'].classList.add('revealed');
     }
 
     PhaseState.curvesData = curvesData;
@@ -721,30 +1225,59 @@ export async function handlePromptSubmit(e) {
     // Milestone: Phase 0 complete, pause playhead at optimize gate
     pausePlayhead(optimizeGateTime);
 
-    // === SHOW OPTIMIZE BUTTON — wait for user click ===
+    // === TWO-STEP GATE: Baseline → Optimize → Optimizing ===
     // Fire intervention model in background for head start
-    PhaseState.interventionPromise = callInterventionModel(prompt, curvesData).catch(() => null);
-
-    const optimizeBtn = document.getElementById('phase-optimize-btn');
-    optimizeBtn.classList.remove('hidden');
-    optimizeBtn.style.opacity = '0';
-    optimizeBtn.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 400, fill: 'forwards' });
+    PhaseState.interventionPromise = callInterventionModel(prompt, curvesData).catch((err: any) => {
+        reportRuntimeBug({ stage: 'Chess Player', provider: '', message: err?.message || String(err) });
+        return null;
+    });
+    const optimizeBtn = document.getElementById('phase-optimize-btn') as HTMLButtonElement;
+    if (optimizeBtn) optimizeBtn.classList.add('hidden');
 
     PhaseState.isProcessing = false;
-    (document.getElementById('prompt-submit') as HTMLButtonElement).disabled = false;
+    promptDom.submit.disabled = false;
 
-    // Wait for Optimize button click
+    // === FIRST CLICK: Baseline flows right→left and right updates to Optimize ===
     await new Promise<void>(resolve => {
-        function onOptimize() {
-            optimizeBtn.removeEventListener('click', onOptimize);
+        _strategistPlayHandler = async () => {
+            if (_strategistVcrState !== 'analysis-baseline' && _strategistVcrState !== 'baseline-optimize') return;
+            _strategistQueuedFirstClick = false;
+            _strategistPlayHandler = null;
+            if (_strategistPlayBtn) _strategistPlayBtn.disabled = true;
+            await animateStrategistBaselineToOptimizeReady();
+            if (_strategistPlayBtn) _strategistPlayBtn.disabled = false;
+            _strategistVcrState = 'baseline-optimize';
             resolve();
+        };
+        if (_strategistQueuedFirstClick || isTurboActive()) {
+            _strategistQueuedFirstClick = false;
+            queueMicrotask(() => _strategistPlayHandler?.());
         }
-        optimizeBtn.addEventListener('click', onOptimize);
     });
 
-    optimizeBtn.classList.add('hidden');
+    // === SECOND CLICK: Baseline fades, Optimize flows left and becomes Optimizing ===
+    await new Promise<void>(resolve => {
+        _strategistPlayHandler = async () => {
+            if (_strategistVcrState !== 'baseline-optimize') return;
+            _strategistPlayHandler = null;
+            if (_strategistPlayBtn) _strategistPlayBtn.disabled = true;
+            await animateStrategistOptimizingTransit();
+            // Put button back to loading state
+            if (_strategistPlayBtn) {
+                _strategistPlayBtn.classList.add('loading');
+                _strategistPlayBtn.disabled = false;
+            }
+            _strategistPanel?.classList.add(STRATEGIST_VCR_LOADING_CLASS);
+            _strategistVcrState = 'optimizing';
+            resolve();
+        };
+        // Turbo: auto-fire second click
+        if (isTurboActive()) {
+            queueMicrotask(() => _strategistPlayHandler?.());
+        }
+    });
     PhaseState.isProcessing = true;
-    (document.getElementById('prompt-submit') as HTMLButtonElement).disabled = true;
+    promptDom.submit.disabled = true;
 
     // Resolve the optimize gate on the timeline and resume playhead
     engine.resolveGate('optimize-gate');
@@ -762,8 +1295,7 @@ export async function handlePromptSubmit(e) {
     PhaseState.viewingPhase = 1;
 
     // === SEQUENTIAL SUBSTANCE LAYERING ===
-    // Show rotating orange waiting button while strategist (intervention) + Sherlock process
-    showInterventionPlayButtonLoading();
+    // Keep strategist VCR in "Optimizing…" state while intervention/snapshots are prepared.
     // Start timeline scan line while waiting for intervention model
     startTimelineScanLine(3);
     const tlScanStartTime = timelineCursor;
@@ -785,11 +1317,12 @@ export async function handlePromptSubmit(e) {
 
     if (!interventionData) {
         console.error('[Lx] No intervention data — model call failed or no API key.');
+        showPromptError('Chess Player failed across all providers. Check API keys and debug panel.');
         hideInterventionPlayButton();
         stopPlayheadTracker();
         TimelineState.interactionLocked = false;
         PhaseState.isProcessing = false;
-        (document.getElementById('prompt-submit') as HTMLButtonElement).disabled = false;
+        promptDom.submit.disabled = false;
         return;
     }
     PhaseState.interventionResult = interventionData;
@@ -800,12 +1333,13 @@ export async function handlePromptSubmit(e) {
         hideInterventionPlayButton();
         stopPlayheadTracker();
         TimelineState.interactionLocked = false;
-        const keys = interventionData && typeof interventionData === 'object'
-            ? Object.keys(interventionData).join(', ')
-            : '';
-        showPromptError(`Intervention model returned no usable interventions. Parsed keys: ${keys || '(empty)'}. Check debug panel for raw response.`);
+        const keys =
+            interventionData && typeof interventionData === 'object' ? Object.keys(interventionData).join(', ') : '';
+        showPromptError(
+            `Intervention model returned no usable interventions. Parsed keys: ${keys || '(empty)'}. Check debug panel for raw response.`,
+        );
         PhaseState.isProcessing = false;
-        (document.getElementById('prompt-submit') as HTMLButtonElement).disabled = false;
+        promptDom.submit.disabled = false;
         return;
     }
 
@@ -814,10 +1348,6 @@ export async function handlePromptSubmit(e) {
     console.log('[Sherlock] enabled:', SherlockState.enabled, '| interventions:', interventions.length);
     if (SherlockState.enabled) {
         SherlockState.phase = 'loading';
-
-        // --- ADDED: Show waiting animation for Sherlock ---
-        showNarrationPanel();
-        showNarrationLoading();
 
         sherlockPromise = callSherlockModel(prompt, interventions, curvesData).catch(err => {
             console.error('[Sherlock] Narration FAILED:', err);
@@ -841,22 +1371,36 @@ export async function handlePromptSubmit(e) {
     // Resolve Sherlock narration before building Phase 2 segments
     // (segments check context.sherlockNarration at build time)
     const rawNarration = sherlockPromise ? await sherlockPromise : null;
-    const narration = normalizeSherlockNarration(rawNarration, interventions, SherlockState.enabled);
-    if (SherlockState.enabled && rawNarration && !narration) {
-        console.warn('[Sherlock] Narration payload had no usable beats; cards disabled for this run.');
-    } else if (SherlockState.enabled && !rawNarration && narration) {
-        console.warn('[Sherlock] Narration model unavailable; using fallback cards from interventions.');
+    const normalizedNarration = normalizeSherlockNarration(rawNarration, interventions, SherlockState.enabled);
+    const narration = normalizedNarration.narration;
+    if (SherlockState.enabled) {
+        if (normalizedNarration.status === 'full-fallback' && rawNarration) {
+            console.warn('[Sherlock] Narration payload had no usable beats; using fallback cards from interventions.');
+        } else if (normalizedNarration.status === 'full-fallback' && !rawNarration && narration) {
+            console.warn('[Sherlock] Narration model unavailable; using fallback cards from interventions.');
+        } else if (!narration) {
+            console.warn('[Sherlock] Narration unavailable for this run.');
+        }
     }
     SherlockState.narrationResult = narration;
     SherlockState.phase = narration ? 'ready' : 'idle';
     engine.getContext().sherlockNarration = narration;
-    console.log('[Sherlock] resolved narration:', narration ? `intro=${!!narration.intro}, beats=${narration.beats?.length}, outro=${!!narration.outro}` : 'NULL');
+    console.log(
+        '[Sherlock] resolved narration:',
+        narration
+            ? `status=${normalizedNarration.status}, intro=${!!narration.intro}, beats=${narration.beats?.length}, outro=${!!narration.outro}`
+            : 'NULL',
+    );
 
     // Build Phase 2 segments (play gate + per-substance sweeps + cinematic playhead + sherlock narration)
     const playGateTime = tlScanStartTime + tlScanDuration; // gate position
     timelineCursor = buildPhase2Segments(
-        engine, tlScanStartTime, tlScanDuration,
-        interventions, incrementalSnapshots, curvesData,
+        engine,
+        tlScanStartTime,
+        tlScanDuration,
+        interventions,
+        incrementalSnapshots,
+        curvesData,
     );
     TimelineState.cursor = timelineCursor;
 
@@ -868,28 +1412,21 @@ export async function handlePromptSubmit(e) {
     // Keep Sherlock hidden at the Play gate; first card appears only after Play.
     hideNarrationPanel();
 
-    // Show step controls (play/next) alongside yellow play button
-    showLxStepControls(incrementalSnapshots.length);
+    // Handoff from strategist to canonical VCR only when first substance is ready.
+    await animateStrategistOptimizingCollapseOut();
     showInterventionPlayButton();
-    PhaseState.isProcessing = false;
-    (document.getElementById('prompt-submit') as HTMLButtonElement).disabled = false;
-
-    await new Promise<void>(resolve => {
-        setInterventionPlayClickHandler(() => {
-            triggerLxPlay();
-            engine.resolveGate('play-gate');
-            resumePlayhead(playGateTime);
-            setInterventionPlayClickHandler(null);
-            resolve();
-        });
-    });
+    showLxStepControls(incrementalSnapshots.length);
+    _pendingPlayGateId = 'play-gate';
+    _pendingPlayGateResolved = false;
 
     PhaseState.isProcessing = true;
-    (document.getElementById('prompt-submit') as HTMLButtonElement).disabled = true;
+    promptDom.submit.disabled = true;
     PhaseState.phase = 'lx-sequential';
 
     // Animate sequential substance reveal (narration already resolved above)
     await animateSequentialLxReveal(incrementalSnapshots, interventions, curvesData, narration);
+    _pendingPlayGateId = null;
+    _pendingPlayGateResolved = false;
 
     PhaseState.phase = 'lx-rendered';
     PhaseState.maxPhaseReached = 2;
@@ -898,9 +1435,18 @@ export async function handlePromptSubmit(e) {
     // Milestone: Phase 2 Lx animation complete, pause at end
     pausePlayhead(timelineCursor);
 
-    // Add biometric button to VCR panel when stream finishes
-    await sleep(2500);
+    // Morph to biometric mode immediately after destination handoff completes.
     showBiometricOnVcrPanel();
+
+    // Show matched creator agent cards alongside biometric mode
+    agentMatchPromise.then(results => {
+        if (results.length > 0) {
+            AgentMatchState.matchResults = results;
+            AgentMatchState.matchedAgents = results.map(r => getAgentById(r.agentId)).filter(Boolean);
+            AgentMatchState.phase = 'matched';
+            showAgentMatchPanel();
+        }
+    });
 
     // Stop the first-run playhead tracker (Phases 3/4 have their own milestone tracking via biometric callbacks)
     stopPlayheadTracker();
@@ -908,13 +1454,26 @@ export async function handlePromptSubmit(e) {
     TimelineState.interactionLocked = false;
 
     PhaseState.isProcessing = false;
-    (document.getElementById('prompt-submit') as HTMLButtonElement).disabled = false;
+    promptDom.submit.disabled = false;
+
+    // Show investor demo buttons after Phase 2 completes
+    showDemoButtons();
+}
+
+function showDemoButtons(): void {
+    const rxBtn = document.getElementById('demo-rx-btn');
+    const sculptorBtn = document.getElementById('curve-sculptor-btn');
+    const wallBtn = document.getElementById('substance-wall-btn');
+    if (rxBtn) rxBtn.classList.remove('hidden');
+    if (sculptorBtn) sculptorBtn.classList.remove('hidden');
+    if (wallBtn) wallBtn.classList.remove('hidden');
 }
 
 export function initDebugPanel() {
-    const debugBtn = document.getElementById('debug-btn');
-    const debugPanel = document.getElementById('debug-panel');
-    const debugClose = document.getElementById('debug-close');
+    const appDom = getAppDom();
+    const debugBtn = appDom.debugButton;
+    const debugPanel = appDom.debugPanel;
+    const debugClose = appDom.debugClose;
 
     debugBtn.addEventListener('click', () => {
         const isOpen = debugPanel.classList.contains('open');
@@ -922,8 +1481,8 @@ export function initDebugPanel() {
         debugBtn.classList.toggle('active');
 
         if (!isOpen) {
-            document.getElementById('settings-popover').classList.add('hidden');
-            document.getElementById('settings-btn').classList.remove('active');
+            appDom.settingsPopover.classList.add('hidden');
+            appDom.settingsButton.classList.remove('active');
         }
     });
 
@@ -939,87 +1498,69 @@ export function refreshPipelineSelects() {
     DebugLog.refreshSelects();
 }
 
+declare const __APP_VERSION__: string;
+declare const __GIT_HASH__: string;
+declare const __GIT_BRANCH__: string;
+declare const __BUILD_TIME__: string;
+
+function initVersionFooter() {
+    const el = document.getElementById('settings-version');
+    if (!el) return;
+
+    const version = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0';
+    const hash = typeof __GIT_HASH__ !== 'undefined' ? __GIT_HASH__ : '?';
+    const branch = typeof __GIT_BRANCH__ !== 'undefined' ? __GIT_BRANCH__ : '?';
+    const buildTime = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
+
+    let timeStr = '';
+    if (buildTime) {
+        const d = new Date(buildTime);
+        timeStr =
+            d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
+            ' ' +
+            d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    }
+
+    el.innerHTML =
+        `v${version}` + ` <span>·</span> ${hash}` + ` <span>·</span> ${branch}` + (timeStr ? `<br>${timeStr}` : '');
+}
+
 export function initSettings() {
-    const btn = document.getElementById('settings-btn');
-    const popover = document.getElementById('settings-popover');
-    const keyInput = document.getElementById('api-key-input') as HTMLInputElement;
-    const saveBtn = document.getElementById('api-key-save');
-    const status = document.getElementById('api-key-status');
-    const llmSelect = document.getElementById('llm-select') as HTMLSelectElement;
-    const providerLabel = document.getElementById('key-provider-label');
-
-    const PLACEHOLDERS = {
-        anthropic: 'sk-ant-...',
-        openai: 'sk-proj-...',
-        grok: 'xai-...',
-        gemini: 'AIza...',
-    };
-
-    const PROVIDER_NAMES = {
-        anthropic: 'Anthropic',
-        openai: 'OpenAI',
-        grok: 'xAI',
-        gemini: 'Google',
-    };
-
-    // Init LLM select
-    llmSelect.value = AppState.selectedLLM;
+    const appDom = getAppDom();
+    const btn = appDom.settingsButton;
+    const popover = appDom.settingsPopover;
 
     // Init effects select
     const effectsSelect = document.getElementById('effects-select') as HTMLSelectElement;
-    effectsSelect.value = String(AppState.maxEffects);
+    const normalizeMaxEffects = (value: number) => (value === 1 ? 1 : 2);
+    const normalizedMaxEffects = normalizeMaxEffects(AppState.maxEffects);
+    if (normalizedMaxEffects !== AppState.maxEffects) {
+        AppState.maxEffects = normalizedMaxEffects;
+        settingsStore.setString(STORAGE_KEYS.maxEffects, String(normalizedMaxEffects));
+    }
+    effectsSelect.value = String(normalizedMaxEffects);
     effectsSelect.addEventListener('change', () => {
-        AppState.maxEffects = parseInt(effectsSelect.value);
-        localStorage.setItem('cortex_max_effects', effectsSelect.value);
+        const next = normalizeMaxEffects(parseInt(effectsSelect.value, 10));
+        AppState.maxEffects = next;
+        settingsStore.setString(STORAGE_KEYS.maxEffects, String(next));
     });
 
-    // Sherlock narration toggle
-    const sherlockToggle = document.getElementById('sherlock-toggle') as HTMLInputElement;
-    if (sherlockToggle) {
-        sherlockToggle.checked = SherlockState.enabled;
-        sherlockToggle.addEventListener('change', () => {
-            SherlockState.enabled = sherlockToggle.checked;
-            localStorage.setItem('cortex_sherlock_enabled', JSON.stringify(sherlockToggle.checked));
+    // Init start-at-phase select (turbo skip)
+    const startPhaseSelect = document.getElementById('start-phase-select') as HTMLSelectElement;
+    if (startPhaseSelect) {
+        startPhaseSelect.value = String(AppState.turboTargetPhase);
+        startPhaseSelect.addEventListener('change', () => {
+            const val = parseInt(startPhaseSelect.value, 10) || 0;
+            AppState.turboTargetPhase = val;
+            settingsStore.setString(STORAGE_KEYS.startAtPhase, String(val));
         });
     }
 
-    updateKeyUI();
+    initDebugBundleExport();
+    void initCycleUi();
+    initVersionFooter();
 
-    function updateKeyUI() {
-        const llm = AppState.selectedLLM;
-        keyInput.placeholder = PLACEHOLDERS[llm] || '';
-        providerLabel.textContent = `(${PROVIDER_NAMES[llm] || llm})`;
-        keyInput.value = AppState.apiKeys[llm] || '';
-        const hasKey = !!AppState.apiKeys[llm];
-        status.textContent = hasKey ? 'Key configured' : 'No key — add one to generate';
-        status.className = 'api-key-status ' + (hasKey ? 'success' : 'error');
-    }
-
-    llmSelect.addEventListener('change', () => {
-        AppState.selectedLLM = llmSelect.value;
-        localStorage.setItem('cortex_llm', llmSelect.value);
-        syncStageModelsForProvider(llmSelect.value);
-        updateKeyUI();
-        DebugLog.refreshSelects();
-    });
-
-    saveBtn.addEventListener('click', () => {
-        const llm = AppState.selectedLLM;
-        const key = keyInput.value.trim();
-        if (key) {
-            AppState.apiKeys[llm] = key;
-            localStorage.setItem(`cortex_key_${llm}`, key);
-            status.textContent = 'Key saved';
-            status.className = 'api-key-status success';
-        } else {
-            AppState.apiKeys[llm] = '';
-            localStorage.removeItem(`cortex_key_${llm}`);
-            status.textContent = 'Key removed';
-            status.className = 'api-key-status error';
-        }
-    });
-
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', e => {
         e.stopPropagation();
         const isOpen = !popover.classList.contains('hidden');
         if (isOpen) {
@@ -1028,11 +1569,10 @@ export function initSettings() {
         } else {
             popover.classList.remove('hidden');
             btn.classList.add('active');
-            updateKeyUI();
         }
     });
 
-    document.addEventListener('click', (e) => {
+    document.addEventListener('click', e => {
         if (!popover.contains(e.target as Node) && e.target !== btn && !btn.contains(e.target as Node)) {
             popover.classList.add('hidden');
             btn.classList.remove('active');
@@ -1060,15 +1600,13 @@ function applyRxModeVisual(btn: HTMLButtonElement, mode: string) {
 export function initRxMode() {
     const btn = document.getElementById('rx-mode-btn') as HTMLButtonElement;
     const container = btn?.closest('.rx-mode-container') as HTMLElement;
-    const input = document.getElementById('prompt-input') as HTMLInputElement;
+    const input = getAppDom().prompt.input;
     if (!btn || !container || !input) return;
 
     applyRxModeVisual(btn, AppState.rxMode);
 
     btn.addEventListener('click', () => {
-        const next = AppState.rxMode === 'off' ? 'rx'
-                   : AppState.rxMode === 'rx' ? 'rx-only'
-                   : 'off';
+        const next = AppState.rxMode === 'off' ? 'rx' : AppState.rxMode === 'rx' ? 'rx-only' : 'off';
         AppState.rxMode = next;
         applyRxModeVisual(btn, next);
     });
@@ -1082,16 +1620,87 @@ export function initRxMode() {
 }
 
 // ============================================
+// 20b. INVESTOR DEMO BUTTONS (Rx toggle, Curve Sculptor, Substance Wall)
+// ============================================
+
+function initDemoButtons(): void {
+    const rxBtn = document.getElementById('demo-rx-btn');
+    const sculptorBtn = document.getElementById('curve-sculptor-btn');
+    const wallBtn = document.getElementById('substance-wall-btn');
+
+    // Demo Rx toggle — cycles AppState.rxMode and notifies active features
+    if (rxBtn) {
+        rxBtn.addEventListener('click', () => {
+            const next = AppState.rxMode === 'off' ? 'rx' : 'off';
+            AppState.rxMode = next;
+            rxBtn.classList.toggle('active', next === 'rx');
+
+            // Notify active features of the Rx change
+            if (isSculptorActive()) refreshSculptorRxFilter();
+            if (isWallActive()) refreshWallRxFilter();
+        });
+    }
+
+    // Curve sculptor toggle
+    if (sculptorBtn) {
+        sculptorBtn.addEventListener('click', () => {
+            if (isSculptorActive()) {
+                deactivateCurveSculptor();
+                sculptorBtn.classList.remove('active');
+            } else if (PhaseState.viewingPhase >= 2 && PhaseState.lxCurves && PhaseState.curvesData) {
+                // Deactivate wall first (mutually exclusive)
+                if (isWallActive()) {
+                    deactivateSubstanceWall();
+                    wallBtn?.classList.remove('active');
+                }
+                activateCurveSculptor(
+                    PhaseState.lxCurves,
+                    PhaseState.curvesData,
+                    PhaseState.interventionResult?.interventions || [],
+                );
+                sculptorBtn.classList.add('active');
+            }
+        });
+    }
+
+    // Substance wall toggle (3-state: off → flat wall → 3D depth → off)
+    if (wallBtn) {
+        wallBtn.addEventListener('click', () => {
+            const phase = getWallPhase();
+            if (phase === 0) {
+                // Activate flat wall
+                if (PhaseState.viewingPhase >= 2 && PhaseState.interventionResult) {
+                    if (isSculptorActive()) {
+                        deactivateCurveSculptor();
+                        sculptorBtn?.classList.remove('active');
+                    }
+                    activateSubstanceWall(PhaseState.interventionResult?.interventions || []);
+                    wallBtn.classList.add('active');
+                }
+            } else if (phase === 1) {
+                // Expand to 3D depth perspective
+                expandWallDepth();
+            } else {
+                // Phase 2 → deactivate everything
+                deactivateSubstanceWall();
+                wallBtn.classList.remove('active');
+            }
+        });
+    }
+}
+
+// ============================================
 // 21. INITIALIZATION
 // ============================================
 
 export function refreshChartTheme() {
+    const { phaseChart } = getAppDom();
     const t = chartTheme();
     // Update scan-line gradient stops for current theme
     const grad = document.getElementById('scan-line-grad');
     if (grad) {
         const stops = grad.querySelectorAll('stop');
-        const light = document.body.classList.contains('light-mode');
+        const light = isLightMode();
         const base = light ? '80,100,180' : '160,160,255';
         if (stops.length >= 3) {
             stops[0].setAttribute('stop-color', `rgba(${base},0)`);
@@ -1100,7 +1709,7 @@ export function refreshChartTheme() {
         }
     }
     // Re-render grid and axes if chart is populated
-    const gridGroup = document.getElementById('phase-grid');
+    const gridGroup = phaseChart.groups['phase-grid'];
     if (gridGroup && gridGroup.children.length > 0) {
         buildPhaseGrid();
         buildPhaseXAxis();
@@ -1123,17 +1732,17 @@ export function refreshChartTheme() {
 }
 
 export function initThemeToggle() {
-    const saved = localStorage.getItem('cortex_theme');
+    const saved = settingsStore.getString(STORAGE_KEYS.theme);
     if (saved === 'light') {
         document.body.classList.add('light-mode');
     }
     refreshChartTheme();
-    const btn = document.getElementById('theme-toggle-btn');
+    const btn = getAppDom().themeToggle;
     if (btn) {
         btn.addEventListener('click', () => {
             document.body.classList.toggle('light-mode');
-            const isLight = document.body.classList.contains('light-mode');
-            localStorage.setItem('cortex_theme', isLight ? 'light' : 'dark');
+            const isLight = isLightMode();
+            settingsStore.setString(STORAGE_KEYS.theme, isLight ? 'light' : 'dark');
             refreshChartTheme();
             // Swap biometric device chip icons for the new theme
             document.querySelectorAll('.bio-device-chip-icon[data-src-dark]').forEach((img: any) => {
@@ -1143,37 +1752,61 @@ export function initThemeToggle() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    const pendingPrompt = consumePendingPromptAfterHardReset();
+document.addEventListener('DOMContentLoaded', async () => {
+    resetPhaseChart();
+
+    // Check sessionStorage first (set during explicit cycle-load reload),
+    // then fall back to persistent loaded-cycle prompt in localStorage
+    // (so the cycle auto-runs on every refresh / new tab until unloaded).
+    let pendingPrompt = consumePendingPromptAfterHardReset();
+    if (!pendingPrompt) {
+        const loadedId = getLoadedCycleId();
+        if (loadedId) {
+            const saved = getLoadedCyclePrompt();
+            if (saved) {
+                pendingPrompt = { prompt: saved.prompt, rxMode: saved.rxMode as any, timestamp: Date.now() };
+            }
+        }
+    }
+
     if (pendingPrompt?.rxMode === 'off' || pendingPrompt?.rxMode === 'rx' || pendingPrompt?.rxMode === 'rx-only') {
         AppState.rxMode = pendingPrompt.rxMode;
     }
 
-    // Defer cartridge initialization — not visible in phase chart flow
-    // buildCartridgeSVG();
-    // initTooltip();
-
     initThemeToggle();
+    initRuntimeErrorBanner();
+    clearRuntimeBug();
+    const repairedCacheStages = reconcileEnabledCacheDependencies();
+    if (repairedCacheStages.length > 0) {
+        reportRuntimeCacheWarning({
+            title: 'Cache chain repaired',
+            body: 'Saved cache toggles were out of dependency order and were corrected before this run.',
+            detail: `Disabled: ${describeStageClasses(repairedCacheStages)}.`,
+        });
+    }
     initSettings();
     initRxMode();
     initDebugPanel();
-    document.getElementById('prompt-form').addEventListener('submit', handlePromptSubmit);
-    (document.getElementById('prompt-input') as HTMLElement).focus();
+    initAgentDesigner();
+    initAgentBrowser();
+    initDemoButtons();
+    initAnalogyOverlay();
+    const appDom = getAppDom();
 
-    document.getElementById('hint-example')?.addEventListener('click', (e) => {
+    appDom.prompt.form.addEventListener('submit', handlePromptSubmit);
+    appDom.prompt.input.focus();
+
+    appDom.prompt.hintExample?.addEventListener('click', e => {
         e.preventDefault();
-        const input = document.getElementById('prompt-input') as HTMLInputElement;
-        input.value = '4 hours of deep focus, no sleep impact';
-        document.getElementById('prompt-form').dispatchEvent(new Event('submit', { cancelable: true }));
+        appDom.prompt.input.value = '4 hours of deep focus, no sleep impact';
+        appDom.prompt.form.dispatchEvent(new Event('submit', { cancelable: true }));
     });
 
     if (pendingPrompt?.prompt) {
-        const input = document.getElementById('prompt-input') as HTMLInputElement | null;
-        const form = document.getElementById('prompt-form') as HTMLFormElement | null;
-        if (input && form) {
-            input.value = pendingPrompt.prompt;
+        if (appDom.prompt.input && appDom.prompt.form) {
+            appDom.prompt.input.value = pendingPrompt.prompt;
             requestAnimationFrame(() => {
-                form.dispatchEvent(new Event('submit', { cancelable: true }));
+                appDom.prompt.form.dispatchEvent(new Event('submit', { cancelable: true }));
             });
         }
     }

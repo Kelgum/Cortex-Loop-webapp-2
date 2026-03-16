@@ -94,8 +94,14 @@ export function createYAxesGridSegment(startTime: number): AnimationSegment {
             const yRight = document.getElementById('phase-y-axis-right');
             const grid = document.getElementById('phase-grid');
             const tooltipOverlay = document.getElementById('phase-tooltip-overlay');
-            if (yLeft) { yLeft.classList.remove('revealed'); yLeft.innerHTML = ''; }
-            if (yRight) { yRight.classList.remove('revealed'); yRight.innerHTML = ''; }
+            if (yLeft) {
+                yLeft.classList.remove('revealed');
+                yLeft.innerHTML = '';
+            }
+            if (yRight) {
+                yRight.classList.remove('revealed');
+                yRight.innerHTML = '';
+            }
             if (grid) grid.innerHTML = '';
             if (tooltipOverlay) tooltipOverlay.innerHTML = '';
         },

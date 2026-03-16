@@ -1,0 +1,274 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - button "Settings" [ref=e4] [cursor=pointer]:
+      - img [ref=e5]
+    - button "LLM Debug Panel" [ref=e8] [cursor=pointer]:
+      - img [ref=e9]
+    - button "Toggle light/dark mode" [ref=e19] [cursor=pointer]:
+      - img [ref=e20]
+  - generic [ref=e22]:
+    - button "Agent Designer" [ref=e23] [cursor=pointer]:
+      - img [ref=e24]
+    - button "Agent Creators" [ref=e26] [cursor=pointer]:
+      - img [ref=e27]
+  - generic [ref=e30]:
+    - generic [ref=e31]:
+      - generic [ref=e32]:
+        - img [ref=e33]
+        - heading "Agent Pipeline" [level=2] [ref=e43]
+      - button "Close" [ref=e44] [cursor=pointer]:
+        - img [ref=e45]
+    - generic [ref=e48]:
+      - generic [ref=e50]:
+        - generic [ref=e51]: Scout
+        - combobox [ref=e52] [cursor=pointer]:
+          - option "Haiku 4.5" [selected]
+          - option "Sonnet 4.6"
+          - option "Opus 4.6"
+        - combobox [ref=e53] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e55]: Ready
+        - button "Toggle" [ref=e57] [cursor=pointer]:
+          - img [ref=e58]
+      - generic [ref=e61]:
+        - generic [ref=e62]: Strategist
+        - combobox [ref=e63] [cursor=pointer]:
+          - option "Haiku 4.5"
+          - option "Sonnet 4.6"
+          - option "Opus 4.6" [selected]
+        - combobox [ref=e64] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e66]: Ready
+        - button "Toggle" [ref=e68] [cursor=pointer]:
+          - img [ref=e69]
+      - generic [ref=e72]:
+        - generic [ref=e73]: Chess Player
+        - combobox [ref=e74] [cursor=pointer]:
+          - option "Haiku 4.5"
+          - option "Sonnet 4.6"
+          - option "Opus 4.6" [selected]
+        - combobox [ref=e75] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e77]: Ready
+        - button "Toggle" [ref=e79] [cursor=pointer]:
+          - img [ref=e80]
+      - generic [ref=e83]:
+        - generic [ref=e84]: Sherlock
+        - combobox [ref=e85] [cursor=pointer]:
+          - option "Haiku 4.5" [selected]
+          - option "Sonnet 4.6"
+          - option "Opus 4.6"
+        - combobox [ref=e86] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e88]: Ready
+        - button "Toggle" [ref=e90] [cursor=pointer]:
+          - img [ref=e91]
+      - generic [ref=e94]:
+        - generic [ref=e95]: Spotter (Device)
+        - combobox [ref=e96] [cursor=pointer]:
+          - option "Haiku 4.5" [selected]
+          - option "Sonnet 4.6"
+          - option "Opus 4.6"
+        - combobox [ref=e97] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e99]: Ready
+        - button "Toggle" [ref=e101] [cursor=pointer]:
+          - img [ref=e102]
+      - generic [ref=e105]:
+        - generic [ref=e106]: Spotter (Profile)
+        - combobox [ref=e107] [cursor=pointer]:
+          - option "Haiku 4.5" [selected]
+          - option "Sonnet 4.6"
+          - option "Opus 4.6"
+        - combobox [ref=e108] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e110]: Ready
+        - button "Toggle" [ref=e112] [cursor=pointer]:
+          - img [ref=e113]
+      - generic [ref=e116]:
+        - generic [ref=e117]: Spotter (Channel)
+        - combobox [ref=e118] [cursor=pointer]:
+          - option "Haiku 4.5" [selected]
+          - option "Sonnet 4.6"
+          - option "Opus 4.6"
+        - combobox [ref=e119] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e121]: Ready
+        - button "Toggle" [ref=e123] [cursor=pointer]:
+          - img [ref=e124]
+      - generic [ref=e127]:
+        - generic [ref=e128]: Spotter (Sim)
+        - combobox [ref=e129] [cursor=pointer]:
+          - option "Haiku 4.5" [selected]
+          - option "Sonnet 4.6"
+          - option "Opus 4.6"
+        - combobox [ref=e130] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e132]: Ready
+        - button "Toggle" [ref=e134] [cursor=pointer]:
+          - img [ref=e135]
+      - generic [ref=e138]:
+        - generic [ref=e139]: Strategist Bio
+        - combobox [ref=e140] [cursor=pointer]:
+          - option "Haiku 4.5" [selected]
+          - option "Sonnet 4.6"
+          - option "Opus 4.6"
+        - combobox [ref=e141] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e143]: Ready
+        - button "Toggle" [ref=e145] [cursor=pointer]:
+          - img [ref=e146]
+      - generic [ref=e149]:
+        - generic [ref=e150]: Grandmaster
+        - combobox [ref=e151] [cursor=pointer]:
+          - option "Haiku 4.5"
+          - option "Sonnet 4.6"
+          - option "Opus 4.6" [selected]
+        - combobox [ref=e152] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e154]: Ready
+        - button "Toggle" [ref=e156] [cursor=pointer]:
+          - img [ref=e157]
+      - generic [ref=e160]:
+        - generic [ref=e161]: Sherlock (Rev)
+        - combobox [ref=e162] [cursor=pointer]:
+          - option "Haiku 4.5" [selected]
+          - option "Sonnet 4.6"
+          - option "Opus 4.6"
+        - combobox [ref=e163] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e165]: Ready
+        - button "Toggle" [ref=e167] [cursor=pointer]:
+          - img [ref=e168]
+      - generic [ref=e171]:
+        - generic [ref=e172]: Knight
+        - combobox [ref=e173] [cursor=pointer]:
+          - option "Haiku 4.5"
+          - option "Sonnet 4.6"
+          - option "Opus 4.6" [selected]
+        - combobox [ref=e174] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e176]: Ready
+        - button "Toggle" [ref=e178] [cursor=pointer]:
+          - img [ref=e179]
+      - generic [ref=e182]:
+        - generic [ref=e183]: Spotter (7d)
+        - combobox [ref=e184] [cursor=pointer]:
+          - option "Haiku 4.5" [selected]
+          - option "Sonnet 4.6"
+          - option "Opus 4.6"
+        - combobox [ref=e185] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e187]: Ready
+        - button "Toggle" [ref=e189] [cursor=pointer]:
+          - img [ref=e190]
+      - generic [ref=e193]:
+        - generic [ref=e194]: Strategist Bio (7d)
+        - combobox [ref=e195] [cursor=pointer]:
+          - option "Haiku 4.5" [selected]
+          - option "Sonnet 4.6"
+          - option "Opus 4.6"
+        - combobox [ref=e196] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e198]: Ready
+        - button "Toggle" [ref=e200] [cursor=pointer]:
+          - img [ref=e201]
+      - generic [ref=e204]:
+        - generic [ref=e205]: Grandmaster (7d)
+        - combobox [ref=e206] [cursor=pointer]:
+          - option "Haiku 4.5"
+          - option "Sonnet 4.6"
+          - option "Opus 4.6" [selected]
+        - combobox [ref=e207] [cursor=pointer]:
+          - option "Claude" [selected]
+          - option "ChatGPT"
+          - option "Grok"
+          - option "Gemini"
+        - generic [ref=e209]: Ready
+        - button "Toggle" [ref=e211] [cursor=pointer]:
+          - img [ref=e212]
+  - generic [ref=e215]:
+    - heading "Agent JSON" [level=3] [ref=e216]
+    - generic [ref=e217]:
+      - button "Copy JSON" [ref=e218] [cursor=pointer]
+      - button "Close" [ref=e219] [cursor=pointer]:
+        - img [ref=e220]
+  - banner [ref=e224]:
+    - generic [ref=e225]:
+      - heading "Cortex Loop (5)" [level=1] [ref=e226]
+      - generic [ref=e227]:
+        - textbox "Describe your desired outcome..." [active] [ref=e228]
+        - button "Generate stack" [ref=e229] [cursor=pointer]:
+          - img [ref=e230]
+      - paragraph [ref=e232]:
+        - link "e.g. \"4 hours of deep focus, no sleep impact\"" [ref=e233] [cursor=pointer]:
+          - /url: "#"
+  - main [ref=e234]:
+    - generic:
+      - generic:
+        - img
+  - generic:
+    - button "Hide pipeline":
+      - img
+    - generic:
+      - generic: Cortex Agent Pipeline
+      - generic: LIVE
+      - generic:
+        - generic: Queued
+        - generic: Running
+        - generic: Done
+        - generic: Error
+  - generic:
+    - button "Hide timeline":
+      - img
+    - generic:
+      - button "Play":
+        - img
+      - generic: 00:00.0 / 00:00.0
+      - button "1x"
+```

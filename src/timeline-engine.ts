@@ -6,6 +6,7 @@
 
 import { cleanupDivider } from './divider';
 import { hideNarrationPanel } from './sherlock';
+import { clamp } from './utils';
 
 export type SegmentCategory =
     | 'word-cloud'
@@ -16,18 +17,20 @@ export type SegmentCategory =
     | 'biometric'
     | 'revision'
     | 'transition'
-    | 'gate';
+    | 'gate'
+    | 'compile';
 
 export const SEGMENT_COLORS: Record<SegmentCategory, { dark: string; light: string }> = {
     'word-cloud': { dark: '#6ec8ff', light: '#2563eb' },
     'scan-line': { dark: '#06b6d4', light: '#0891b2' },
-    'curves': { dark: '#22c55e', light: '#16a34a' },
+    curves: { dark: '#22c55e', light: '#16a34a' },
     'lx-reveal': { dark: '#f5c850', light: '#d97706' },
-    'sherlock': { dark: '#c084fc', light: '#7e3af2' },
-    'biometric': { dark: '#ff4d4d', light: '#dc2626' },
-    'revision': { dark: '#a855f7', light: '#9333ea' },
-    'transition': { dark: '#64748b', light: '#94a3b8' },
-    'gate': { dark: '#f59e0b', light: '#d97706' },
+    sherlock: { dark: '#c084fc', light: '#7e3af2' },
+    biometric: { dark: '#ff4d4d', light: '#dc2626' },
+    revision: { dark: '#a855f7', light: '#9333ea' },
+    transition: { dark: '#64748b', light: '#94a3b8' },
+    gate: { dark: '#f59e0b', light: '#d97706' },
+    compile: { dark: '#10b981', light: '#059669' },
 };
 
 export interface SegmentContext {
@@ -41,6 +44,7 @@ export interface SegmentContext {
     biometricChannels: any[] | null;
     revisionDiff: any[] | null;
     wordCloudEffects: any[] | null;
+    hookSentence: string | null;
     // Sherlock narration data
     sherlockNarration: { intro: string; beats: any[]; outro: string } | null;
     sherlockRevisionNarration: { intro: string; beats: any[]; outro: string } | null;
@@ -52,9 +56,9 @@ export interface AnimationSegment {
     id: string;
     label: string;
     category: SegmentCategory;
-    startTime: number;      // ms offset on global timeline
-    duration: number;       // ms, 0 for instant, Infinity for variable
-    phaseIdx: number;       // which pipeline phase (0-4) this belongs to
+    startTime: number; // ms offset on global timeline
+    duration: number; // ms, 0 for instant, Infinity for variable
+    phaseIdx: number; // which pipeline phase (0-4) this belongs to
 
     // Lifecycle
     enter(ctx: SegmentContext): void;
@@ -70,12 +74,12 @@ export interface AnimationSegment {
 }
 
 export type TimelineEventType =
-    | 'time-update'     // every frame
-    | 'segment-change'  // segment added/removed/resolved
-    | 'play-state'      // play/pause
-    | 'seek'            // manual seek
-    | 'gate-hit'        // playback paused at a gate
-    | 'gate-resolved'   // gate resolved, playback continues
+    | 'time-update' // every frame
+    | 'segment-change' // segment added/removed/resolved
+    | 'play-state' // play/pause
+    | 'seek' // manual seek
+    | 'gate-hit' // playback paused at a gate
+    | 'gate-resolved' // gate resolved, playback continues
     | 'duration-resolved'; // variable segment resolved
 
 export type TimelineListener = (event: TimelineEventType, data?: any) => void;
@@ -105,11 +109,22 @@ export class TimelineEngine {
 
     constructor(svgRoot: SVGSVGElement) {
         const groupIds = [
-            'phase-grid', 'phase-x-axis', 'phase-y-axis-left', 'phase-y-axis-right',
-            'phase-scan-line', 'phase-word-cloud', 'phase-baseline-curves',
-            'phase-desired-curves', 'phase-lx-bands', 'phase-lx-curves',
-            'phase-lx-markers', 'phase-substance-timeline', 'phase-mission-arrows',
-            'phase-yaxis-indicators', 'phase-legend', 'phase-tooltip-overlay',
+            'phase-grid',
+            'phase-x-axis',
+            'phase-y-axis-left',
+            'phase-y-axis-right',
+            'phase-scan-line',
+            'phase-word-cloud',
+            'phase-baseline-curves',
+            'phase-desired-curves',
+            'phase-lx-bands',
+            'phase-lx-curves',
+            'phase-lx-markers',
+            'phase-substance-timeline',
+            'phase-mission-arrows',
+            'phase-yaxis-indicators',
+            'phase-legend',
+            'phase-tooltip-overlay',
             'phase-biometric-strips',
         ];
         const groups: Record<string, SVGGElement> = {};
@@ -128,6 +143,7 @@ export class TimelineEngine {
             biometricChannels: null,
             revisionDiff: null,
             wordCloudEffects: null,
+            hookSentence: null,
             sherlockNarration: null,
             sherlockRevisionNarration: null,
         };
@@ -237,12 +253,8 @@ export class TimelineEngine {
 
     play(): void {
         if (this.playing) return;
-        // Gates are only for first-run imperative code, not engine-driven replay
+        if (this._recordOnly) return;
         this.pausedAtGate = null;
-        // Auto-transition to engine-driven mode if still in record-only
-        if (this._recordOnly) {
-            this.transitionToEngineDriven();
-        }
         this.playing = true;
         this.lastFrameTime = performance.now();
         this.scheduleFrame();
@@ -265,11 +277,8 @@ export class TimelineEngine {
     }
 
     seek(timeMs: number): void {
-        // Auto-transition to engine-driven mode if still in record-only
-        if (this._recordOnly) {
-            this.transitionToEngineDriven();
-        }
-        const clamped = Math.max(0, Math.min(this.getTotalDuration(), timeMs));
+        if (this._recordOnly) return;
+        const clamped = clamp(timeMs, 0, this.getTotalDuration());
         this.currentTime = clamped;
         this.renderAtTime(clamped);
         this.emit('seek', { time: clamped });
@@ -299,7 +308,7 @@ export class TimelineEngine {
     }
 
     /**
-     * Switch between record-only mode (first-run) and engine-driven mode (replay/seek).
+     * Switch between record-only mode (first-run) and engine-driven mode.
      * When switching OUT of record-only mode, resets all segment lifecycle flags
      * so renderAtTime() can properly reconstruct visual state.
      */
@@ -460,11 +469,6 @@ export class TimelineEngine {
         const newTime = Math.min(total, this.currentTime + dt);
         this.currentTime = newTime;
 
-        // Check for gate collisions - wait, gates should be skipped on scrub/replay!
-        // During first run (_recordOnly), gates are handled imperatively in main.ts via pausePlayhead().
-        // So we do NOT pause at gates here in engine-driven mode.
-
-
         if (!this._recordOnly) {
             this.renderAtTime(newTime);
         }
@@ -484,9 +488,7 @@ export class TimelineEngine {
      */
     private renderAtTime(time: number): void {
         for (const seg of this.segments) {
-            const segEnd = seg.duration === Infinity
-                ? Infinity
-                : seg.startTime + seg.duration;
+            const segEnd = seg.duration === Infinity ? Infinity : seg.startTime + seg.duration;
 
             const isActive = time >= seg.startTime && time < segEnd;
             const isPast = seg.duration !== Infinity && time >= segEnd;
@@ -518,7 +520,6 @@ export class TimelineEngine {
                     progress = (time - seg.startTime) / seg.duration;
                 }
                 seg.render(Math.min(1, Math.max(0, progress)), this.context);
-
             } else if (isPast) {
                 // Ensure entered and rendered at final state.
                 // NOTE: We do NOT call exit() for past segments.
@@ -530,7 +531,6 @@ export class TimelineEngine {
                     seg._exited = false;
                 }
                 seg.render(1, this.context);
-
             } else if (isFuture) {
                 // Backward seek: clean up if previously entered
                 if (seg._entered && !seg._exited) {

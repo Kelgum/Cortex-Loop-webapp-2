@@ -27,6 +27,7 @@ import {
     createOrbitalRingsSegment,
     createWordCloudDismissSegment,
     createRingsToCurvesMorphSegment,
+    createHookSentenceSegment,
 } from './timeline-segments/word-cloud-segments';
 import {
     createBaselineCurvesSegment,
@@ -44,10 +45,7 @@ import {
     createCinematicPlayheadSegment,
 } from './timeline-segments/lx-segments';
 import { createBiometricRevealSegment } from './timeline-segments/biometric-segments';
-import {
-    createRevisionEntrySegment,
-    createLxMorphToRevisionSegment,
-} from './timeline-segments/revision-segments';
+import { createRevisionEntrySegment, createLxMorphToRevisionSegment } from './timeline-segments/revision-segments';
 import {
     createSherlockBeatSegment,
     createSherlockOutroSegment,
@@ -96,6 +94,11 @@ export function addWordCloudSegments(
     // Orbital rings run concurrently, also variable until main model returns
     engine.addSegment(createOrbitalRingsSegment(scanLineStartTime + 400, Infinity));
 
+    // Hook sentence: starts 1200ms after cloud entrance, variable until main model returns
+    if (engine.getContext().hookSentence) {
+        engine.addSegment(createHookSentenceSegment(scanLineStartTime + 1400, Infinity));
+    }
+
     // Return the time we started the word cloud (for reference)
     return scanLineStartTime + 200;
 }
@@ -122,6 +125,9 @@ export function addPostCurveSegments(
     if (hasWordCloud) {
         // Resolve orbital rings duration
         engine.resolveDuration('orbital-rings', scanLineDuration + 200);
+
+        // Resolve hook sentence duration (end just before dismiss)
+        engine.resolveDuration('hook-sentence', Math.max(1000, scanLineDuration - 200));
 
         // Word cloud dismiss + ring morph (parallel)
         engine.addSegment(createWordCloudDismissSegment(t));
@@ -228,8 +234,7 @@ export function buildPhase2Segments(
     const GAP_BETWEEN_SUBSTANCES = 200; // ms gap between substance sweeps
 
     // Pre-compute smoothed baseline points as the starting state
-    const baselinePts = curvesData.map((c: any) =>
-        smoothPhaseValues(c.baseline, PHASE_SMOOTH_PASSES));
+    const baselinePts = curvesData.map((c: any) => smoothPhaseValues(c.baseline, PHASE_SMOOTH_PASSES));
 
     for (let k = 0; k < sorted.length; k++) {
         const substance = sorted[k];
@@ -237,9 +242,7 @@ export function buildPhase2Segments(
         const prevSnapshot = k > 0 ? incrementalSnapshots[k - 1] : null;
 
         // Source points: previous step's Lx points (or baseline for first)
-        const sourcePts = prevSnapshot
-            ? prevSnapshot.lxCurves.map((lc: any) => lc.points)
-            : baselinePts;
+        const sourcePts = prevSnapshot ? prevSnapshot.lxCurves.map((lc: any) => lc.points) : baselinePts;
 
         // Target points: this step's Lx points
         const targetPts = snapshot.lxCurves.map((lc: any) => lc.points);
@@ -251,16 +254,11 @@ export function buildPhase2Segments(
         const beatStart = t;
 
         // Pill reveal (350ms)
-        engine.addSegment(createSubstancePillSegment(
-            t, k, substance, allocated, curvesData,
-            snapshot.lxCurves,
-        ));
+        engine.addSegment(createSubstancePillSegment(t, k, substance, allocated, curvesData, snapshot.lxCurves));
         t += 350;
 
         // Substance sweep (variable duration based on step index)
-        const sweepSeg = createSubstanceSweepSegment(
-            t, k, substance, sourcePts, targetPts, curvesData,
-        );
+        const sweepSeg = createSubstanceSweepSegment(t, k, substance, sourcePts, targetPts, curvesData);
         engine.addSegment(sweepSeg);
         t += sweepSeg.duration + GAP_BETWEEN_SUBSTANCES;
 
@@ -328,15 +326,11 @@ export function buildPhase3Segments(
 /**
  * Build revision segments from the diff entries.
  */
-export function buildPhase4Segments(
-    engine: TimelineEngine,
-    startTime: number,
-    diffEntries: any[],
-): number {
+export function buildPhase4Segments(engine: TimelineEngine, startTime: number, diffEntries: any[]): number {
     let t = startTime;
 
     // Gate: revision play
-    engine.addSegment(createGateSegment('revision-gate', 'Revision', t, 3));
+    engine.addSegment(createGateSegment('revision-gate', 'Revise', t, 3));
     engine.addGate('revision-gate');
 
     // Per diff entry: bracket lock-on + action + narration beat

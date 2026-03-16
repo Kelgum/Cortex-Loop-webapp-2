@@ -1,5 +1,10 @@
+/**
+ * Divider — Split-screen SVG mask divider for 2-effect mode with drag interaction.
+ * Exports: getEffectSubGroup, activateDivider, cleanupDivider, installDividerMasks, updateDividerPosition, setupDividerDrag
+ * Depends on: constants (PHASE_CHART), state (AppState, DividerState), utils
+ */
 import { PHASE_CHART } from './constants';
-import { AppState, DividerState } from './state';
+import { AppState, DividerState, isTurboActive } from './state';
 import { svgEl, chartTheme } from './utils';
 
 /** Get or create a per-effect sub-group within a parent SVG group */
@@ -9,8 +14,7 @@ export function getEffectSubGroup(parentGroup: Element, effectIdx: number): Elem
     if (!sub) {
         sub = svgEl('g', { id });
         if (DividerState.active) {
-            sub.setAttribute('mask',
-                effectIdx === 0 ? 'url(#divider-mask-left)' : 'url(#divider-mask-right)');
+            sub.setAttribute('mask', effectIdx === 0 ? 'url(#divider-mask-left)' : 'url(#divider-mask-right)');
         }
         parentGroup.appendChild(sub);
     }
@@ -25,8 +29,12 @@ export function installDividerMasks(): void {
 
     // Left gradient: opaque on left, fades to dim at divider
     const leftGrad = svgEl('linearGradient', {
-        id: 'divider-grad-left', gradientUnits: 'userSpaceOnUse',
-        x1: '0', y1: '0', x2: String(PHASE_CHART.viewW), y2: '0',
+        id: 'divider-grad-left',
+        gradientUnits: 'userSpaceOnUse',
+        x1: '0',
+        y1: '0',
+        x2: String(PHASE_CHART.viewW),
+        y2: '0',
     });
     leftGrad.appendChild(svgEl('stop', { offset: '0', 'stop-color': 'white', 'stop-opacity': '1' }));
     leftGrad.appendChild(svgEl('stop', { offset: '0.45', 'stop-color': 'white', 'stop-opacity': '1' }));
@@ -36,8 +44,12 @@ export function installDividerMasks(): void {
 
     // Right gradient: dim on left, fades to opaque at divider
     const rightGrad = svgEl('linearGradient', {
-        id: 'divider-grad-right', gradientUnits: 'userSpaceOnUse',
-        x1: '0', y1: '0', x2: String(PHASE_CHART.viewW), y2: '0',
+        id: 'divider-grad-right',
+        gradientUnits: 'userSpaceOnUse',
+        x1: '0',
+        y1: '0',
+        x2: String(PHASE_CHART.viewW),
+        y2: '0',
     });
     rightGrad.appendChild(svgEl('stop', { offset: '0', 'stop-color': 'white', 'stop-opacity': String(minOp) }));
     rightGrad.appendChild(svgEl('stop', { offset: '0.45', 'stop-color': 'white', 'stop-opacity': String(minOp) }));
@@ -47,24 +59,42 @@ export function installDividerMasks(): void {
 
     // Left mask
     const leftMask = svgEl('mask', {
-        id: 'divider-mask-left', maskUnits: 'userSpaceOnUse',
-        x: '0', y: '0', width: String(PHASE_CHART.viewW), height: '600',
+        id: 'divider-mask-left',
+        maskUnits: 'userSpaceOnUse',
+        x: '0',
+        y: '0',
+        width: String(PHASE_CHART.viewW),
+        height: '600',
     });
-    leftMask.appendChild(svgEl('rect', {
-        x: '0', y: '0', width: String(PHASE_CHART.viewW), height: '600',
-        fill: 'url(#divider-grad-left)',
-    }));
+    leftMask.appendChild(
+        svgEl('rect', {
+            x: '0',
+            y: '0',
+            width: String(PHASE_CHART.viewW),
+            height: '600',
+            fill: 'url(#divider-grad-left)',
+        }),
+    );
     defs.appendChild(leftMask);
 
     // Right mask
     const rightMask = svgEl('mask', {
-        id: 'divider-mask-right', maskUnits: 'userSpaceOnUse',
-        x: '0', y: '0', width: String(PHASE_CHART.viewW), height: '600',
+        id: 'divider-mask-right',
+        maskUnits: 'userSpaceOnUse',
+        x: '0',
+        y: '0',
+        width: String(PHASE_CHART.viewW),
+        height: '600',
     });
-    rightMask.appendChild(svgEl('rect', {
-        x: '0', y: '0', width: String(PHASE_CHART.viewW), height: '600',
-        fill: 'url(#divider-grad-right)',
-    }));
+    rightMask.appendChild(
+        svgEl('rect', {
+            x: '0',
+            y: '0',
+            width: String(PHASE_CHART.viewW),
+            height: '600',
+            fill: 'url(#divider-grad-right)',
+        }),
+    );
     defs.appendChild(rightMask);
 
     DividerState.masks = { leftGrad, rightGrad };
@@ -104,18 +134,27 @@ export function createDividerVisual(): void {
 
     // Subtle glow backdrop
     const glow = svgEl('rect', {
-        x: String(x - 8), y: String(plotTop),
-        width: '16', height: String(plotH),
-        fill: t.scanGlow, rx: '8', 'pointer-events': 'none',
+        x: String(x - 8),
+        y: String(plotTop),
+        width: '16',
+        height: String(plotH),
+        fill: t.scanGlow,
+        rx: '8',
+        'pointer-events': 'none',
     });
     group.appendChild(glow);
 
     // Thin divider line
     const line = svgEl('rect', {
-        x: String(x - 0.75), y: String(plotTop),
-        width: '1.5', height: String(plotH),
-        fill: t.axisLine, 'fill-opacity': '0.35',
-        rx: '0.75', 'pointer-events': 'none', class: 'divider-line',
+        x: String(x - 0.75),
+        y: String(plotTop),
+        width: '1.5',
+        height: String(plotH),
+        fill: t.axisLine,
+        'fill-opacity': '0.35',
+        rx: '0.75',
+        'pointer-events': 'none',
+        class: 'divider-line',
     });
     group.appendChild(line);
 
@@ -123,17 +162,22 @@ export function createDividerVisual(): void {
     const cy = plotTop + plotH / 2;
     const diamond = svgEl('polygon', {
         points: `${x},${cy - 7} ${x + 4.5},${cy} ${x},${cy + 7} ${x - 4.5},${cy}`,
-        fill: 'rgba(200, 210, 230, 0.2)', stroke: t.axisLine,
-        'stroke-width': '0.75', 'stroke-opacity': '0.45',
+        fill: 'rgba(200, 210, 230, 0.2)',
+        stroke: t.axisLine,
+        'stroke-width': '0.75',
+        'stroke-opacity': '0.45',
         'pointer-events': 'none',
     });
     group.appendChild(diamond);
 
     // Invisible hit area for drag
     const hitArea = svgEl('rect', {
-        x: String(x - 15), y: String(plotTop),
-        width: '30', height: String(plotH),
-        fill: 'transparent', cursor: 'col-resize',
+        x: String(x - 15),
+        y: String(plotTop),
+        width: '30',
+        height: String(plotH),
+        fill: 'transparent',
+        cursor: 'col-resize',
         'pointer-events': 'all',
         class: 'divider-hit-area',
     });
@@ -153,8 +197,7 @@ export function updateDividerPosition(x: number): void {
     line.setAttribute('x', String(x - 0.75));
     glow.setAttribute('x', String(x - 8));
     hitArea.setAttribute('x', String(x - 15));
-    diamond.setAttribute('points',
-        `${x},${cy - 7} ${x + 4.5},${cy} ${x},${cy + 7} ${x - 4.5},${cy}`);
+    diamond.setAttribute('points', `${x},${cy - 7} ${x + 4.5},${cy} ${x},${cy + 7} ${x - 4.5},${cy}`);
 
     updateDividerMasks(x);
 
@@ -222,8 +265,11 @@ export function setupDividerDrag(): void {
 export function applyDividerMasksToExistingGroups(): void {
     if (!DividerState.active) return;
     const groupIds = [
-        'phase-baseline-curves', 'phase-desired-curves',
-        'phase-lx-curves', 'phase-mission-arrows', 'phase-yaxis-indicators',
+        'phase-baseline-curves',
+        'phase-desired-curves',
+        'phase-lx-curves',
+        'phase-mission-arrows',
+        'phase-yaxis-indicators',
     ];
     for (const gid of groupIds) {
         const g = document.getElementById(gid);
@@ -231,8 +277,7 @@ export function applyDividerMasksToExistingGroups(): void {
         for (let ei = 0; ei < 2; ei++) {
             const sub = g.querySelector(`#${gid}-e${ei}`);
             if (sub) {
-                sub.setAttribute('mask',
-                    ei === 0 ? 'url(#divider-mask-left)' : 'url(#divider-mask-right)');
+                sub.setAttribute('mask', ei === 0 ? 'url(#divider-mask-left)' : 'url(#divider-mask-right)');
             }
         }
     }
@@ -252,11 +297,12 @@ export function activateDivider(curvesData: any[]): void {
     updateDividerPosition(DividerState.x);
 
     // Fade in
-    DividerState.elements.group.style.opacity = '0';
-    DividerState.elements.group.animate(
-        [{ opacity: 0 }, { opacity: 1 }],
-        { duration: 600, fill: 'forwards' }
-    );
+    if (isTurboActive()) {
+        DividerState.elements.group.style.opacity = '1';
+    } else {
+        DividerState.elements.group.style.opacity = '0';
+        DividerState.elements.group.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 600, fill: 'forwards' });
+    }
 }
 
 /** Clean up divider on chart reset */
@@ -271,8 +317,7 @@ export function cleanupDivider(): void {
     if (svg) {
         const defs = svg.querySelector('defs');
         if (defs) {
-            ['divider-mask-left', 'divider-mask-right',
-             'divider-grad-left', 'divider-grad-right'].forEach(id => {
+            ['divider-mask-left', 'divider-mask-right', 'divider-grad-left', 'divider-grad-right'].forEach(id => {
                 const node = defs.querySelector(`#${id}`);
                 if (node) node.remove();
             });

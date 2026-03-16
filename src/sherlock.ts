@@ -7,7 +7,8 @@
 // The panel is appended to <body>, positioned via JS to the left of the SVG.
 
 import { PHASE_CHART } from './constants';
-import { SherlockState, TimelineState } from './state';
+import { SherlockState, TimelineState, isTurboActive } from './state';
+import { formatMinutesAsClockTime } from './utils';
 
 let _panel: HTMLElement | null = null;
 let _repositionRAF: number | null = null;
@@ -25,6 +26,7 @@ let _externalHoverLock = false;
 let _clickedSubstanceKey: string | null = null;
 
 interface SherlockCardScrollTarget {
+    id?: string | null;
     substanceKey?: string | null;
     curveIdx?: number | null;
     timeMinutes?: number | null;
@@ -64,24 +66,24 @@ function setCurveFocus(curveIdx: number | null): void {
     const lxGroup = document.getElementById('phase-lx-curves');
     if (lxGroup) {
         lxGroup.querySelectorAll('.phase-lx-path').forEach((p, i) => {
-            (p as SVGElement).style.opacity = (focusIdx === null || i === focusIdx) ? '1' : '0.15';
+            (p as SVGElement).style.opacity = focusIdx === null || i === focusIdx ? '1' : '0.15';
         });
         lxGroup.querySelectorAll('.phase-lx-fill').forEach((f, i) => {
-            (f as SVGElement).style.opacity = (focusIdx === null || i === focusIdx) ? '1' : '0.05';
+            (f as SVGElement).style.opacity = focusIdx === null || i === focusIdx ? '1' : '0.05';
         });
     }
 
     document.querySelectorAll('.timeline-curve-dot').forEach(dot => {
         const dotIdx = parseInt(dot.getAttribute('data-curve-idx') || '-1', 10);
-        (dot as SVGElement).style.opacity = (focusIdx === null || dotIdx === focusIdx) ? '1' : '0.15';
+        (dot as SVGElement).style.opacity = focusIdx === null || dotIdx === focusIdx ? '1' : '0.15';
     });
 
     document.querySelectorAll('.timeline-connector').forEach(conn => {
         const connIdx = parseInt(conn.getAttribute('data-curve-idx') || '-1', 10);
-        (conn as SVGElement).style.opacity = (focusIdx === null || connIdx === focusIdx) ? '1' : '0.15';
+        (conn as SVGElement).style.opacity = focusIdx === null || connIdx === focusIdx ? '1' : '0.15';
     });
 
-    document.querySelectorAll('.timeline-pill-group').forEach((pill) => {
+    document.querySelectorAll('.timeline-pill-group').forEach(pill => {
         pill.classList.remove('pill-dim', 'pill-highlight');
         if (focusIdx === null) return;
         const marker = pill.querySelector('.timeline-curve-dot, .timeline-connector');
@@ -90,7 +92,7 @@ function setCurveFocus(curveIdx: number | null): void {
         else pill.classList.add('pill-dim');
     });
 
-    document.querySelectorAll('.lx-auc-band').forEach((band) => {
+    document.querySelectorAll('.lx-auc-band').forEach(band => {
         band.classList.remove('band-dim', 'band-highlight');
         if (focusIdx === null) return;
         const bandIdx = parseInt(band.getAttribute('data-curve-idx') || '-1', 10);
@@ -111,7 +113,7 @@ function applyBandPillHighlight(substanceKey: string | null): void {
     const bands = document.querySelectorAll('.lx-auc-band');
     const pills = document.querySelectorAll('.timeline-pill-group');
 
-    bands.forEach((band) => {
+    bands.forEach(band => {
         band.classList.remove('band-dim', 'band-highlight');
         if (substanceKey === null) return;
         if (band.getAttribute('data-substance-key') === substanceKey) {
@@ -121,7 +123,7 @@ function applyBandPillHighlight(substanceKey: string | null): void {
         }
     });
 
-    pills.forEach((pill) => {
+    pills.forEach(pill => {
         pill.classList.remove('pill-dim', 'pill-highlight');
         if (substanceKey === null) return;
         if (pill.getAttribute('data-substance-key') === substanceKey) {
@@ -163,9 +165,9 @@ function getCenteredCard(panel: HTMLElement): HTMLElement | null {
     let nearest = cards[0];
     let minDist = Infinity;
 
-    cards.forEach((card) => {
+    cards.forEach(card => {
         const r = card.getBoundingClientRect();
-        const d = Math.abs((r.top + r.height / 2) - centerY);
+        const d = Math.abs(r.top + r.height / 2 - centerY);
         if (d < minDist) {
             minDist = d;
             nearest = card;
@@ -295,6 +297,13 @@ export function ensureNarrationPanel(): HTMLElement {
     const panel = document.createElement('div');
     panel.id = 'sherlock-narration-panel';
     panel.className = 'sherlock-narration-panel';
+
+    // Title header
+    const header = document.createElement('div');
+    header.className = 'sherlock-panel-header';
+    header.innerHTML = '<span class="sherlock-panel-label">Live Narration</span>';
+    panel.appendChild(header);
+
     document.body.appendChild(panel);
     _panel = panel;
     repositionPanel();
@@ -360,7 +369,8 @@ function escapeRegex(s: string): string {
 
 function highlightSubstance(text: string, name?: string, color?: string): string {
     if (!name) return text;
-    const hl = (s: string) => `<span class="waze-highlight" style="color: ${color || 'var(--text-accent)'}">${s}</span>`;
+    const hl = (s: string) =>
+        `<span class="waze-highlight" style="color: ${color || 'var(--text-accent)'}">${s}</span>`;
     const alts = new Set<string>();
     alts.add(escapeRegex(name));
 
@@ -388,12 +398,14 @@ function highlightSubstance(text: string, name?: string, color?: string): string
 
     // Sort by length descending to match longest possible phrase first
     let pattern = [...alts].sort((a, b) => b.length - a.length).join('|');
-    let regex = new RegExp(`\\b(${pattern})\\b`, 'gi');
+    // Use a lookahead for the trailing boundary so names ending with ')' still match
+    // (standard \b fails between ')' and whitespace since both are non-word chars).
+    let regex = new RegExp(`\\b(${pattern})(?=\\b|[)\\]}>,.;:!?\\s]|$)`, 'gi');
 
     // Test if any of the above match
     if (regex.test(text)) {
         regex.lastIndex = 0;
-        return text.replace(regex, (m) => hl(m));
+        return text.replace(regex, m => hl(m));
     }
 
     // FALLBACK: words > 3 chars from the base name
@@ -404,23 +416,17 @@ function highlightSubstance(text: string, name?: string, color?: string): string
         if (w.length > 3) alts.add(escapeRegex(w));
     }
     pattern = [...alts].sort((a, b) => b.length - a.length).join('|');
-    regex = new RegExp(`\\b(${pattern})\\b`, 'gi');
-    return text.replace(regex, (m) => hl(m));
+    regex = new RegExp(`\\b(${pattern})(?=\\b|[)\\]}>,.;:!?\\s]|$)`, 'gi');
+    return text.replace(regex, m => hl(m));
 }
 
-function formatTimeMinutes(min: number): string {
-    const h = Math.floor(min / 60) % 24;
-    const m = Math.round(min % 60);
-    const suffix = h < 12 ? 'am' : 'pm';
-    const hour = h === 0 ? 12 : (h > 12 ? h - 12 : h);
-    const minStr = m === 0 ? '' : `:${String(m).padStart(2, '0')}`;
-    return `${hour}${minStr}${suffix}`;
-}
+// Time formatting moved to utils.ts — use formatMinutesAsClockTime
 
 function buildCardHTML(c: SherlockCardData): string {
-    const timeLabel = typeof c.timeMinutes === 'number' && isFinite(c.timeMinutes)
-        ? `<span class="waze-card-time">${formatTimeMinutes(c.timeMinutes)}</span>`
-        : '';
+    const timeLabel =
+        typeof c.timeMinutes === 'number' && isFinite(c.timeMinutes)
+            ? `<span class="waze-card-time">${formatMinutesAsClockTime(c.timeMinutes)}</span>`
+            : '';
     return `
         ${timeLabel}
         <div class="waze-col-left">
@@ -436,7 +442,7 @@ function buildCardHTML(c: SherlockCardData): string {
 // ── Hover listeners for curve highlighting ──────────────────
 
 function attachHoverListeners(cardEl: Element): void {
-    cardEl.addEventListener('mouseenter', (e) => {
+    cardEl.addEventListener('mouseenter', e => {
         const el = e.currentTarget as HTMLElement;
         const cIdxStr = el.getAttribute('data-curve-idx');
         setCurveFocus(parseCurveIdx(cIdxStr));
@@ -461,20 +467,29 @@ function attachHoverListeners(cardEl: Element): void {
 
     cardEl.addEventListener('click', () => {
         const el = cardEl as HTMLElement;
+        const id = el.getAttribute('data-id');
         const key = el.getAttribute('data-substance-key');
-        if (!key) return;
+        const curveIdx = parseCurveIdx(el.getAttribute('data-curve-idx'));
+        const timeMinutes = parseTimeMinutes(el.getAttribute('data-time-minutes'));
 
-        // Toggle: clicking the same substance again clears the highlight
-        if (_clickedSubstanceKey === key) {
-            _clickedSubstanceKey = null;
-            applyBandPillHighlight(null);
-        } else {
-            _clickedSubstanceKey = key;
-            applyBandPillHighlight(key);
+        // Clicking should center the card (even if it has no substance metadata).
+        // Also release any external hover lock so center-sync can mark it active.
+        setSherlockHoverLock(false);
+        scrollSherlockCardToCenter({ id, substanceKey: key, curveIdx, timeMinutes });
+
+        if (key) {
+            // Toggle: clicking the same substance again clears the highlight
+            if (_clickedSubstanceKey === key) {
+                _clickedSubstanceKey = null;
+                applyBandPillHighlight(null);
+            } else {
+                _clickedSubstanceKey = key;
+                applyBandPillHighlight(key);
+            }
         }
 
         // Also set curve focus to match this card
-        setCurveFocus(parseCurveIdx(el.getAttribute('data-curve-idx')));
+        setCurveFocus(curveIdx);
     });
 }
 
@@ -596,7 +611,7 @@ export function showSherlockStack(cards: SherlockCardData[], activeIdx: number):
         } else {
             el.removeAttribute('data-time-minutes');
         }
-        const stepsFromActive = (allCards.length - 1) - idx;
+        const stepsFromActive = allCards.length - 1 - idx;
         applyAnimatedCardState(el, stepsFromActive);
     });
 
@@ -612,14 +627,19 @@ function findCardByTarget(panel: HTMLElement, target: SherlockCardScrollTarget):
     const cards = Array.from(panel.querySelectorAll('.waze-card')) as HTMLElement[];
     if (cards.length === 0) return null;
 
+    const id = (target.id || '').trim();
     const substanceKey = (target.substanceKey || '').trim().toLowerCase();
     const curveIdx = target.curveIdx != null && target.curveIdx >= 0 ? target.curveIdx : null;
-    const timeMinutes = target.timeMinutes != null && isFinite(target.timeMinutes)
-        ? Math.round(target.timeMinutes)
-        : null;
+    const timeMinutes =
+        target.timeMinutes != null && isFinite(target.timeMinutes) ? Math.round(target.timeMinutes) : null;
+
+    if (id) {
+        const exact = cards.find(card => (card.getAttribute('data-id') || '') === id);
+        if (exact) return exact;
+    }
 
     if (substanceKey && timeMinutes != null) {
-        const exact = cards.find((card) => {
+        const exact = cards.find(card => {
             const cardKey = (card.getAttribute('data-substance-key') || '').trim().toLowerCase();
             const cardTime = parseTimeMinutes(card.getAttribute('data-time-minutes'));
             return cardKey === substanceKey && cardTime != null && Math.round(cardTime) === timeMinutes;
@@ -628,14 +648,14 @@ function findCardByTarget(panel: HTMLElement, target: SherlockCardScrollTarget):
     }
 
     if (substanceKey) {
-        const byKey = cards.filter((card) => (
-            (card.getAttribute('data-substance-key') || '').trim().toLowerCase() === substanceKey
-        ));
+        const byKey = cards.filter(
+            card => (card.getAttribute('data-substance-key') || '').trim().toLowerCase() === substanceKey,
+        );
         if (byKey.length > 0) return byKey[byKey.length - 1];
     }
 
     if (curveIdx != null) {
-        const byCurve = cards.filter((card) => parseCurveIdx(card.getAttribute('data-curve-idx')) === curveIdx);
+        const byCurve = cards.filter(card => parseCurveIdx(card.getAttribute('data-curve-idx')) === curveIdx);
         if (byCurve.length > 0) return byCurve[byCurve.length - 1];
     }
 
@@ -747,16 +767,68 @@ type StepperMode = 'idle' | 'ready' | 'stepping' | 'playing' | 'complete';
 let _stepperMode: StepperMode = 'idle';
 let _stepResolver: (() => void) | null = null;
 let _pauseRequested = false;
+let _skipSweepRequested = false;
+let _sweepPaused = false;
+let _queuedAdvanceRequests = 0;
+let _stepSkipArmed = false;
 let _currentStep = 0;
 let _totalSteps = 0;
 let _vcrUpdateCallback: (() => void) | null = null;
+let _sleepResolver: (() => void) | null = null;
+
+/** Check and consume the sweep-skip flag (used by playhead sweep animation). */
+export function consumeSkipSweep(): boolean {
+    if (isTurboActive()) return true;
+    if (_skipSweepRequested) {
+        _skipSweepRequested = false;
+        return true;
+    }
+    return false;
+}
+
+/** True while user has paused an in-flight sweep animation. */
+export function isLxSweepPaused(): boolean {
+    return _sweepPaused;
+}
+
+/** Request that the current playhead sweep jump to completion immediately. */
+export function requestSkipSweep(): void {
+    _skipSweepRequested = true;
+    _stepSkipArmed = true;
+}
+
+/**
+ * Sleep that resolves immediately when skip/next is pressed.
+ * Use instead of `sleep()` inside the per-substance animation loop.
+ */
+export function skippableSleep(ms: number): Promise<void> {
+    if (isTurboActive()) return Promise.resolve();
+    return new Promise<void>(resolve => {
+        const timer = setTimeout(() => {
+            _sleepResolver = null;
+            resolve();
+        }, ms);
+        _sleepResolver = () => {
+            clearTimeout(timer);
+            _sleepResolver = null;
+            resolve();
+        };
+    });
+}
+
+/** Cancel any pending skippable sleep (called by skip/next). */
+function cancelPendingSleep(): void {
+    if (_sleepResolver) {
+        _sleepResolver();
+    }
+}
 
 export function setVcrUpdateCallback(fn: (() => void) | null) {
     _vcrUpdateCallback = fn;
 }
 
 function emitLxStepWait(waiting: boolean): void {
-    const cb = (window as any).__onLxStepWait;
+    const cb = TimelineState.onLxStepWait;
     if (typeof cb === 'function') cb(waiting);
 }
 
@@ -774,10 +846,12 @@ function updateControlBarState(): void {
 
 function onPlayPauseClick(): void {
     if (_stepperMode === 'playing') {
-        // Pause — will take effect at the next substance boundary
-        _pauseRequested = true;
+        // Pause immediately (freeze in-flight sweep at current position)
+        _sweepPaused = true;
         _stepperMode = 'stepping';
         updateControlBarState();
+        emitLxStepWait(true);
+        cancelPendingSleep();
     } else if (_stepperMode === 'ready' || _stepperMode === 'stepping') {
         doPlay();
     }
@@ -786,18 +860,27 @@ function onPlayPauseClick(): void {
 /** Programmatic play — same as clicking the Sherlock play button. Used by VCR panel. */
 export function triggerLxPlay(): void {
     if (_stepperMode === 'playing') {
-        _pauseRequested = true;
+        _sweepPaused = true;
         _stepperMode = 'stepping';
         updateControlBarState();
+        // Immediately pause the playhead/scanning line (don't wait for next awaitLxStep)
+        emitLxStepWait(true);
+        cancelPendingSleep();
     } else if (_stepperMode === 'ready' || _stepperMode === 'stepping') {
         doPlay();
     }
 }
 
 function doPlay(): void {
+    const wasSweepPaused = _sweepPaused;
     _stepperMode = 'playing';
+    _sweepPaused = false;
     _pauseRequested = false;
     updateControlBarState();
+    if (wasSweepPaused) {
+        // Resume first-run playhead immediately if we were frozen mid-sweep.
+        emitLxStepWait(false);
+    }
     if (_stepResolver) {
         const resolve = _stepResolver;
         _stepResolver = null;
@@ -807,6 +890,29 @@ function doPlay(): void {
 
 /** Programmatic next — same as clicking next track. Used by VCR panel. */
 export function triggerLxNext(): void {
+    if (_stepperMode === 'idle' || _stepperMode === 'complete') return;
+    if (_totalSteps <= 0) return;
+    const wasPauseRequested = _pauseRequested;
+    const waitingForBoundary = _stepResolver !== null;
+    const alreadyArmed = _stepSkipArmed;
+
+    if (!_stepSkipArmed) {
+        // First Next tap for this step fast-forwards the current step.
+        _skipSweepRequested = true;
+        _stepSkipArmed = true;
+    }
+    // Cancel any inter-step sleep so we advance immediately
+    cancelPendingSleep();
+
+    if (_sweepPaused) {
+        _sweepPaused = false;
+        emitLxStepWait(false);
+    }
+
+    if (_stepperMode === 'playing') {
+        // Skip current auto-advance delay — pause at the next step
+        _pauseRequested = true;
+    }
     if (_stepperMode === 'ready') {
         _stepperMode = 'stepping';
     }
@@ -814,6 +920,11 @@ export function triggerLxNext(): void {
         const resolve = _stepResolver;
         _stepResolver = null;
         resolve();
+    } else {
+        // Queue only if user taps again during the same active step.
+        // This avoids single-click over-queue that can jump the step index ahead.
+        const shouldQueue = alreadyArmed && !waitingForBoundary && (_stepperMode !== 'playing' || wasPauseRequested);
+        if (shouldQueue) _queuedAdvanceRequests += 1;
     }
     updateControlBarState();
 }
@@ -824,7 +935,7 @@ export function triggerLxPrev(): void {
     if (TimelineState.interactionLocked) return;
 
     const targetGateId = `substance-gate-${_currentStep - 1}`;
-    const engine = TimelineState.engine || (window as any).__timelineEngine;
+    const engine = TimelineState.engine;
     if (engine && typeof engine.getSegmentStartTime === 'function') {
         const seekTime = engine.getSegmentStartTime(targetGateId);
         if (seekTime !== null) {
@@ -846,14 +957,21 @@ export function getLxStepperState(): { currentStep: number; totalSteps: number; 
  */
 export function showLxStepControls(total: number): void {
     if (total <= 1) return;
-    if (_totalSteps === total && (_stepperMode === 'ready' || _stepperMode === 'stepping' || _stepperMode === 'playing')) {
+    if (
+        _totalSteps === total &&
+        (_stepperMode === 'ready' || _stepperMode === 'stepping' || _stepperMode === 'playing')
+    ) {
         updateControlBarState();
         return;
     }
     _totalSteps = total;
     _currentStep = 0;
-    _stepperMode = _vcrUpdateCallback ? 'ready' : 'playing';
+    _stepperMode = isTurboActive() || !_vcrUpdateCallback ? 'playing' : 'ready';
     _pauseRequested = false;
+    _skipSweepRequested = false;
+    _sweepPaused = false;
+    _queuedAdvanceRequests = 0;
+    _stepSkipArmed = false;
     _stepResolver = null;
     updateControlBarState();
 }
@@ -863,6 +981,11 @@ export function showLxStepControls(total: number): void {
  */
 export function hideLxStepControls(): void {
     _stepperMode = 'complete';
+    _pauseRequested = false;
+    _skipSweepRequested = false;
+    _sweepPaused = false;
+    _queuedAdvanceRequests = 0;
+    _stepSkipArmed = false;
     _stepResolver = null;
     emitLxStepWait(false);
     _vcrUpdateCallback?.();
@@ -874,12 +997,28 @@ export function hideLxStepControls(): void {
  * In stepping/ready mode: waits for user click (Next or Play).
  */
 export function awaitLxStep(stepIdx: number, total: number): Promise<void> {
+    _stepSkipArmed = false;
     _currentStep = stepIdx;
     _totalSteps = total;
     updateControlBarState();
 
+    // Turbo mode: resolve instantly
+    if (isTurboActive()) {
+        emitLxStepWait(false);
+        return Promise.resolve();
+    }
+
     // Single substance or controls not shown — proceed immediately
     if (total <= 1 || _stepperMode === 'idle' || _stepperMode === 'complete') {
+        emitLxStepWait(false);
+        return Promise.resolve();
+    }
+
+    if (_queuedAdvanceRequests > 0) {
+        _queuedAdvanceRequests -= 1;
+        // Queued "next" should fast-forward this step's sweep too.
+        _skipSweepRequested = true;
+        _stepSkipArmed = true;
         emitLxStepWait(false);
         return Promise.resolve();
     }

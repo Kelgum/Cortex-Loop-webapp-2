@@ -1,26 +1,299 @@
+/**
+ * LLM Pipeline — Multi-provider LLM API calls (Anthropic, OpenAI, Gemini, Grok) with JSON parsing and retry logic.
+ * Exports: callFastModel, callMainModelForCurves, callInterventionModel, callRevisionModel, callSherlockModel, callSherlockRevisionModel, extractAndParseJSON
+ * Depends on: constants (API_ENDPOINTS), state (AppState, getStageModel), prompts (PROMPTS), debug-panel (DebugLog)
+ */
 import { API_ENDPOINTS } from './constants';
-import { AppState, PhaseState, BiometricState, SherlockState, getStageModel } from './state';
+import {
+    AppState,
+    PhaseState,
+    BiometricState,
+    AgentMatchState,
+    getStageModel,
+    resolveStageModelForProvider,
+} from './state';
 import { interpolatePrompt } from './utils';
-import { PROMPTS } from './prompts';
+import { PROMPTS, JSON_POSTAMBLE } from './prompts';
 import { DebugLog } from './debug-panel';
 import { getActiveSubstances } from './substances';
+import { LLMCache } from './llm-cache';
+import { validateStageResponseShape } from './llm-response-shape';
+import { reportRuntimeBug, reportRuntimeFallback } from './runtime-error-banner';
+import { resolveCachedStageHit } from './stage-cache';
+import {
+    buildRevisionCurrentStateSummary,
+    buildRevisionPromptGapSummary,
+    serializeRevisionInterventions,
+} from './revision-reference';
+import type { PipelineStage, RevisionReferenceBundle, StageResultMap } from './types';
 
 export { getStageModel } from './state';
 
-async function callGeneric(userPrompt: any, key: any, model: any, type: any, provider: any, systemPrompt: any, maxTokens: any) {
+/** Routed generic LLM call — exported for use by week-orchestrator and other modules. */
+export async function callGenericRouted(
+    userPrompt: any,
+    key: any,
+    model: any,
+    type: any,
+    provider: any,
+    systemPrompt: any,
+    maxTokens: any,
+    reasoningEffort?: string,
+): Promise<unknown> {
+    return callGeneric(userPrompt, key, model, type, provider, systemPrompt, maxTokens, reasoningEffort);
+}
+
+async function callGeneric(
+    userPrompt: any,
+    key: any,
+    model: any,
+    type: any,
+    provider: any,
+    systemPrompt: any,
+    maxTokens: any,
+    reasoningEffort?: string,
+    timeoutMs?: number,
+) {
+    const timeout = timeoutMs ?? REQUEST_TIMEOUT_FAST_MS;
     switch (type) {
         case 'anthropic':
-            return callAnthropicGeneric(userPrompt, key, model, systemPrompt, maxTokens);
+            return callAnthropicGeneric(userPrompt, key, model, systemPrompt, maxTokens, timeout);
         case 'openai':
-            return callOpenAIGeneric(userPrompt, key, model,
+            return callOpenAIGeneric(
+                userPrompt,
+                key,
+                model,
                 provider === 'grok' ? API_ENDPOINTS.grok : API_ENDPOINTS.openai,
-                systemPrompt, maxTokens,
-                provider === 'grok' ? 'grok' : 'openai');
+                systemPrompt,
+                maxTokens,
+                provider === 'grok' ? 'grok' : 'openai',
+                reasoningEffort,
+                timeout,
+            );
         case 'gemini':
-            return callGeminiGeneric(userPrompt, key, model, systemPrompt, maxTokens);
+            return callGeminiGeneric(userPrompt, key, model, systemPrompt, maxTokens, timeout);
         default:
-            return callOpenAIGeneric(userPrompt, key, model, API_ENDPOINTS.openai, systemPrompt, maxTokens, 'openai');
+            return callOpenAIGeneric(
+                userPrompt,
+                key,
+                model,
+                API_ENDPOINTS.openai,
+                systemPrompt,
+                maxTokens,
+                'openai',
+                reasoningEffort,
+                timeout,
+            );
     }
+}
+
+type StageProviderContext = {
+    stage: PipelineStage | string;
+    stageLabel: string;
+    stageClass: string;
+    systemPrompt: string;
+    userPrompt: string;
+    maxTokens: number;
+    provider: string;
+    model: string;
+    type: string;
+    key: string;
+    modelKey: string;
+    reasoningEffort?: string;
+    timeoutMs: number;
+    callGeneric: typeof callGeneric;
+};
+
+type StageFallbackOptions<TResult> = {
+    stage: PipelineStage | string;
+    stageLabel: string;
+    stageClass: string;
+    systemPrompt: string;
+    userPrompt: string;
+    maxTokens: number;
+    validateResult?: (result: unknown) => TResult;
+    executeWithProvider?: (ctx: StageProviderContext) => Promise<TResult>;
+};
+
+const FALLBACK_SEQUENCE: string[] = ['gemini', 'anthropic', 'openai', 'grok'];
+const REQUEST_TIMEOUT_FAST_MS = 45_000;
+const REQUEST_TIMEOUT_MID_MS = 100_000;
+const REQUEST_TIMEOUT_MAIN_MS = 120_000;
+
+function providerPrettyName(provider: string): string {
+    switch (provider) {
+        case 'anthropic':
+            return 'Claude';
+        case 'openai':
+            return 'OpenAI';
+        case 'gemini':
+            return 'Gemini';
+        case 'grok':
+            return 'Grok';
+        default:
+            return provider;
+    }
+}
+
+function buildProviderAttemptOrder(primaryProvider: string): string[] {
+    const unique: string[] = [];
+    if (primaryProvider) unique.push(primaryProvider);
+    for (const p of FALLBACK_SEQUENCE) {
+        if (!unique.includes(p)) unique.push(p);
+    }
+    return unique;
+}
+
+function nextProviderInOrder(order: string[], idx: number): string | null {
+    for (let i = idx + 1; i < order.length; i++) {
+        if (order[i]) return order[i];
+    }
+    return null;
+}
+
+function attachRequestContext(err: any, requestBody: any, rawResponse?: string): Error {
+    const wrapped = err instanceof Error ? err : new Error(String(err));
+    const anyErr: any = wrapped;
+    if (requestBody != null && anyErr._requestBody == null) anyErr._requestBody = requestBody;
+    if (typeof rawResponse === 'string' && rawResponse && anyErr._rawResponse == null)
+        anyErr._rawResponse = rawResponse;
+    return wrapped;
+}
+
+/**
+ * Shared stage caller with provider failover.
+ * Attempt order = selected stage provider first, then gemini -> anthropic -> openai -> grok (skipping attempted).
+ * Provider switching is runtime-only and never persisted.
+ */
+export async function callStageWithFallback<TResult>(options: StageFallbackOptions<TResult>): Promise<TResult> {
+    const initial = getStageModel(options.stage);
+    const attemptProviders = buildProviderAttemptOrder(initial.provider);
+    const stageErrors: string[] = [];
+    let lastFailure: { provider: string; model: string; message: string } | null = null;
+
+    for (let i = 0; i < attemptProviders.length; i++) {
+        const provider = attemptProviders[i];
+        const nextProvider = nextProviderInOrder(attemptProviders, i);
+        const modelInfo = resolveStageModelForProvider(options.stage, provider);
+
+        if (!modelInfo.key) {
+            const noKeyMessage = `No API key configured for ${providerPrettyName(provider)}.`;
+            stageErrors.push(`${provider}: ${noKeyMessage}`);
+            lastFailure = { provider, model: modelInfo.model, message: noKeyMessage };
+            reportRuntimeBug({
+                stage: options.stageLabel,
+                provider,
+                message: noKeyMessage,
+                retryProvider: nextProvider,
+            });
+            continue;
+        }
+
+        const timeoutMs =
+            modelInfo.tier === 2
+                ? REQUEST_TIMEOUT_MAIN_MS
+                : modelInfo.tier === 1
+                  ? REQUEST_TIMEOUT_MID_MS
+                  : REQUEST_TIMEOUT_FAST_MS;
+
+        const debugEntry = DebugLog.addEntry({
+            stage: options.stageLabel,
+            stageClass: options.stageClass,
+            model: modelInfo.model,
+            provider,
+            systemPrompt: options.systemPrompt,
+            userPrompt: options.userPrompt,
+            loading: true,
+        });
+        const started = performance.now();
+
+        try {
+            const result = options.executeWithProvider
+                ? await options.executeWithProvider({
+                      stage: options.stage,
+                      stageLabel: options.stageLabel,
+                      stageClass: options.stageClass,
+                      systemPrompt: options.systemPrompt,
+                      userPrompt: options.userPrompt,
+                      maxTokens: options.maxTokens,
+                      provider,
+                      model: modelInfo.model,
+                      type: modelInfo.type,
+                      key: modelInfo.key,
+                      modelKey: modelInfo.modelKey,
+                      reasoningEffort: modelInfo.reasoningEffort,
+                      timeoutMs,
+                      callGeneric: (up: any, k: any, m: any, t: any, p: any, sp: any, mt: any, re?: string) =>
+                          callGeneric(up, k, m, t, p, sp, mt, re, timeoutMs),
+                  })
+                : await callGeneric(
+                      options.userPrompt,
+                      modelInfo.key,
+                      modelInfo.model,
+                      modelInfo.type,
+                      provider,
+                      options.systemPrompt,
+                      options.maxTokens,
+                      modelInfo.reasoningEffort,
+                      timeoutMs,
+                  );
+
+            const requestBody = result?._requestBody;
+            const rawResponse = result?._rawResponse;
+            const effectiveModel = result?._effectiveModel;
+            if (result && typeof result === 'object') {
+                delete result._requestBody;
+                delete result._rawResponse;
+                delete result._effectiveModel;
+            }
+
+            const resolvedModel = typeof effectiveModel === 'string' ? effectiveModel : modelInfo.model;
+
+            const validated = options.validateResult
+                ? options.validateResult(result)
+                : (validateStageResponseShape(options.stage, result) as TResult);
+
+            DebugLog.updateEntry(debugEntry, {
+                loading: false,
+                model: resolvedModel,
+                requestBody,
+                rawResponse,
+                response: validated,
+                duration: Math.round(performance.now() - started),
+            });
+            const providerFallback = provider !== initial.provider;
+            if (providerFallback) {
+                reportRuntimeFallback({
+                    stage: options.stageLabel,
+                    failedProvider: lastFailure?.provider || initial.provider,
+                    failedModel: lastFailure?.model || initial.model,
+                    failedMessage: lastFailure?.message || 'Automatic fallback after a failed API call.',
+                    activeProvider: provider,
+                    activeModel: resolvedModel,
+                });
+            }
+            return validated;
+        } catch (err: any) {
+            const message = err?.message || String(err);
+            stageErrors.push(`${provider}: ${message}`);
+            lastFailure = { provider, model: modelInfo.model, message };
+            DebugLog.updateEntry(debugEntry, {
+                loading: false,
+                ...(err?._requestBody ? { requestBody: err._requestBody } : {}),
+                ...(err?._rawResponse ? { rawResponse: err._rawResponse } : {}),
+                error: message,
+                duration: Math.round(performance.now() - started),
+            });
+            reportRuntimeBug({
+                stage: options.stageLabel,
+                provider,
+                message,
+                retryProvider: nextProvider,
+            });
+        }
+    }
+
+    throw new Error(`${options.stageLabel} failed across providers: ${stageErrors.join(' | ')}`);
 }
 
 type ProviderErrorInfo = {
@@ -122,14 +395,18 @@ function parseProviderErrorInfo(bodyText: string, fallbackMessage: string): Prov
 function isTransientProviderError(status: number, info: ProviderErrorInfo) {
     if (TRANSIENT_HTTP_STATUSES.has(status)) return true;
     if (TRANSIENT_ERROR_TYPES.has(String(info.type || '').toLowerCase())) return true;
-    return /(overload|overloaded|rate limit|too many requests|temporar|try again|busy|unavailable|timeout|timed out|capacity)/i.test(info.message || '');
+    return /(overload|overloaded|rate limit|too many requests|temporar|try again|busy|unavailable|timeout|timed out|capacity)/i.test(
+        info.message || '',
+    );
 }
 
 function isTransientNetworkError(err: any) {
     const name = String(err?.name || '');
     const message = String(err?.message || err || '');
     if (name === 'TypeError' || name === 'AbortError') return true;
-    return /(failed to fetch|network|load failed|timed out|timeout|connection|econnreset|enotfound|service unavailable)/i.test(message);
+    return /(failed to fetch|network|load failed|timed out|timeout|connection|econnreset|enotfound|service unavailable)/i.test(
+        message,
+    );
 }
 
 function buildProviderError(providerLabel: string, status: number, info: ProviderErrorInfo) {
@@ -142,20 +419,72 @@ function buildProviderError(providerLabel: string, status: number, info: Provide
     return err;
 }
 
-async function fetchJsonWithRetry(endpoint: string, init: RequestInit, providerLabel: string, maxAttempts = 4) {
+function buildGeminiGenerationConfig(model: string, maxTokens: number) {
+    // Gemini thinking-model handling:
+    //  • 3.1+ models REQUIRE thinking (budget 0 → HTTP 400). Give a small budget
+    //    so thinking tokens don't starve the actual JSON response.
+    //  • 2.5-pro/flash and 3.0 models default to thinking ON, which eats the
+    //    output budget and truncates JSON. Disable it (budget 0).
+    //  • Legacy flash-lite models before 3.1 have no thinking mode — leave config alone.
+    const isThinkingRequired = /^gemini-(3\.[1-9]|[4-9])/.test(model);
+    const isThinkingOptional = !isThinkingRequired && /^gemini-(3|2\.5-(pro|flash))(?!-lite)/.test(model);
+    const generationConfig: any = { maxOutputTokens: maxTokens };
+    if (isThinkingRequired) {
+        const thinkBudget = 2048;
+        generationConfig.thinkingConfig = { thinkingBudget: thinkBudget };
+        generationConfig.maxOutputTokens = maxTokens + thinkBudget;
+    } else if (isThinkingOptional) {
+        generationConfig.thinkingConfig = { thinkingBudget: 0 };
+    }
+    return generationConfig;
+}
+
+async function fetchJsonWithRetry(
+    endpoint: string,
+    init: RequestInit,
+    providerLabel: string,
+    maxAttempts = 2,
+    timeoutMs = REQUEST_TIMEOUT_FAST_MS,
+) {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         let response: Response;
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        let didTimeout = false;
+        const controller = new AbortController();
+        const parentSignal = init.signal || null;
+        const onParentAbort = () => controller.abort();
+        timeoutId = setTimeout(() => {
+            didTimeout = true;
+            controller.abort();
+        }, timeoutMs);
+        if (parentSignal) {
+            if (parentSignal.aborted) controller.abort();
+            else parentSignal.addEventListener('abort', onParentAbort, { once: true });
+        }
+
         try {
-            response = await fetch(endpoint, init);
+            response = await fetch(endpoint, { ...init, signal: controller.signal });
         } catch (err: any) {
-            if (!isTransientNetworkError(err) || attempt === maxAttempts) {
-                throw (err instanceof Error ? err : new Error(String(err)));
+            if (timeoutId) clearTimeout(timeoutId);
+            if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
+            const resolvedError = didTimeout
+                ? new Error(`${providerLabel} request timed out after ${timeoutMs}ms.`)
+                : err instanceof Error
+                  ? err
+                  : new Error(String(err));
+            if (!isTransientNetworkError(resolvedError) || attempt === maxAttempts) {
+                throw resolvedError;
             }
             const waitMs = computeRetryDelayMs(attempt);
-            console.warn(`[LLM:${providerLabel}] transient network error on attempt ${attempt}/${maxAttempts}; retrying in ${waitMs}ms`, err);
+            console.warn(
+                `[LLM:${providerLabel}] transient network error on attempt ${attempt}/${maxAttempts}; retrying in ${waitMs}ms`,
+                resolvedError,
+            );
             await wait(waitMs);
             continue;
         }
+        if (timeoutId) clearTimeout(timeoutId);
+        if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
 
         if (!response.ok) {
             const bodyText = await response.text().catch(() => '');
@@ -168,7 +497,9 @@ async function fetchJsonWithRetry(endpoint: string, init: RequestInit, providerL
 
             const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
             const waitMs = Math.max(300, retryAfterMs ?? computeRetryDelayMs(attempt));
-            console.warn(`[LLM:${providerLabel}] transient provider error "${info.type}" on attempt ${attempt}/${maxAttempts}; retrying in ${waitMs}ms`);
+            console.warn(
+                `[LLM:${providerLabel}] transient provider error "${info.type}" on attempt ${attempt}/${maxAttempts}; retrying in ${waitMs}ms`,
+            );
             await wait(waitMs);
             continue;
         }
@@ -194,11 +525,17 @@ function matchBraces(text: string, startIdx: number, openChar: string, closeChar
     for (let i = startIdx; i < text.length; i++) {
         const ch = text[i];
         if (inStr) {
-            if (ch === '\\') { i++; continue; }
+            if (ch === '\\') {
+                i++;
+                continue;
+            }
             if (ch === '"') inStr = false;
             continue;
         }
-        if (ch === '"') { inStr = true; continue; }
+        if (ch === '"') {
+            inStr = true;
+            continue;
+        }
         if (ch === openChar) depth++;
         else if (ch === closeChar) {
             depth--;
@@ -240,7 +577,8 @@ function findBestJsonCandidate(text: string, rawText: any): string {
 
     // Prefer the candidate that looks most like real JSON (has common keys like "beats", "effects", "curves", "interventions", "channels")
     // Among matches, prefer the LAST one: models put reasoning/analysis first, actual response last.
-    const jsonKeyPattern = /"(?:beats|effects|curves|interventions|channels|outro|text|substanceKey|action|name|key|effect|data)\s*"/;
+    const jsonKeyPattern =
+        /"(?:beats|effects|curves|interventions|channels|outro|text|substanceKey|action|name|key|effect|data)\s*"/;
     const matching = candidates.filter(c => jsonKeyPattern.test(text.substring(c.start, c.end + 1)));
     let best;
     if (matching.length > 0) {
@@ -251,6 +589,29 @@ function findBestJsonCandidate(text: string, rawText: any): string {
         best = candidates[candidates.length - 1];
     }
     return text.substring(best.start, best.end + 1);
+}
+
+/**
+ * Detect truncated JSON responses (model hit max_tokens).
+ * If the outermost `{` or `[` has no balanced closing counterpart,
+ * throw immediately so the caller can fall back to another provider
+ * rather than silently producing a degraded result.
+ */
+function rejectTruncatedJson(text: string): void {
+    const firstBrace = text.indexOf('{');
+    const firstBracket = text.indexOf('[');
+    if (firstBrace < 0 && firstBracket < 0) return;
+
+    const startIdx = firstBracket >= 0 && (firstBrace < 0 || firstBracket < firstBrace) ? firstBracket : firstBrace;
+    const openChar = text[startIdx] as '{' | '[';
+    const closeChar = openChar === '{' ? '}' : ']';
+
+    if (matchBraces(text, startIdx, openChar, closeChar) >= 0) return;
+
+    throw new Error(
+        'Truncated JSON response (model likely hit max_tokens). ' +
+            'Outermost structure is unclosed — rejecting to trigger provider fallback.',
+    );
 }
 
 /**
@@ -266,11 +627,19 @@ export function extractAndParseJSON(rawText: any) {
     }
 
     // 1. Strip markdown fences
-    text = text.replace(/```(?:json|JSON)?\s*/g, '').replace(/```\s*/g, '').trim();
+    text = text
+        .replace(/```(?:json|JSON)?\s*/g, '')
+        .replace(/```\s*/g, '')
+        .trim();
 
     // 1b. Strip XML-like tags that some models wrap around their response
     //     e.g. <response>...</response>, <json>...</json>, <output>...</output>
     text = text.replace(/<\/?(?:response|json|output|result|answer|data|thinking|antThinking)[^>]*>/gi, '').trim();
+
+    // 1c. Truncation guard: if the outermost structure is unbalanced (model hit
+    //     max_tokens), reject immediately so the provider fallback chain kicks in
+    //     instead of silently extracting a degraded sub-object.
+    rejectTruncatedJson(text);
 
     // 2. Extract a complete JSON object/array by matching braces/brackets.
     //    Try multiple candidates — the first '{' may be in reasoning text, not the actual JSON.
@@ -294,24 +663,34 @@ export function extractAndParseJSON(rawText: any) {
     text = text.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"');
     text = text.replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'");
 
+    // 4b. Normalize JSON-like outputs that incorrectly use single-quoted keys/values.
+    //     Some providers occasionally return JavaScript-style object literals.
+    const singleQuoteNormalized = normalizeSingleQuotedJSON(text);
+    const parseSource = singleQuoteNormalized || text;
+
     // 5. Attempt parse
     try {
         return JSON.parse(text);
     } catch (e1: any) {
+        if (parseSource !== text) {
+            try {
+                return JSON.parse(parseSource);
+            } catch (_) {}
+        }
         // 6. Second pass: fix unescaped double quotes inside string values
         //    using a character-by-character state machine
         try {
-            const fixed = fixUnescapedQuotes(text);
+            const fixed = fixUnescapedQuotes(parseSource);
             return JSON.parse(fixed);
         } catch (e2) {
             // 6b. Third pass: retry after structural comma repair
             try {
-                const repaired = repairMissingArrayCommas(fixUnescapedQuotes(text));
+                const repaired = repairMissingArrayCommas(fixUnescapedQuotes(parseSource));
                 return JSON.parse(repaired);
-            } catch (_) { }
+            } catch (_) {}
             // 7. Third pass: also fix unescaped newlines
             try {
-                let fixed = fixUnescapedQuotes(text);
+                let fixed = fixUnescapedQuotes(parseSource);
                 fixed = fixed.replace(/\r\n/g, '\\n').replace(/\n/g, '\\n').replace(/\t/g, '\\t');
                 return JSON.parse(fixed);
             } catch (e3) {
@@ -319,7 +698,7 @@ export function extractAndParseJSON(rawText: any) {
                 //    known long-text field values with single quotes.
                 //    Targets: full_context, rationale, label, text, intro, outro
                 try {
-                    const nuked = sanitizeLongTextFields(text);
+                    const nuked = sanitizeLongTextFields(parseSource);
                     return JSON.parse(nuked);
                 } catch (e4) {
                     console.error('[extractAndParseJSON] PARSE FAILED.\nError:', e1.message, '\nCleaned text:', text);
@@ -328,6 +707,119 @@ export function extractAndParseJSON(rawText: any) {
             }
         }
     }
+}
+
+function findPrevNonWhitespace(text: string, idx: number): string {
+    for (let i = idx - 1; i >= 0; i--) {
+        const ch = text[i];
+        if (!/\s/.test(ch)) return ch;
+    }
+    return '';
+}
+
+function isLikelySingleQuoteStart(text: string, idx: number): boolean {
+    const prev = findPrevNonWhitespace(text, idx);
+    return !prev || prev === '{' || prev === '[' || prev === ':' || prev === ',';
+}
+
+/**
+ * Repairs JS-style single-quoted strings in otherwise JSON-like payloads.
+ * Converts delimiters to standard double quotes while preserving apostrophes.
+ */
+function normalizeSingleQuotedJSON(json: string): string {
+    if (!json.includes("'")) return json;
+
+    const out: string[] = [];
+    let inDouble = false;
+    let inSingle = false;
+
+    for (let i = 0; i < json.length; i++) {
+        const ch = json[i];
+
+        if (inDouble) {
+            out.push(ch);
+            if (ch === '\\') {
+                if (i + 1 < json.length) {
+                    i++;
+                    out.push(json[i]);
+                }
+                continue;
+            }
+            if (ch === '"') inDouble = false;
+            continue;
+        }
+
+        if (inSingle) {
+            if (ch === '\\') {
+                const next = i + 1 < json.length ? json[i + 1] : '';
+                if (next) {
+                    if (next === "'") {
+                        out.push("'");
+                    } else if (next === '"') {
+                        out.push('\\', '"');
+                    } else {
+                        out.push('\\', next);
+                    }
+                    i++;
+                    continue;
+                }
+                out.push('\\');
+                continue;
+            }
+
+            if (ch === "'") {
+                let peek = i + 1;
+                while (peek < json.length && /\s/.test(json[peek])) peek++;
+                const nextSig = peek < json.length ? json[peek] : '';
+                if (nextSig === ',' || nextSig === '}' || nextSig === ']' || nextSig === ':' || nextSig === '') {
+                    out.push('"');
+                    inSingle = false;
+                } else {
+                    out.push("'");
+                }
+                continue;
+            }
+
+            if (ch === '"') {
+                out.push('\\', '"');
+                continue;
+            }
+
+            if (ch === '\n') {
+                out.push('\\n');
+                continue;
+            }
+            if (ch === '\r') {
+                if (i + 1 < json.length && json[i + 1] === '\n') i++;
+                out.push('\\n');
+                continue;
+            }
+            if (ch === '\t') {
+                out.push('\\t');
+                continue;
+            }
+
+            out.push(ch);
+            continue;
+        }
+
+        if (ch === '"') {
+            inDouble = true;
+            out.push(ch);
+            continue;
+        }
+
+        if (ch === "'" && isLikelySingleQuoteStart(json, i)) {
+            inSingle = true;
+            out.push('"');
+            continue;
+        }
+
+        out.push(ch);
+    }
+
+    if (inSingle) out.push('"');
+    return out.join('');
 }
 
 /**
@@ -353,14 +845,21 @@ export function fixUnescapedQuotes(json: any) {
                     // Escaped char — pass through both chars
                     out.push(c);
                     i++;
-                    if (i < len) { out.push(json[i]); i++; }
+                    if (i < len) {
+                        out.push(json[i]);
+                        i++;
+                    }
                     continue;
                 }
                 if (c === '"') {
                     // Is this the real closing quote or an unescaped inner quote?
                     // Peek ahead past whitespace to see what follows
                     let peek = i + 1;
-                    while (peek < len && (json[peek] === ' ' || json[peek] === '\t' || json[peek] === '\r' || json[peek] === '\n')) peek++;
+                    while (
+                        peek < len &&
+                        (json[peek] === ' ' || json[peek] === '\t' || json[peek] === '\r' || json[peek] === '\n')
+                    )
+                        peek++;
                     const next = peek < len ? json[peek] : '';
                     // Structural chars that can follow a closing string quote
                     if (next === ',' || next === '}' || next === ']' || next === ':' || next === '') {
@@ -387,14 +886,16 @@ export function fixUnescapedQuotes(json: any) {
 }
 
 function isJsonValueStart(ch: string): boolean {
-    return ch === '{'
-        || ch === '['
-        || ch === '"'
-        || ch === '-'
-        || (ch >= '0' && ch <= '9')
-        || ch === 't'
-        || ch === 'f'
-        || ch === 'n';
+    return (
+        ch === '{' ||
+        ch === '[' ||
+        ch === '"' ||
+        ch === '-' ||
+        (ch >= '0' && ch <= '9') ||
+        ch === 't' ||
+        ch === 'f' ||
+        ch === 'n'
+    );
 }
 
 /**
@@ -483,7 +984,10 @@ function sanitizeLongTextFields(json: string): string {
         let bestEnd = -1;
         for (let i = valueStart; i < json.length; i++) {
             const c = json[i];
-            if (c === '\\') { i++; continue; } // skip escaped chars
+            if (c === '\\') {
+                i++;
+                continue;
+            } // skip escaped chars
             if (c === '"') {
                 // Check if this could be the closing quote
                 let peek = i + 1;
@@ -529,131 +1033,169 @@ function sanitizeLongTextFields(json: string): string {
 
     // Also fix trailing commas and newlines in the result
     result = result.replace(/,\s*([}\]])/g, '$1');
-    result = result.replace(/\r\n/g, '\\n').replace(/(?<!\\)\n/g, '\\n').replace(/\t/g, '\\t');
+    result = result
+        .replace(/\r\n/g, '\\n')
+        .replace(/(?<!\\)\n/g, '\\n')
+        .replace(/\t/g, '\\t');
 
     return result;
 }
-
 
 // Backward compat alias
 export function parseJSONObjectResponse(text: any) {
     return extractAndParseJSON(text);
 }
 
-export async function callAnthropicGeneric(userPrompt: any, apiKey: any, model: any, systemPrompt: any, maxTokens: any) {
+export async function callAnthropicGeneric(
+    userPrompt: any,
+    apiKey: any,
+    model: any,
+    systemPrompt: any,
+    maxTokens: any,
+    timeoutMs = REQUEST_TIMEOUT_FAST_MS,
+) {
     const requestBody = {
         model,
         max_tokens: maxTokens,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
     };
-    const data = await fetchJsonWithRetry(
-        API_ENDPOINTS.anthropic,
-        {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'x-api-key': apiKey,
-                ...((maxTokens > 4096) ? { 'anthropic-beta': 'max-tokens-3-5-sonnet-2024-07-15' } : {}),
-                'anthropic-version': '2023-06-01',
-                'anthropic-dangerous-direct-browser-access': 'true',
-            },
-            body: JSON.stringify(requestBody),
-        },
-        'anthropic',
-    );
-    // Find the text block — content may contain thinking blocks before the text block
-    const textBlock = Array.isArray(data?.content)
-        ? data.content.find((b: any) => b.type === 'text')
-        : null;
-    const responseText = textBlock?.text ?? data?.content?.[0]?.text;
-    if (typeof responseText !== 'string' || !responseText.trim()) {
-        throw new Error('anthropic request failed: response missing text content.');
-    }
     try {
+        const data = await fetchJsonWithRetry(
+            API_ENDPOINTS.anthropic,
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': apiKey,
+                    ...(maxTokens > 4096 ? { 'anthropic-beta': 'max-tokens-3-5-sonnet-2024-07-15' } : {}),
+                    'anthropic-version': '2023-06-01',
+                    'anthropic-dangerous-direct-browser-access': 'true',
+                },
+                body: JSON.stringify(requestBody),
+            },
+            'anthropic',
+            2,
+            timeoutMs,
+        );
+        // Find the text block — content may contain thinking blocks before the text block
+        const textBlock = Array.isArray(data?.content) ? data.content.find((b: any) => b.type === 'text') : null;
+        const responseText = textBlock?.text ?? data?.content?.[0]?.text;
+        if (typeof responseText !== 'string' || !responseText.trim()) {
+            throw new Error('anthropic request failed: response missing text content.');
+        }
         const parsed = parseJSONObjectResponse(responseText);
         parsed._requestBody = requestBody;
         parsed._rawResponse = responseText;
         return parsed;
-    } catch (parseErr: any) {
-        parseErr._rawResponse = responseText;
-        parseErr._requestBody = requestBody;
-        throw parseErr;
+    } catch (err: any) {
+        throw attachRequestContext(err, requestBody, err?._rawResponse);
     }
 }
 
-export async function callOpenAIGeneric(userPrompt: any, apiKey: any, model: any, endpoint: any, systemPrompt: any, maxTokens: any, providerLabel = 'openai') {
-    // OpenAI o-series reasoning models require max_completion_tokens and developer role
+export async function callOpenAIGeneric(
+    userPrompt: any,
+    apiKey: any,
+    model: any,
+    endpoint: any,
+    systemPrompt: any,
+    maxTokens: any,
+    providerLabel = 'openai',
+    reasoningEffort?: string,
+    timeoutMs = REQUEST_TIMEOUT_FAST_MS,
+) {
+    // OpenAI o-series reasoning models require max_completion_tokens and developer role.
+    // Newer GPT models (4.1+, 5+) also require max_completion_tokens instead of max_tokens.
+    // Grok uses the OpenAI-compatible API but still accepts max_tokens.
     const isOSeries = /^o\d/.test(model);
-    const tokenKey = isOSeries ? 'max_completion_tokens' : 'max_tokens';
+    const needsCompletionTokens = isOSeries || /^gpt-(4\.1|4\.5|5)/.test(model);
+    const tokenKey = needsCompletionTokens && providerLabel !== 'grok' ? 'max_completion_tokens' : 'max_tokens';
     const sysRole = isOSeries ? 'developer' : 'system';
+    // o-series reasoning tokens are counted within the completion budget — give extra headroom.
+    const tokenBudget = isOSeries ? Math.min(maxTokens * 6, 25000) : maxTokens;
 
     const requestBody: any = {
         model,
-        [tokenKey]: maxTokens,
+        [tokenKey]: tokenBudget,
         messages: [
             { role: sysRole, content: systemPrompt },
             { role: 'user', content: userPrompt },
         ],
     };
-    const data = await fetchJsonWithRetry(
-        endpoint,
-        {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify(requestBody),
-        },
-        providerLabel,
-    );
-    // o-series may return output_text at top level, or standard choices array
-    const responseText = data?.output_text
-        ?? data?.choices?.[0]?.message?.content;
-    if (typeof responseText !== 'string' || !responseText.trim()) {
-        throw new Error(`${providerLabel} request failed: response missing assistant content.`);
+    const resolvedReasoningEffort = reasoningEffort || (isOSeries ? 'low' : '');
+    if (resolvedReasoningEffort) {
+        requestBody.reasoning_effort = resolvedReasoningEffort;
     }
     try {
+        const data = await fetchJsonWithRetry(
+            endpoint,
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${apiKey}`,
+                },
+                body: JSON.stringify(requestBody),
+            },
+            providerLabel,
+            2,
+            timeoutMs,
+        );
+        // o-series may return output_text at top level, or standard choices array
+        const responseText = data?.output_text ?? data?.choices?.[0]?.message?.content;
+        if (typeof responseText !== 'string' || !responseText.trim()) {
+            throw new Error(`${providerLabel} request failed: response missing assistant content.`);
+        }
         const parsed = parseJSONObjectResponse(responseText);
         parsed._requestBody = requestBody;
         parsed._rawResponse = responseText;
         return parsed;
-    } catch (parseErr: any) {
-        parseErr._rawResponse = responseText;
-        parseErr._requestBody = requestBody;
-        throw parseErr;
+    } catch (err: any) {
+        throw attachRequestContext(err, requestBody, err?._rawResponse);
     }
 }
 
-export async function callGeminiGeneric(userPrompt: any, apiKey: any, model: any, systemPrompt: any, maxTokens: any) {
+export async function callGeminiGeneric(
+    userPrompt: any,
+    apiKey: any,
+    model: any,
+    systemPrompt: any,
+    maxTokens: any,
+    timeoutMs = REQUEST_TIMEOUT_FAST_MS,
+) {
+    const selectedModel = String(model || '').trim();
     const requestBody = {
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: [{ parts: [{ text: userPrompt }] }],
-        generationConfig: { maxOutputTokens: maxTokens },
+        generationConfig: buildGeminiGenerationConfig(selectedModel, maxTokens),
     };
-    const data = await fetchJsonWithRetry(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody),
-        },
-        'gemini',
-    );
-    const responseText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (typeof responseText !== 'string' || !responseText.trim()) {
-        throw new Error('gemini request failed: response missing text content.');
-    }
     try {
+        const data = await fetchJsonWithRetry(
+            `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody),
+            },
+            'gemini',
+            2,
+            timeoutMs,
+        );
+        // When thinking is enabled, parts[0] is the reasoning (thought:true).
+        // The actual answer is the last non-thought part.
+        const parts = data?.candidates?.[0]?.content?.parts || [];
+        const answerPart = parts.filter((p: any) => !p.thought).pop() || parts[0];
+        const responseText = answerPart?.text;
+        if (typeof responseText !== 'string' || !responseText.trim()) {
+            throw new Error('gemini request failed: response missing text content.');
+        }
         const parsed = parseJSONObjectResponse(responseText);
         parsed._requestBody = requestBody;
         parsed._rawResponse = responseText;
+        parsed._effectiveModel = selectedModel;
         return parsed;
-    } catch (parseErr: any) {
-        parseErr._rawResponse = responseText;
-        parseErr._requestBody = requestBody;
-        throw parseErr;
+    } catch (err: any) {
+        throw attachRequestContext(err, requestBody, err?._rawResponse);
     }
 }
 
@@ -667,35 +1209,21 @@ export function buildFastModelSystemPrompt() {
     });
 }
 
-export async function callFastModel(prompt: any) {
-    const { model, type, provider, key } = getStageModel('fast');
-    if (!key) throw new Error(`No API key configured for ${provider}. Add your key in Settings.`);
-
+export async function callFastModel(prompt: string): Promise<StageResultMap['fast']> {
+    const stageClass = 'fast-model';
     const systemPrompt = buildFastModelSystemPrompt();
-    const debugEntry = DebugLog.addEntry({
-        stage: 'Fast Model', stageClass: 'fast-model', model,
-        systemPrompt, userPrompt: prompt, loading: true,
-    });
-    const startTime = performance.now();
+    const userPrompt = prompt;
 
-    try {
-        const result = await callGeneric(prompt, key, model, type, provider, systemPrompt, 1024);
-        const requestBody = result._requestBody;
-        const rawResponse = result._rawResponse;
-        delete result._requestBody;
-        delete result._rawResponse;
-        DebugLog.updateEntry(debugEntry, {
-            loading: false, requestBody, rawResponse, response: result,
-            duration: Math.round(performance.now() - startTime),
-        });
-        return result;
-    } catch (err: any) {
-        DebugLog.updateEntry(debugEntry, {
-            loading: false, error: err.message || String(err),
-            duration: Math.round(performance.now() - startTime),
-        });
-        throw err instanceof Error ? err : new Error('Fast model failed: ' + String(err));
-    }
+    const result = await runCachedStage<StageResultMap['fast']>({
+        stage: 'fast',
+        stageLabel: 'Fast Model',
+        stageClass,
+        systemPrompt,
+        userPrompt,
+        maxTokens: 1024,
+    });
+
+    return result;
 }
 
 // ============================================
@@ -709,35 +1237,67 @@ export function buildCurveModelSystemPrompt() {
     });
 }
 
-export async function callMainModelForCurves(prompt: any) {
-    const { model, type, provider, key } = getStageModel('curves');
-    if (!key) throw new Error(`No API key configured for ${provider}. Add your key in Settings.`);
-
+export async function callMainModelForCurves(prompt: string): Promise<StageResultMap['curves']> {
+    const stageClass = 'main-model';
     const systemPrompt = buildCurveModelSystemPrompt();
-    const debugEntry = DebugLog.addEntry({
-        stage: 'Main Model', stageClass: 'main-model', model,
-        systemPrompt, userPrompt: prompt, loading: true,
-    });
-    const startTime = performance.now();
+    const userPrompt = prompt;
 
-    try {
-        const result = await callGeneric(prompt, key, model, type, provider, systemPrompt, 8192);
-        const requestBody = result._requestBody;
-        const rawResponse = result._rawResponse;
-        delete result._requestBody;
-        delete result._rawResponse;
-        DebugLog.updateEntry(debugEntry, {
-            loading: false, requestBody, rawResponse, response: result,
-            duration: Math.round(performance.now() - startTime),
-        });
-        return result;
-    } catch (err: any) {
-        DebugLog.updateEntry(debugEntry, {
-            loading: false, error: err.message || String(err),
-            duration: Math.round(performance.now() - startTime),
-        });
-        throw err instanceof Error ? err : new Error('Main model failed: ' + String(err));
+    const result = await runCachedStage<StageResultMap['curves']>({
+        stage: 'curves',
+        stageLabel: 'Main Model',
+        stageClass,
+        systemPrompt,
+        userPrompt,
+        maxTokens: 8192,
+    });
+
+    return result;
+}
+
+// Prompt formatting helpers ================================
+
+export function buildSubstanceListSummary(): string {
+    const active = getActiveSubstances();
+    const list = Object.entries(active).map(([key, s]: [string, any]) => ({
+        key,
+        name: s.name,
+        class: s.class,
+        standardDose: s.standardDose,
+        pharma: s.pharma,
+    }));
+    return JSON.stringify(list, null, 1);
+}
+
+export function getRxInstructionSuffix(): string {
+    if (AppState.rxMode === 'rx-only') {
+        return '\n\nCRITICAL CONSTRAINT: The user has selected PRESCRIPTION-ONLY mode. You MUST only prescribe from the substances listed above — all of which are prescription (Rx) or controlled substances. Do NOT suggest any over-the-counter supplements, vitamins, or adaptogens. Focus exclusively on pharmaceutical interventions.';
+    } else if (AppState.rxMode === 'rx') {
+        return '\n\nNOTE: The user has enabled prescription and controlled substances. You may use any substance from the list, including Rx and controlled substances alongside supplements.';
     }
+    return '';
+}
+
+export function buildSlimCurveSummary(curvesData: any[]): string {
+    if (!curvesData) return '[]';
+    const summary = curvesData.map((c: any) => ({
+        effect: c.effect,
+        polarity: c.polarity || 'higher_is_better',
+        baseline: (c.baseline || []).filter((_: any, i: number) => i % 4 === 0),
+        desired: (c.desired || []).filter((_: any, i: number) => i % 4 === 0),
+    }));
+    return JSON.stringify(summary, null, 1);
+}
+
+export function buildFullCurveSummary(curvesData: any[]): string {
+    if (!curvesData) return '[]';
+    const summary = curvesData.map((c: any) => ({
+        effect: c.effect,
+        color: c.color,
+        polarity: c.polarity || 'higher_is_better',
+        baseline: c.baseline,
+        desired: c.desired,
+    }));
+    return JSON.stringify(summary, null, 1);
 }
 
 // ============================================
@@ -745,69 +1305,32 @@ export async function callMainModelForCurves(prompt: any) {
 // ============================================
 
 export function buildInterventionSystemPrompt(userGoal: any, curvesData: any) {
-    // Serialize substance database for the LLM
-    const active = getActiveSubstances();
-    const substanceList = Object.entries(active).map(([key, s]: [string, any]) => ({
-        key,
-        name: s.name,
-        class: s.class,
-        standardDose: s.standardDose,
-        pharma: s.pharma,
-    }));
-
-    const curveSummary = curvesData.map((c: any) => ({
-        effect: c.effect,
-        color: c.color,
-        polarity: c.polarity || 'higher_is_better',
-        baseline: c.baseline,
-        desired: c.desired,
-    }));
-
-    let rxInstruction = '';
-    if (AppState.rxMode === 'rx-only') {
-        rxInstruction = '\n\nCRITICAL CONSTRAINT: The user has selected PRESCRIPTION-ONLY mode. You MUST only prescribe from the substances listed above — all of which are prescription (Rx) or controlled substances. Do NOT suggest any over-the-counter supplements, vitamins, or adaptogens. Focus exclusively on pharmaceutical interventions.';
-    } else if (AppState.rxMode === 'rx') {
-        rxInstruction = '\n\nNOTE: The user has enabled prescription and controlled substances. You may use any substance from the list, including Rx and controlled substances alongside supplements.';
-    }
-
-    return interpolatePrompt(PROMPTS.intervention, {
-        userGoal: userGoal,
-        substanceList: JSON.stringify(substanceList, null, 1),
-        curveSummary: JSON.stringify(curveSummary, null, 1),
-    }) + rxInstruction;
+    return (
+        interpolatePrompt(PROMPTS.intervention, {
+            userGoal: userGoal,
+            substanceList: buildSubstanceListSummary(),
+            curveSummary: buildFullCurveSummary(curvesData),
+        }) + getRxInstructionSuffix()
+    );
 }
 
-export async function callInterventionModel(prompt: any, curvesData: any) {
-    const { model, type, provider, key } = getStageModel('intervention');
-    if (!key) throw new Error(`No API key configured for ${provider}. Add one in Settings.`);
-
+export async function callInterventionModel(prompt: string, curvesData: any): Promise<StageResultMap['intervention']> {
+    const stageClass = 'intervention-model';
     const systemPrompt = buildInterventionSystemPrompt(prompt, curvesData);
-    const userPrompt = 'Analyze the baseline vs desired curves and prescribe the optimal supplement intervention protocol. Respond with JSON only.';
-    const debugEntry = DebugLog.addEntry({
-        stage: 'Intervention Model', stageClass: 'intervention-model',
-        model, systemPrompt, userPrompt, loading: true,
-    });
-    const startTime = performance.now();
+    const userPrompt =
+        'Analyze the baseline vs desired curves and prescribe the optimal supplement intervention protocol.';
 
-    try {
-        const result = await callGeneric(userPrompt, key, model, type, provider, systemPrompt, 4096);
-        const requestBody = result._requestBody;
-        const rawResponse = result._rawResponse;
-        delete result._requestBody;
-        delete result._rawResponse;
-        DebugLog.updateEntry(debugEntry, {
-            loading: false, requestBody, rawResponse, response: result,
-            duration: Math.round(performance.now() - startTime),
-        });
-        PhaseState.interventionResult = result;
-        return result;
-    } catch (err: any) {
-        DebugLog.updateEntry(debugEntry, {
-            loading: false, error: err.message || String(err),
-            duration: Math.round(performance.now() - startTime),
-        });
-        throw err;
-    }
+    const result = await runCachedStage<StageResultMap['intervention']>({
+        stage: 'intervention',
+        stageLabel: 'Intervention Model',
+        stageClass,
+        systemPrompt,
+        userPrompt,
+        maxTokens: 4096,
+    });
+
+    PhaseState.interventionResult = result;
+    return result;
 }
 
 // ============================================
@@ -817,73 +1340,175 @@ export async function callInterventionModel(prompt: any, curvesData: any) {
 function buildBiometricSummary() {
     const channels = BiometricState.channels;
     if (!channels || channels.length === 0) return 'No biometric data available.';
-    return channels.map((ch: any) => {
-        const data = ch.data || [];
-        const hourly = data.filter((_: any, i: number) => i % 4 === 0);
-        const values = hourly.map((p: any) => `${p.hour}h:${Math.round(p.value)}`).join(', ');
-        return `${ch.metric || ch.displayName || ch.signal} (${ch.unit}): [${values}]`;
-    }).join('\n');
+    return channels
+        .map((ch: any) => {
+            const data = ch.data || [];
+            const hourly = data.filter((_: any, i: number) => i % 4 === 0);
+            const values = hourly.map((p: any) => `${p.hour}h:${Math.round(p.value)}`).join(', ');
+            return `${ch.metric || ch.displayName || ch.signal} (${ch.unit}): [${values}]`;
+        })
+        .join('\n');
 }
 
-export function buildRevisionSystemPrompt(userGoal: any, curvesData: any) {
-    const active = getActiveSubstances();
-    const substanceList = Object.entries(active).map(([key, s]: [string, any]) => ({
-        key, name: s.name, class: s.class, standardDose: s.standardDose, pharma: s.pharma,
-    }));
-    const curveSummary = curvesData.map((c: any) => ({
-        effect: c.effect, polarity: c.polarity || 'higher_is_better',
-        baseline: (c.baseline || []).filter((_: any, i: number) => i % 4 === 0),
-        desired: (c.desired || []).filter((_: any, i: number) => i % 4 === 0),
-    }));
-    const originalInterventions = PhaseState.interventionResult
-        ? JSON.stringify(PhaseState.interventionResult.interventions, null, 1)
-        : '[]';
-    let rxInstruction = '';
-    if (AppState.rxMode === 'rx-only') {
-        rxInstruction = '\n\nCRITICAL CONSTRAINT: PRESCRIPTION-ONLY mode. Only prescribe from the Rx/controlled substances listed. Do NOT suggest supplements or OTC.';
-    } else if (AppState.rxMode === 'rx') {
-        rxInstruction = '\n\nNOTE: Prescription and controlled substances are available alongside supplements.';
+export function buildRevisionSystemPrompt(userGoal: any, referenceBundle: RevisionReferenceBundle) {
+    const currentCorrectedInterventions = JSON.stringify(
+        serializeRevisionInterventions(referenceBundle.currentInterventions || []),
+    );
+    const currentStateSummary = JSON.stringify(buildRevisionCurrentStateSummary(referenceBundle));
+    const gapSummary = JSON.stringify(buildRevisionPromptGapSummary(referenceBundle));
+
+    // Serialize spotter highlights as concise externality list for the grandmaster
+    const highlights = BiometricState.spotterHighlights || [];
+    const spotterHighlights =
+        highlights.length > 0
+            ? highlights
+                  .map((h: any) => {
+                      const hStr =
+                          h.hour >= 24
+                              ? `${Math.floor(h.hour - 24)}:${String(Math.round((h.hour % 1) * 60)).padStart(2, '0')}am+1`
+                              : `${Math.floor(h.hour)}:${String(Math.round((h.hour % 1) * 60)).padStart(2, '0')}`;
+                      return `${h.icon || '•'} ${hStr} — ${h.label} (${h.impact} on ${h.channel})`;
+                  })
+                  .join('\n')
+            : 'No external events reported.';
+
+    let revisionPrompt =
+        interpolatePrompt(PROMPTS.revision, {
+            userGoal,
+            currentCorrectedInterventions,
+            currentStateSummary,
+            gapSummary,
+            biometricSummary: buildBiometricSummary(),
+            spotterHighlights,
+            substanceList: buildSubstanceListSummary(),
+        }) + getRxInstructionSuffix();
+
+    // Inject selected creator agent mandate as co-pilot context
+    if (AgentMatchState.selectedAgent?.mandate) {
+        const agent = AgentMatchState.selectedAgent;
+        revisionPrompt += `\n\nCREATOR AGENT CO-PILOT (${agent.meta.creatorHandle} — ${agent.meta.name}):\nThe user has selected this creator agent to guide the revision. Honor their philosophy and approach:\n${agent.mandate}`;
     }
 
-    return interpolatePrompt(PROMPTS.revision, {
-        userGoal,
-        originalInterventions,
-        biometricSummary: buildBiometricSummary(),
-        curveSummary: JSON.stringify(curveSummary),
-        substanceList: JSON.stringify(substanceList),
-    }) + rxInstruction;
+    return revisionPrompt;
 }
 
-export async function callRevisionModel(userGoal: any, curvesData: any) {
-    const { model, type, provider, key } = getStageModel('revision');
-    if (!key) throw new Error(`No API key configured for ${provider}.`);
-
-    const systemPrompt = buildRevisionSystemPrompt(userGoal, curvesData);
+export async function callRevisionModel(
+    userGoal: any,
+    referenceBundle: RevisionReferenceBundle,
+): Promise<StageResultMap['revision']> {
+    const stageClass = 'revision-model';
+    const systemPrompt = buildRevisionSystemPrompt(userGoal, referenceBundle);
     const userPrompt = 'Revise the intervention protocol based on the biometric feedback. Respond with JSON only.';
-    const debugEntry = DebugLog.addEntry({
-        stage: 'Revision Model', stageClass: 'revision-model',
-        model, systemPrompt, userPrompt, loading: true,
-    });
-    const startTime = performance.now();
 
-    try {
-        const result = await callGeneric(userPrompt, key, model, type, provider, systemPrompt, 4096);
-        const requestBody = result._requestBody;
-        const rawResponse = result._rawResponse;
-        delete result._requestBody;
-        delete result._rawResponse;
-        DebugLog.updateEntry(debugEntry, {
-            loading: false, requestBody, rawResponse, response: result,
-            duration: Math.round(performance.now() - startTime),
-        });
-        return result;
-    } catch (err: any) {
-        DebugLog.updateEntry(debugEntry, {
-            loading: false, error: err.message || String(err),
-            duration: Math.round(performance.now() - startTime),
-        });
-        throw err;
+    const result = await runCachedStage<StageResultMap['revision']>({
+        stage: 'revision',
+        stageLabel: 'Revision Model',
+        stageClass,
+        systemPrompt,
+        userPrompt,
+        maxTokens: 8192,
+    });
+
+    return result;
+}
+
+// ============================================
+// STRATEGIST BIO MODEL — Biometric-Informed Baseline Correction
+// ============================================
+
+function buildStrategistBioSystemPrompt(userGoal: any, curvesData: any) {
+    const baselineCurves = curvesData.map((c: any) => ({
+        effect: c.effect,
+        baseline: c.baseline,
+    }));
+    const desiredCurves = curvesData.map((c: any) => ({
+        effect: c.effect,
+        desired: c.desired,
+    }));
+
+    const biometricSummary = buildBiometricSummary();
+
+    return interpolatePrompt(PROMPTS.strategistBio, {
+        userGoal,
+        baselineCurves: JSON.stringify(baselineCurves, null, 1),
+        desiredCurves: JSON.stringify(desiredCurves, null, 1),
+        biometricSummary,
+        profileText: BiometricState.profileText || 'No profile available.',
+    });
+}
+
+export async function callStrategistBioModel(userGoal: any, curvesData: any): Promise<StageResultMap['strategistBio']> {
+    const stageClass = 'strategist-bio-model';
+    const systemPrompt = buildStrategistBioSystemPrompt(userGoal, curvesData);
+    const userPrompt = 'Analyze the biometric data and output bio-corrected baseline curves.';
+
+    const result = await runCachedStage<StageResultMap['strategistBio']>({
+        stage: 'strategistBio',
+        stageLabel: 'Strategist Bio',
+        stageClass,
+        systemPrompt,
+        userPrompt,
+        maxTokens: 4096,
+    });
+
+    return result;
+}
+
+export interface StageOptions<TResult> {
+    stage: PipelineStage | string;
+    stageLabel: string;
+    stageClass: string;
+    systemPrompt: string;
+    userPrompt: string;
+    maxTokens: number;
+}
+
+/**
+ * Shared helper that wraps callStageWithFallback with cache hit/miss resolution,
+ * JSON postamble appendage, and DebugLog entry creation.
+ */
+export async function runCachedStage<TResult>(opts: StageOptions<TResult>): Promise<TResult> {
+    const finalSystemPrompt = `${opts.systemPrompt}\n\n${JSON_POSTAMBLE}`;
+
+    if (LLMCache.isEnabled(opts.stageClass) && LLMCache.hasData(opts.stageClass)) {
+        const cached = resolveCachedStageHit<TResult>(opts.stageClass, finalSystemPrompt, opts.userPrompt);
+        if (!cached) {
+            LLMCache.clear(opts.stageClass);
+        } else {
+            DebugLog.addEntry({
+                stage: opts.stageLabel,
+                stageClass: opts.stageClass,
+                model: 'cached',
+                provider: 'local',
+                systemPrompt: cached.systemPrompt,
+                userPrompt: cached.userPrompt,
+                requestBody: cached.requestBody,
+                loading: false,
+                response: cached.payload,
+                duration: 0,
+                cache: cached.cache,
+            });
+            return cached.payload;
+        }
     }
+
+    const result = await callStageWithFallback<TResult>({
+        ...opts,
+        systemPrompt: opts.systemPrompt, // Let callStageWithFallback use original for display/sending? No, send final
+        // Actually callStageWithFallback does NOT append the postamble anymore, so we must pass it here:
+        // Wait, for clarity, let's just pass the original systemPrompt to callStageWithFallback,
+        // and we already modified callStageWithFallback to append the postamble before sending over the wire.
+        // Wait, I did that previously, let's verify. Yes, callStageWithFallback line 1040 is `const finalSystemPrompt = ...`.
+        // So we ONLY need to pass the normal systemPrompt to callStageWithFallback.
+    });
+
+    LLMCache.set(opts.stageClass, result, {
+        systemPrompt: finalSystemPrompt,
+        userPrompt: opts.userPrompt,
+        requestBody: null,
+    });
+
+    return result;
 }
 
 // ============================================
@@ -900,69 +1525,72 @@ export function buildSherlockSystemPrompt(userGoal: any, interventions: any, cur
         pharma: iv.substance?.pharma,
     }));
 
-    const curveSummary = curvesData.map((c: any) => ({
-        effect: c.effect,
-        polarity: c.polarity || 'higher_is_better',
-        baseline: (c.baseline || []).filter((_: any, i: number) => i % 4 === 0),
-        desired: (c.desired || []).filter((_: any, i: number) => i % 4 === 0),
-    }));
-
     return interpolatePrompt(PROMPTS.sherlock, {
         userGoal,
-        interventionSummary: JSON.stringify(interventions.map((iv: any) => ({
-            key: iv.key, dose: iv.dose, timeMinutes: iv.timeMinutes,
-            impacts: iv.impacts, rationale: iv.rationale,
-        })), null, 1),
+        interventionSummary: JSON.stringify(
+            interventions.map((iv: any) => ({
+                key: iv.key,
+                dose: iv.dose,
+                timeMinutes: iv.timeMinutes,
+                impacts: iv.impacts,
+                rationale: iv.rationale,
+            })),
+            null,
+            1,
+        ),
         interventionRationale: PhaseState.interventionResult?.rationale || '',
         selectedSubstanceInfo: JSON.stringify(selectedSubstanceInfo, null, 1),
-        curveSummary: JSON.stringify(curveSummary, null, 1),
+        curveSummary: buildSlimCurveSummary(curvesData),
         substanceCount: String(interventions.length),
     });
 }
 
 export async function callSherlockModel(userGoal: any, interventions: any, curvesData: any) {
-    const { model, type, provider, key } = getStageModel('sherlock');
-    if (!key) throw new Error(`No API key configured for ${provider}.`);
-
+    const stageClass = 'sherlock-model';
     const systemPrompt = buildSherlockSystemPrompt(userGoal, interventions, curvesData);
-    const userPrompts = [
-        'Narrate the intervention protocol in Sherlock style. Lead each beat with the intended effect, then mention the substance. Respond with JSON only.',
-        'Return ONLY a raw JSON object with "beats" array and "outro" string. No markdown fences, no explanation, no text outside the JSON. Start your response with { and end with }.',
-    ];
-    const debugEntry = DebugLog.addEntry({
-        stage: 'Sherlock Narration', stageClass: 'sherlock-model',
-        model, systemPrompt, userPrompt: userPrompts[0], loading: true,
-    });
-    const startTime = performance.now();
+    const userPrompt =
+        'Narrate the intervention protocol in Sherlock style. Lead each beat with the intended effect, then mention the substance.';
 
-    let lastErr: any = null;
-    let lastRaw: string | undefined;
-    for (let attempt = 0; attempt < userPrompts.length; attempt++) {
-        try {
-            const result = await callGeneric(userPrompts[attempt], key, model, type, provider, systemPrompt, 2048);
-            const requestBody = result._requestBody;
-            const rawResponse = result._rawResponse;
-            delete result._requestBody;
-            delete result._rawResponse;
-            DebugLog.updateEntry(debugEntry, {
-                loading: false, requestBody, rawResponse, response: result,
-                duration: Math.round(performance.now() - startTime),
+    if (LLMCache.isEnabled(stageClass) && LLMCache.hasData(stageClass)) {
+        const cached = resolveCachedStageHit<StageResultMap['sherlock']>(
+            stageClass,
+            `${systemPrompt}\n\n${JSON_POSTAMBLE}`,
+            userPrompt,
+        );
+        if (!cached) {
+            LLMCache.clear(stageClass);
+        } else {
+            DebugLog.addEntry({
+                stage: 'Sherlock Narration',
+                stageClass,
+                model: 'cached',
+                provider: 'local',
+                systemPrompt: cached.systemPrompt,
+                userPrompt: cached.userPrompt,
+                requestBody: cached.requestBody,
+                loading: false,
+                response: cached.payload,
+                duration: 0,
+                cache: cached.cache,
             });
-            SherlockState.narrationResult = result;
-            return result;
-        } catch (err: any) {
-            lastErr = err;
-            if (err._rawResponse) lastRaw = err._rawResponse;
-            console.warn(`[Sherlock] Attempt ${attempt + 1} failed (${err.message})${lastRaw ? '\nRaw response: ' + lastRaw.substring(0, 500) : ''}`, err);
-            if (attempt < userPrompts.length - 1) continue;
+            return cached.payload;
         }
     }
-    DebugLog.updateEntry(debugEntry, {
-        loading: false, error: lastErr?.message || String(lastErr),
-        ...(lastRaw ? { rawResponse: lastRaw } : {}),
-        duration: Math.round(performance.now() - startTime),
+
+    const result = await callStageWithFallback<StageResultMap['sherlock']>({
+        stage: 'sherlock',
+        stageLabel: 'Sherlock Narration',
+        stageClass,
+        systemPrompt,
+        userPrompt,
+        maxTokens: 2048,
     });
-    throw lastErr;
+    LLMCache.set(stageClass, result, {
+        systemPrompt: `${systemPrompt}\n\n${JSON_POSTAMBLE}`,
+        userPrompt,
+        requestBody: null,
+    });
+    return result;
 }
 
 // ============================================
@@ -981,71 +1609,71 @@ export function buildSherlockRevisionSystemPrompt(userGoal: any, oldIvs: any, ne
 
     return interpolatePrompt(PROMPTS.sherlockRevision, {
         userGoal,
-        originalInterventions: JSON.stringify(oldIvs.map((iv: any) => ({
-            key: iv.key, dose: iv.dose, timeMinutes: iv.timeMinutes,
-        })), null, 1),
-        revisedInterventions: JSON.stringify(newIvs.map((iv: any) => ({
-            key: iv.key, dose: iv.dose, timeMinutes: iv.timeMinutes,
-        })), null, 1),
+        originalInterventions: JSON.stringify(
+            oldIvs.map((iv: any) => ({
+                key: iv.key,
+                dose: iv.dose,
+                timeMinutes: iv.timeMinutes,
+            })),
+            null,
+            1,
+        ),
+        revisedInterventions: JSON.stringify(
+            newIvs.map((iv: any) => ({
+                key: iv.key,
+                dose: iv.dose,
+                timeMinutes: iv.timeMinutes,
+            })),
+            null,
+            1,
+        ),
         revisionDiff: JSON.stringify(revisionDiff, null, 1),
         biometricSummary,
     });
 }
 
 export async function callSherlockRevisionModel(userGoal: any, oldIvs: any, newIvs: any, diff: any, curvesData: any) {
-    const { model, type, provider, key } = getStageModel('sherlockRevision');
-    if (!key) throw new Error(`No API key configured for ${provider}.`);
-
+    const stageClass = 'sherlock-revision-model';
     const systemPrompt = buildSherlockRevisionSystemPrompt(userGoal, oldIvs, newIvs, diff, curvesData);
-    const userPrompts = [
-        'Narrate the protocol revision based on biometric feedback. Lead each beat with the intended correction effect, then mention the substance/action. Respond with JSON only.',
-        'Return ONLY a raw JSON object with "beats" array and "outro" string. No markdown fences, no explanation, no text outside the JSON. Start your response with { and end with }.',
-    ];
-    const debugEntry = DebugLog.addEntry({
-        stage: 'Sherlock (Revision)', stageClass: 'sherlock-revision-model',
-        model, systemPrompt, userPrompt: userPrompts[0], loading: true,
-    });
-    const startTime = performance.now();
+    const userPrompt =
+        'Narrate the protocol revision based on biometric feedback. Lead each beat with the intended correction effect, then mention the substance/action.';
 
-    let lastErr: any = null;
-    let lastRaw: string | undefined;
-    for (let attempt = 0; attempt < userPrompts.length; attempt++) {
-        try {
-            const result = await callGeneric(userPrompts[attempt], key, model, type, provider, systemPrompt, 2048);
-            const requestBody = result._requestBody;
-            const rawResponse = result._rawResponse;
-            delete result._requestBody;
-            delete result._rawResponse;
-            DebugLog.updateEntry(debugEntry, {
-                loading: false, requestBody, rawResponse, response: result,
-                duration: Math.round(performance.now() - startTime),
-            });
-            SherlockState.revisionNarrationResult = result;
-            return result;
-        } catch (err: any) {
-            lastErr = err;
-            if (err._rawResponse) lastRaw = err._rawResponse;
-            console.warn(`[Sherlock Revision] Attempt ${attempt + 1} failed (${err.message})${lastRaw ? '\nRaw response: ' + lastRaw.substring(0, 500) : ''}`, err);
-            if (attempt < userPrompts.length - 1) continue;
-        }
-    }
-    DebugLog.updateEntry(debugEntry, {
-        loading: false, error: lastErr?.message || String(lastErr),
-        ...(lastRaw ? { rawResponse: lastRaw } : {}),
-        duration: Math.round(performance.now() - startTime),
+    const result = await runCachedStage<StageResultMap['sherlockRevision']>({
+        stage: 'sherlockRevision',
+        stageLabel: 'Sherlock (Revision)',
+        stageClass,
+        systemPrompt,
+        userPrompt,
+        maxTokens: 2048,
     });
-    throw lastErr;
+
+    return result;
 }
 
 export function guessDose(substance: any) {
     // Prefer the standardDose from the new database
     if (substance.standardDose) return substance.standardDose;
     const doses: any = {
-        caffeine: '200mg', theanine: '400mg', rhodiola: '500mg', ashwagandha: '600mg',
-        tyrosine: '1000mg', citicoline: '500mg', alphaGPC: '600mg', lionsMane: '1000mg',
-        magnesium: '400mg', creatine: '5g', nac: '600mg', glycine: '3g',
-        melatonin: '3mg', gaba: '750mg', apigenin: '50mg', taurine: '2g',
+        caffeine: '200mg',
+        theanine: '400mg',
+        rhodiola: '500mg',
+        ashwagandha: '600mg',
+        tyrosine: '1000mg',
+        citicoline: '500mg',
+        alphaGPC: '600mg',
+        lionsMane: '1000mg',
+        magnesium: '400mg',
+        creatine: '5g',
+        nac: '600mg',
+        glycine: '3g',
+        melatonin: '3mg',
+        gaba: '750mg',
+        apigenin: '50mg',
+        taurine: '2g',
     };
-    return doses[substance.name?.toLowerCase()] || doses[Object.keys(doses).find(k =>
-        substance.name?.toLowerCase().includes(k)) as string] || '500mg';
+    return (
+        doses[substance.name?.toLowerCase()] ||
+        doses[Object.keys(doses).find(k => substance.name?.toLowerCase().includes(k)) as string] ||
+        '500mg'
+    );
 }

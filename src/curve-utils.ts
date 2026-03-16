@@ -1,5 +1,10 @@
+/**
+ * Curve Utils — Path generation for SVG curves: smoothing, points-to-path, fill-path, band-path, peak/trough finding, and interpolation.
+ * Exports: smoothPhaseValues, phasePointsToPath, phasePointsToFillPath, phaseBandPath, buildProgressiveMorphPoints, findCurvePeak, nearestLevel, interpolatePointsAtTime
+ * Depends on: constants (PHASE_CHART, DESCRIPTOR_LEVELS), utils (phaseChartX, phaseChartY)
+ */
 import { PHASE_CHART, PHASE_SMOOTH_PASSES, DESCRIPTOR_LEVELS } from './constants';
-import { phaseChartX, phaseChartY } from './utils';
+import { phaseChartX, phaseChartY, clamp } from './utils';
 
 export function smoothPhaseValues(points: any, passes = 3) {
     if (!points || points.length < 5 || passes <= 0) return points || [];
@@ -11,11 +16,7 @@ export function smoothPhaseValues(points: any, passes = 3) {
         const next = [vals[0], vals[1]];
         for (let i = 2; i < vals.length - 2; i++) {
             next.push(
-                vals[i - 2] * 0.08 +
-                vals[i - 1] * 0.24 +
-                vals[i] * 0.36 +
-                vals[i + 1] * 0.24 +
-                vals[i + 2] * 0.08
+                vals[i - 2] * 0.08 + vals[i - 1] * 0.24 + vals[i] * 0.36 + vals[i + 1] * 0.24 + vals[i + 2] * 0.08,
             );
         }
         next.push(vals[vals.length - 2], vals[vals.length - 1]);
@@ -70,7 +71,7 @@ export function phasePointsToPath(points: any, alreadySmoothed = false) {
         } else {
             const w1 = 2 * dx[i] + dx[i - 1];
             const w2 = dx[i] + 2 * dx[i - 1];
-            t[i] = (w1 + w2) / ((w1 / m[i - 1]) + (w2 / m[i]));
+            t[i] = (w1 + w2) / (w1 / m[i - 1] + w2 / m[i]);
         }
     }
 
@@ -169,17 +170,19 @@ export function levelIndex(value: number): number {
 
 export function levelStep(value: number, direction: 1 | -1): number {
     const idx = levelIndex(value);
-    const newIdx = Math.max(0, Math.min(DESCRIPTOR_LEVELS.length - 1, idx + direction));
+    const newIdx = clamp(idx + direction, 0, DESCRIPTOR_LEVELS.length - 1);
     return DESCRIPTOR_LEVELS[newIdx];
 }
 
 /** Map old 5-level descriptors {0,25,50,75,100} to 10-level format */
 export function normalizeLevels(levels: Record<string, string>): Record<string, string> {
-    const keys = Object.keys(levels).map(Number).sort((a, b) => a - b);
+    const keys = Object.keys(levels)
+        .map(Number)
+        .sort((a, b) => a - b);
     if (keys.length >= 9) return levels;
     const normalized: Record<string, string> = {};
     for (const newLevel of DESCRIPTOR_LEVELS) {
-        const nearest = keys.reduce((a, b) => Math.abs(b - newLevel) < Math.abs(a - newLevel) ? b : a);
+        const nearest = keys.reduce((a, b) => (Math.abs(b - newLevel) < Math.abs(a - newLevel) ? b : a));
         normalized[String(newLevel)] = levels[String(nearest)] || '';
     }
     return normalized;
@@ -216,4 +219,21 @@ export function interpolatePointsAtTime(pts: any, timeH: any) {
 /** Linear interpolation of Lx curve value at any minute (legacy wrapper) */
 export function interpolateLxValue(lxCurve: any, timeMinutes: any) {
     return interpolatePointsAtTime(lxCurve.points, timeMinutes / 60);
+}
+
+/** Interpolate between two same-length point arrays by a 0→1 progress factor. */
+export function interpolatePointArrays(
+    fromPts: { hour: number; value: number }[],
+    toPts: { hour: number; value: number }[],
+    progress: number,
+): { hour: number; value: number }[] {
+    const len = Math.min(fromPts.length, toPts.length);
+    const result: { hour: number; value: number }[] = [];
+    for (let i = 0; i < len; i++) {
+        result.push({
+            hour: toPts[i].hour,
+            value: fromPts[i].value + (toPts[i].value - fromPts[i].value) * progress,
+        });
+    }
+    return result;
 }

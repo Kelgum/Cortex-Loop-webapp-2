@@ -2,20 +2,17 @@
 // TIMELINE RIBBON UI
 // ============================================
 // Canvas-based bottom ribbon showing colored animation segments,
-// a draggable playhead, phase markers, and transport controls.
+// phase markers, and the live playhead.
 
-import {
-    TimelineEngine, SegmentCategory, SEGMENT_COLORS,
-    type AnimationSegment,
-} from './timeline-engine';
-import { TimelineState } from './state';
+import { TimelineEngine, SEGMENT_COLORS, type AnimationSegment } from './timeline-engine';
+import { settingsStore, STORAGE_KEYS } from './settings-store';
+import { isLightMode, formatMsAsTimestamp } from './utils';
 
 const RIBBON_HEIGHT = 64;
 const TRACK_HEIGHT = 14;
-const TRACK_PAD_TOP = 4;  // padding above track within canvas
+const TRACK_PAD_TOP = 4;
 const PLAYHEAD_W = 2;
 const LABEL_FONT = '10px "IBM Plex Mono", monospace';
-const TIME_FONT = '11px "IBM Plex Mono", monospace';
 
 export class TimelineRibbon {
     private container: HTMLDivElement;
@@ -25,35 +22,31 @@ export class TimelineRibbon {
     private speedBtn: HTMLButtonElement;
     private timeDisplay: HTMLSpanElement;
     private toggleBtn: HTMLButtonElement;
-    private _collapsed: boolean = localStorage.getItem('cortex_ribbon_collapsed') === 'true';
+    private collapsed: boolean = settingsStore.getBoolean(STORAGE_KEYS.ribbonCollapsed, false);
 
     private engine: TimelineEngine;
-    private dpr: number = 1;
-    private canvasW: number = 0;
-    private canvasH: number = RIBBON_HEIGHT;
+    private dpr = 1;
+    private canvasW = 0;
+    private canvasH = RIBBON_HEIGHT;
 
-    // Track layout (computed from canvas size)
-    private trackLeft: number = 0;
-    private trackRight: number = 0;
-    private trackW: number = 0;
-    private trackY: number = TRACK_PAD_TOP;
+    private trackLeft = 0;
+    private trackRight = 0;
+    private trackW = 0;
+    private trackY = TRACK_PAD_TOP;
 
-    // Interaction state
-    private dragging: boolean = false;
     private hoveredSegment: AnimationSegment | null = null;
-    private tooltipX: number = 0;
-    private tooltipY: number = 0;
-    private hoverPlayheadX: number = -1; // FCP-style hover playhead (-1 = hidden)
+    private tooltipX = 0;
+    private tooltipY = 0;
+    private hoverPlayheadX = -1;
     private renderedBlocks: { seg: AnimationSegment; x: number; y: number; w: number; h: number }[] = [];
+    private liveHorizonTime = 0;
 
-    // Cleanup
     private unsubscribe: (() => void) | null = null;
     private resizeObserver: ResizeObserver | null = null;
 
     constructor(engine: TimelineEngine) {
         this.engine = engine;
 
-        // Build DOM
         this.container = document.getElementById('timeline-ribbon') as HTMLDivElement;
         if (!this.container) throw new Error('Missing #timeline-ribbon');
 
@@ -66,8 +59,8 @@ export class TimelineRibbon {
 
         this.setupCanvas();
         this.bindEvents();
+        this.refreshControls();
 
-        // Subscribe to engine updates
         this.unsubscribe = engine.on((event, data) => {
             switch (event) {
                 case 'time-update':
@@ -94,9 +87,9 @@ export class TimelineRibbon {
 
     show(): void {
         this.container.classList.add('visible');
+        this.refreshControls();
 
-        // Restore persisted collapsed state
-        if (this._collapsed) {
+        if (this.collapsed) {
             this.container.classList.add('collapsed');
             document.body.classList.add('timeline-collapsed');
             this.toggleBtn.setAttribute('aria-label', 'Show timeline');
@@ -104,7 +97,6 @@ export class TimelineRibbon {
             document.body.classList.add('timeline-active');
         }
 
-        // Recompute canvas size after CSS transition
         setTimeout(() => this.setupCanvas(), 350);
     }
 
@@ -115,23 +107,19 @@ export class TimelineRibbon {
     }
 
     toggleCollapse(): void {
-        this._collapsed = !this._collapsed;
-        this.container.classList.toggle('collapsed', this._collapsed);
-        document.body.classList.toggle('timeline-collapsed', this._collapsed);
+        this.collapsed = !this.collapsed;
+        this.container.classList.toggle('collapsed', this.collapsed);
+        document.body.classList.toggle('timeline-collapsed', this.collapsed);
+        settingsStore.setString(STORAGE_KEYS.ribbonCollapsed, String(this.collapsed));
 
-        // Persist preference across sessions
-        localStorage.setItem('cortex_ribbon_collapsed', String(this._collapsed));
-
-        // When the ribbon is collapsed, release chart height; when expanded, reclaim it
-        if (this._collapsed) {
+        if (this.collapsed) {
             document.body.classList.remove('timeline-active');
         } else {
             document.body.classList.add('timeline-active');
-            // Recompute canvas size after expand transition
             setTimeout(() => this.setupCanvas(), 350);
         }
 
-        this.toggleBtn.setAttribute('aria-label', this._collapsed ? 'Show timeline' : 'Hide timeline');
+        this.toggleBtn.setAttribute('aria-label', this.collapsed ? 'Show timeline' : 'Hide timeline');
     }
 
     destroy(): void {
@@ -140,11 +128,8 @@ export class TimelineRibbon {
         this.unsubscribe = null;
         this.resizeObserver?.disconnect();
         this.resizeObserver = null;
-        this.dragging = false;
         this.hide();
     }
-
-    // --- Canvas setup ---
 
     private setupCanvas(): void {
         this.dpr = window.devicePixelRatio || 1;
@@ -158,7 +143,6 @@ export class TimelineRibbon {
         this.trackLeft = 8;
         this.trackRight = this.canvasW - 8;
         this.trackW = this.trackRight - this.trackLeft;
-        // Base track Y is at the bottom. We stack rows upwards from here.
         this.trackY = Math.max(TRACK_PAD_TOP, this.canvasH - TRACK_HEIGHT - 2);
 
         if (!this.resizeObserver) {
@@ -169,77 +153,46 @@ export class TimelineRibbon {
         this.redraw();
     }
 
-    // --- Event binding ---
-
     private bindEvents(): void {
         this.playBtn.addEventListener('click', this.onPlayClick);
         this.speedBtn.addEventListener('click', this.onSpeedClick);
         this.toggleBtn.addEventListener('click', this.onToggleClick);
-
-        // Canvas interactions
-        this.canvas.addEventListener('mousedown', this.onMouseDown);
         this.canvas.addEventListener('mousemove', this.onMouseMove);
         this.canvas.addEventListener('mouseleave', this.onMouseLeave);
-        window.addEventListener('mouseup', this.onMouseUp);
-        window.addEventListener('mousemove', this.onWindowMouseMove);
     }
 
     private unbindEvents(): void {
         this.playBtn.removeEventListener('click', this.onPlayClick);
         this.speedBtn.removeEventListener('click', this.onSpeedClick);
         this.toggleBtn.removeEventListener('click', this.onToggleClick);
-
-        this.canvas.removeEventListener('mousedown', this.onMouseDown);
         this.canvas.removeEventListener('mousemove', this.onMouseMove);
         this.canvas.removeEventListener('mouseleave', this.onMouseLeave);
-        window.removeEventListener('mouseup', this.onMouseUp);
-        window.removeEventListener('mousemove', this.onWindowMouseMove);
     }
 
-    private onPlayClick = (): void => {
-        if (TimelineState.interactionLocked) return;
-        this.engine.togglePlay();
+    private onPlayClick = (e: MouseEvent): void => {
+        e.preventDefault();
     };
 
-    private onSpeedClick = (): void => {
-        this.engine.cycleSpeed();
+    private onSpeedClick = (e: MouseEvent): void => {
+        e.preventDefault();
     };
 
     private onToggleClick = (): void => {
         this.toggleCollapse();
     };
 
-    private onMouseDown = (e: MouseEvent): void => {
-        if (TimelineState.interactionLocked) return;
-        const x = e.offsetX;
-        const y = e.offsetY;
-        if (y >= 10 && y <= this.canvasH) {
-            this.dragging = true;
-            this.seekToCanvasX(x);
-        }
-    };
-
     private onMouseMove = (e: MouseEvent): void => {
         const x = e.offsetX;
         const y = e.offsetY;
 
-        // Update hover
-        if (y >= 10 && y <= this.canvasH) {
-            if (!TimelineState.interactionLocked) {
-                this.canvas.style.cursor = 'pointer';
-            } else {
-                this.canvas.style.cursor = 'default';
-            }
-            this.hoverPlayheadX = x; // FCP-style hover playhead
+        if (y >= 0 && y <= this.canvasH) {
+            this.hoverPlayheadX = x;
             this.updateHover(x, y);
         } else {
-            this.canvas.style.cursor = 'default';
             const hadHover = this.hoveredSegment !== null || this.hoverPlayheadX >= 0;
+            this.hoveredSegment = null;
             this.hoverPlayheadX = -1;
-            if (hadHover) {
-                this.hoveredSegment = null;
-                this.redraw();
-            }
+            if (hadHover) this.redraw();
         }
     };
 
@@ -250,25 +203,6 @@ export class TimelineRibbon {
         if (hadHover) this.redraw();
     };
 
-    private onMouseUp = (): void => {
-        this.dragging = false;
-    };
-
-    private onWindowMouseMove = (e: MouseEvent): void => {
-        if (TimelineState.interactionLocked) return;
-        if (!this.dragging) return;
-        const rect = this.canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        this.seekToCanvasX(x);
-    };
-
-    private seekToCanvasX(x: number): void {
-        const total = this.engine.getTotalDuration();
-        if (total <= 0) return;
-        const ratio = Math.max(0, Math.min(1, (x - this.trackLeft) / this.trackW));
-        this.engine.seek(ratio * total);
-    }
-
     private updateHover(canvasX: number, canvasY: number): void {
         const total = this.getEffectiveTotal();
         if (total <= 0) return;
@@ -276,10 +210,13 @@ export class TimelineRibbon {
         let found: AnimationSegment | null = null;
         for (let i = this.renderedBlocks.length - 1; i >= 0; i--) {
             const block = this.renderedBlocks[i];
-            // Extend horizontal hit area slightly for narrow gates
             const padX = block.seg.duration === 0 ? 4 : 0;
-            if (canvasX >= block.x - padX && canvasX <= block.x + block.w + padX &&
-                canvasY >= block.y && canvasY <= block.y + block.h) {
+            if (
+                canvasX >= block.x - padX &&
+                canvasX <= block.x + block.w + padX &&
+                canvasY >= block.y &&
+                canvasY <= block.y + block.h
+            ) {
                 found = block.seg;
                 break;
             }
@@ -288,45 +225,32 @@ export class TimelineRibbon {
         if (found !== this.hoveredSegment) {
             this.hoveredSegment = found;
             this.tooltipX = canvasX;
-            // Place tooltip right above the segment itself, or default track height
             this.tooltipY = found ? canvasY : this.trackY - 4;
         }
-        // Always redraw for hover playhead position tracking
+
         this.redraw();
     }
 
-    // --- Live-mode helpers ---
-
-    /** During record-only (live) mode, the effective total is anchored to the playhead frontier to compress past segments. */
     private getEffectiveTotal(): number {
         if (!this.engine.isRecordOnly()) {
             return this.engine.getTotalDuration();
         }
-
-        // In live mode, future scheduled segments (like Word Cloud) can artificially inflate 
-        // the total duration before we've reached them, causing the timeline to suddenly shrink.
-        // To prevent this and provide a natural "expanding frontier" feel where
-        // finished segments compress leftward while the running scanner dominates:
-        // we use currentTime as the total scale frontier after an initial 3s buffer.
-        return Math.max(3000, this.engine.getCurrentTime());
+        return Math.max(3000, this.getLiveHorizonTime());
     }
 
-    /** For an Infinity segment during live mode, return its visual duration. */
     private liveSegDuration(seg: AnimationSegment): number {
-        // Compute visual end = currentTime clamped to seg start
-        return Math.max(0, this.engine.getCurrentTime() - seg.startTime);
+        return Math.max(0, this.getLiveHorizonTime() - seg.startTime);
     }
-
-    // --- Rendering ---
 
     private onTimeUpdate(time: number, _total: number): void {
+        this.liveHorizonTime = Math.max(this.liveHorizonTime, time);
         const effectiveTotal = this.getEffectiveTotal();
         this.updateTimeDisplay(time, effectiveTotal);
         this.redraw();
     }
 
     private updateTimeDisplay(time: number, total: number): void {
-        this.timeDisplay.textContent = `${formatTime(time)} / ${formatTime(total)}`;
+        this.timeDisplay.textContent = `${formatMsAsTimestamp(time)} / ${formatMsAsTimestamp(total)}`;
     }
 
     private updatePlayButton(): void {
@@ -341,17 +265,19 @@ export class TimelineRibbon {
     }
 
     redraw(): void {
+        this.refreshControls();
+
         const { ctx, canvasW, canvasH } = this;
-        const isLight = document.body.classList.contains('light-mode');
+        const isLight = isLightMode();
 
         ctx.clearRect(0, 0, canvasW, canvasH);
 
         const total = this.getEffectiveTotal();
         const isLive = this.engine.isRecordOnly();
         const currentTime = this.engine.getCurrentTime();
+        const liveRenderTime = isLive ? this.getLiveHorizonTime() : currentTime;
 
         if (total <= 0) {
-            // Empty state
             ctx.fillStyle = isLight ? '#94a3b8' : '#475569';
             ctx.font = LABEL_FONT;
             ctx.textAlign = 'center';
@@ -359,15 +285,21 @@ export class TimelineRibbon {
             return;
         }
 
-        // --- Draw segment blocks ---
         const ROW_STEP = 16;
-        const segmentInfo: { seg: AnimationSegment; w: number; x: number; endX: number; duration: number; row: number; }[] = [];
+        const segmentInfo: {
+            seg: AnimationSegment;
+            w: number;
+            x: number;
+            endX: number;
+            duration: number;
+            row: number;
+        }[] = [];
         const rows: { startX: number; endX: number }[][] = [[], [], []];
 
         this.renderedBlocks = [];
 
         for (const seg of this.engine.getSegments()) {
-            if (isLive && seg.startTime > currentTime) continue;
+            if (isLive && seg.startTime > liveRenderTime) continue;
 
             const isInfinity = seg.duration === Infinity;
             if (isInfinity && !isLive) continue;
@@ -375,26 +307,25 @@ export class TimelineRibbon {
             let segDuration: number;
             if (isInfinity) {
                 segDuration = this.liveSegDuration(seg);
-                if (segDuration <= 0) continue; // Not yet started
+                if (segDuration <= 0) continue;
+            } else if (isLive) {
+                const elapsed = liveRenderTime - seg.startTime;
+                if (elapsed <= 0 && seg.duration > 0) continue;
+                segDuration = Math.min(Math.max(0, elapsed), seg.duration);
             } else {
-                if (isLive) {
-                    const elapsed = currentTime - seg.startTime;
-                    if (elapsed <= 0 && seg.duration > 0) continue; // Skip newly queued non-gate segments until they actually start moving
-                    segDuration = Math.min(Math.max(0, elapsed), seg.duration);
-                } else {
-                    segDuration = seg.duration;
-                }
+                segDuration = seg.duration;
             }
 
             const x = this.timeToX(seg.startTime, total);
-            const endX = segDuration === 0
-                ? x + 2
-                : this.timeToX(seg.startTime + segDuration, total);
+            const endX = segDuration === 0 ? x + 2 : this.timeToX(seg.startTime + segDuration, total);
             const w = Math.max(1, endX - x);
 
             let r = 0;
             const padX = seg.duration === 0 ? 0 : 4;
-            while (rows[r] && rows[r].some(rSeg => Math.max(x - padX, rSeg.startX) < Math.min(endX + padX, rSeg.endX))) {
+            while (
+                rows[r] &&
+                rows[r].some(rSeg => Math.max(x - padX, rSeg.startX) < Math.min(endX + padX, rSeg.endX))
+            ) {
                 r++;
             }
             if (!rows[r]) rows[r] = [];
@@ -404,7 +335,7 @@ export class TimelineRibbon {
         }
 
         for (const info of segmentInfo) {
-            const { seg, w, x, endX, duration } = info;
+            const { seg, w, x } = info;
             const isInfinity = seg.duration === Infinity;
             const colors = SEGMENT_COLORS[seg.category];
             const color = isLight ? colors.light : colors.dark;
@@ -447,7 +378,6 @@ export class TimelineRibbon {
             }
         }
 
-        // --- Draw phase boundaries ---
         const boundaries = this.engine.getPhaseBoundaries();
         for (const bound of boundaries) {
             const x = this.timeToX(bound.startTime, total);
@@ -458,7 +388,6 @@ export class TimelineRibbon {
             ctx.lineTo(x, canvasH - 6);
             ctx.stroke();
 
-            // Phase label (larger background block for visibility)
             ctx.fillStyle = isLight ? 'rgba(30,50,80,0.8)' : 'rgba(200,220,255,0.7)';
             ctx.beginPath();
             ctx.roundRect(x + 2, 8, 18, 14, 2);
@@ -471,33 +400,27 @@ export class TimelineRibbon {
             ctx.fillText(`P${bound.phaseIdx}`, x + 4, 15);
         }
 
-        // --- Draw FCP-style hover playhead (thin white line following cursor) ---
         if (this.hoverPlayheadX >= this.trackLeft && this.hoverPlayheadX <= this.trackRight) {
             const hx = this.hoverPlayheadX;
             ctx.fillStyle = isLight ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.25)';
             ctx.fillRect(hx, 8, 1, canvasH - 14);
 
-            // Show hover time label
             const hoverTime = ((hx - this.trackLeft) / this.trackW) * total;
             ctx.fillStyle = isLight ? 'rgba(30,50,80,0.7)' : 'rgba(200,220,255,0.7)';
             ctx.font = LABEL_FONT;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'bottom';
-            ctx.fillText(formatTime(hoverTime), hx, 8);
+            ctx.fillText(formatMsAsTimestamp(hoverTime), hx, 8);
         }
 
-        // --- Draw playhead ---
         const playheadX = this.timeToX(currentTime, total);
 
-        // Playhead glow
         ctx.fillStyle = isLight ? 'rgba(217, 119, 6, 0.15)' : 'rgba(245, 200, 80, 0.12)';
         ctx.fillRect(playheadX - 6, 8, 12, canvasH - 14);
 
-        // Playhead line
         ctx.fillStyle = isLight ? '#d97706' : '#f5c850';
         ctx.fillRect(playheadX - 1, 8, PLAYHEAD_W, canvasH - 14);
 
-        // Playhead triangle handle
         ctx.beginPath();
         ctx.moveTo(playheadX - 5, 8);
         ctx.lineTo(playheadX + 5, 8);
@@ -505,37 +428,37 @@ export class TimelineRibbon {
         ctx.closePath();
         ctx.fill();
 
-        // --- Tooltip ---
         if (this.hoveredSegment) {
             this.drawTooltip(this.hoveredSegment, this.tooltipX, isLight);
         }
     }
 
+    private getLiveHorizonTime(): number {
+        return Math.max(this.liveHorizonTime, this.engine.getCurrentTime());
+    }
+
     private drawTooltip(seg: AnimationSegment, x: number, isLight: boolean): void {
         const { ctx, canvasW } = this;
         const displayDur = seg.duration === Infinity ? this.liveSegDuration(seg) : seg.duration;
-        const text = `${seg.label}  (${formatTime(displayDur)})`;
+        const text = `${seg.label}  (${formatMsAsTimestamp(displayDur)})`;
         ctx.font = LABEL_FONT;
         const metrics = ctx.measureText(text);
         const padH = 6;
         const padV = 4;
         const tw = metrics.width + padH * 2;
         const th = 16 + padV;
-        let tx = Math.max(4, Math.min(canvasW - tw - 4, x - tw / 2));
+        const tx = Math.max(4, Math.min(canvasW - tw - 4, x - tw / 2));
         const ty = Math.max(1, this.tooltipY - th - 6);
 
-        // Background
         ctx.fillStyle = isLight ? 'rgba(255,255,255,0.92)' : 'rgba(15,20,30,0.92)';
         ctx.beginPath();
         ctx.roundRect(tx, ty, tw, th, 3);
         ctx.fill();
 
-        // Border
         ctx.strokeStyle = isLight ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.1)';
         ctx.lineWidth = 1;
         ctx.stroke();
 
-        // Text
         ctx.fillStyle = isLight ? '#1a2333' : '#eef4ff';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
@@ -545,18 +468,18 @@ export class TimelineRibbon {
     private timeToX(time: number, total: number): number {
         return this.trackLeft + (time / total) * this.trackW;
     }
+
+    private refreshControls(): void {
+        this.playBtn.disabled = true;
+        this.speedBtn.disabled = true;
+        this.playBtn.title = 'Replay disabled';
+        this.speedBtn.title = 'Replay disabled';
+        this.canvas.style.opacity = '1';
+        this.canvas.style.cursor = 'default';
+    }
 }
 
-// --- Helpers ---
-
-function formatTime(ms: number): string {
-    if (!isFinite(ms) || ms < 0) return '--:--';
-    const totalSeconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    const tenths = Math.floor((ms % 1000) / 100);
-    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${tenths}`;
-}
+// Time formatting moved to utils.ts — use formatMsAsTimestamp
 
 const PLAY_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>`;
 const PAUSE_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`;

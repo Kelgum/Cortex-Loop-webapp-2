@@ -1,17 +1,55 @@
+/**
+ * State — Global mutable state objects for every major subsystem.
+ * Exports: AppState, PhaseState, BiometricState, SimulationState, RevisionState, CompileState, TimelineState, SherlockState, DividerState, getStageModel, syncStageModelsForProvider
+ * Depends on: constants (MODEL_OPTIONS), types
+ */
 import { MODEL_OPTIONS, mapModelAcrossProviders } from './constants';
+import { providerApiKeyKey, settingsStore, stageModelKey, stageProviderKey, STORAGE_KEYS } from './settings-store';
+import type {
+    PipelineStage,
+    PhaseLabel,
+    BiometricPhase,
+    RevisionPhase,
+    SimulationPhase,
+    SherlockPhase,
+    ProfileDraftStatus,
+    ProfileSource,
+    RxMode,
+    MultiDayPhase,
+    CompilePhase,
+    IAppState,
+    IPhaseState,
+    IBiometricState,
+    ISimulationState,
+    IRevisionState,
+    ITimelineState,
+    ISherlockState,
+    IDividerState,
+    ICompileState,
+    IMultiDayState,
+    IAgentMatchState,
+    AgentMatchPhase,
+} from './types';
 
-declare const window: any;
-
-const CONFIG_KEYS = (window.CORTEX_CONFIG && window.CORTEX_CONFIG.keys) || {};
+const CONFIG_KEYS = (typeof window !== 'undefined' ? (window as any).CORTEX_CONFIG?.keys : null) || {};
 
 const STAGE_IDS = [
     'fast',
     'curves',
     'intervention',
+    'biometricRec',
+    'biometricProfile',
+    'biometricChannel',
     'biometric',
     'revision',
     'sherlock',
     'sherlockRevision',
+    'strategistBio',
+    'knight',
+    'spotterDaily',
+    'strategistBioDaily',
+    'grandmasterDaily',
+    'agentMatch',
 ];
 
 const STAGE_DEFAULTS_BY_PROVIDER: any = {
@@ -19,43 +57,79 @@ const STAGE_DEFAULTS_BY_PROVIDER: any = {
         fast: 'haiku',
         curves: 'opus',
         intervention: 'opus',
+        biometricRec: 'haiku',
+        biometricProfile: 'haiku',
+        biometricChannel: 'haiku',
         biometric: 'haiku',
-        revision: 'haiku',
+        revision: 'opus',
         sherlock: 'haiku',
         sherlockRevision: 'haiku',
+        strategistBio: 'haiku',
+        knight: 'opus',
+        spotterDaily: 'haiku',
+        strategistBioDaily: 'haiku',
+        grandmasterDaily: 'opus',
+        agentMatch: 'haiku',
     },
     openai: {
-        fast: 'o4-mini',
-        curves: '5.2',
-        intervention: '5.2',
-        biometric: 'o4-mini',
-        revision: 'o4-mini',
-        sherlock: 'o4-mini',
-        sherlockRevision: 'o4-mini',
+        fast: '5.3-instant',
+        curves: '5.4-thinking',
+        intervention: '5.4-thinking',
+        biometricRec: '5.3-instant',
+        biometricProfile: '5.3-instant',
+        biometricChannel: '5.3-instant',
+        biometric: '5.3-instant',
+        revision: '5.4-thinking',
+        sherlock: '5.3-instant',
+        sherlockRevision: '5.3-instant',
+        strategistBio: '5.3-instant',
+        knight: '5.4-thinking',
+        spotterDaily: '5.3-instant',
+        strategistBioDaily: '5.3-instant',
+        grandmasterDaily: '5.4-thinking',
+        agentMatch: '5.3-instant',
     },
     grok: {
         fast: 'fast',
         curves: 'full',
         intervention: 'full',
+        biometricRec: 'fast',
+        biometricProfile: 'fast',
+        biometricChannel: 'fast',
         biometric: 'fast',
-        revision: 'fast',
+        revision: 'full',
         sherlock: 'fast',
         sherlockRevision: 'fast',
+        strategistBio: 'fast',
+        knight: 'full',
+        spotterDaily: 'fast',
+        strategistBioDaily: 'fast',
+        grandmasterDaily: 'full',
+        agentMatch: 'fast',
     },
     gemini: {
         fast: 'flash-lite',
-        curves: 'pro',
-        intervention: 'pro',
+        curves: 'pro-preview',
+        intervention: 'pro-preview',
+        biometricRec: 'flash-lite',
+        biometricProfile: 'flash-lite',
+        biometricChannel: 'flash-lite',
         biometric: 'flash-lite',
-        revision: 'flash-lite',
+        revision: 'pro-preview',
         sherlock: 'flash-lite',
         sherlockRevision: 'flash-lite',
+        strategistBio: 'flash-lite',
+        knight: 'pro-preview',
+        spotterDaily: 'flash-lite',
+        strategistBioDaily: 'flash-lite',
+        grandmasterDaily: 'pro-preview',
+        agentMatch: 'flash-lite',
     },
 };
 
 const LEGACY_MAP: any = { fast: 0, main: -1 };
 
-const INITIAL_PROVIDER = localStorage.getItem('cortex_llm') || 'anthropic';
+const INITIAL_PROVIDER = settingsStore.getString(STORAGE_KEYS.selectedLlm) || 'anthropic';
 
 function getProviderDefaults(provider: string) {
     return STAGE_DEFAULTS_BY_PROVIDER[provider] || STAGE_DEFAULTS_BY_PROVIDER.anthropic;
@@ -68,7 +142,7 @@ function getDefaultStageModelKey(stage: string, provider: string) {
 }
 
 function resolveStoredStageProvider(stage: string): string {
-    const stored = localStorage.getItem(`cortex_stage_provider_${stage}`);
+    const stored = settingsStore.getString(stageProviderKey(stage));
     if (stored && MODEL_OPTIONS[stored]) return stored;
     return INITIAL_PROVIDER;
 }
@@ -76,7 +150,7 @@ function resolveStoredStageProvider(stage: string): string {
 function resolveStoredStageModel(stage: string, provider: string) {
     const opts = MODEL_OPTIONS[provider] || [];
     const fallback = getDefaultStageModelKey(stage, provider);
-    const stored = localStorage.getItem(`cortex_stage_${stage}`);
+    const stored = settingsStore.getString(stageModelKey(stage));
     if (!stored) return fallback;
 
     if (stored in LEGACY_MAP) {
@@ -97,8 +171,8 @@ export function syncStageModelsForProvider(provider: string) {
 
         AppState.stageProviders[stage] = provider;
         AppState.stageModels[stage] = resolved;
-        localStorage.setItem(`cortex_stage_provider_${stage}`, provider);
-        localStorage.setItem(`cortex_stage_${stage}`, resolved);
+        settingsStore.setString(stageProviderKey(stage), provider);
+        settingsStore.setString(stageModelKey(stage), resolved);
     }
 }
 
@@ -113,11 +187,18 @@ export function switchStageProvider(stage: string, newProvider: string) {
 
     AppState.stageProviders[stage] = newProvider;
     AppState.stageModels[stage] = resolved;
-    localStorage.setItem(`cortex_stage_provider_${stage}`, newProvider);
-    localStorage.setItem(`cortex_stage_${stage}`, resolved);
+    settingsStore.setString(stageProviderKey(stage), newProvider);
+    settingsStore.setString(stageModelKey(stage), resolved);
 }
 
-export const AppState: any = {
+/**
+ * Turbo target phase (0 = disabled, 1-4 = auto-advance to that phase).
+ * Stored on AppState but initialized from localStorage here so it's ready
+ * before any prompt submission.
+ */
+const _turboTarget = settingsStore.getNumber(STORAGE_KEYS.startAtPhase, 0);
+
+export const AppState: IAppState = {
     currentStack: null,
     isLoading: false,
     isAnimating: false,
@@ -125,34 +206,64 @@ export const AppState: any = {
     filledSlots: new Map(),
     tooltip: null,
     effectCurves: null,
-    rxMode: 'off' as 'off' | 'rx' | 'rx-only',
-    maxEffects: parseInt(localStorage.getItem('cortex_max_effects') as any) || 2,
+    rxMode: 'off' as RxMode,
+    maxEffects: (() => {
+        const rawMaxEffects = settingsStore.getNumber(STORAGE_KEYS.maxEffects, 2);
+        return rawMaxEffects === 1 ? 1 : 2;
+    })(),
     selectedLLM: INITIAL_PROVIDER,
     apiKeys: {
-        anthropic: localStorage.getItem('cortex_key_anthropic') || CONFIG_KEYS.anthropic || '',
-        openai:    localStorage.getItem('cortex_key_openai')    || CONFIG_KEYS.openai || '',
-        grok:      localStorage.getItem('cortex_key_grok')      || CONFIG_KEYS.grok || '',
-        gemini:    localStorage.getItem('cortex_key_gemini')     || CONFIG_KEYS.gemini || '',
+        anthropic: settingsStore.getString(providerApiKeyKey('anthropic')) || CONFIG_KEYS.anthropic || '',
+        openai: settingsStore.getString(providerApiKeyKey('openai')) || CONFIG_KEYS.openai || '',
+        grok: settingsStore.getString(providerApiKeyKey('grok')) || CONFIG_KEYS.grok || '',
+        gemini: settingsStore.getString(providerApiKeyKey('gemini')) || CONFIG_KEYS.gemini || '',
     },
     stageProviders: {
-        fast:              resolveStoredStageProvider('fast'),
-        curves:            resolveStoredStageProvider('curves'),
-        intervention:      resolveStoredStageProvider('intervention'),
-        biometric:         resolveStoredStageProvider('biometric'),
-        revision:          resolveStoredStageProvider('revision'),
-        sherlock:          resolveStoredStageProvider('sherlock'),
-        sherlockRevision:  resolveStoredStageProvider('sherlockRevision'),
+        fast: resolveStoredStageProvider('fast'),
+        curves: resolveStoredStageProvider('curves'),
+        intervention: resolveStoredStageProvider('intervention'),
+        biometricRec: resolveStoredStageProvider('biometricRec'),
+        biometricProfile: resolveStoredStageProvider('biometricProfile'),
+        biometricChannel: resolveStoredStageProvider('biometricChannel'),
+        biometric: resolveStoredStageProvider('biometric'),
+        revision: resolveStoredStageProvider('revision'),
+        sherlock: resolveStoredStageProvider('sherlock'),
+        sherlockRevision: resolveStoredStageProvider('sherlockRevision'),
+        strategistBio: resolveStoredStageProvider('strategistBio'),
+        knight: resolveStoredStageProvider('knight'),
+        spotterDaily: resolveStoredStageProvider('spotterDaily'),
+        strategistBioDaily: resolveStoredStageProvider('strategistBioDaily'),
+        grandmasterDaily: resolveStoredStageProvider('grandmasterDaily'),
+        agentMatch: resolveStoredStageProvider('agentMatch'),
     },
     stageModels: {
-        fast:              resolveStoredStageModel('fast', resolveStoredStageProvider('fast')),
-        curves:            resolveStoredStageModel('curves', resolveStoredStageProvider('curves')),
-        intervention:      resolveStoredStageModel('intervention', resolveStoredStageProvider('intervention')),
-        biometric:         resolveStoredStageModel('biometric', resolveStoredStageProvider('biometric')),
-        revision:          resolveStoredStageModel('revision', resolveStoredStageProvider('revision')),
-        sherlock:          resolveStoredStageModel('sherlock', resolveStoredStageProvider('sherlock')),
-        sherlockRevision:  resolveStoredStageModel('sherlockRevision', resolveStoredStageProvider('sherlockRevision')),
+        fast: resolveStoredStageModel('fast', resolveStoredStageProvider('fast')),
+        curves: resolveStoredStageModel('curves', resolveStoredStageProvider('curves')),
+        intervention: resolveStoredStageModel('intervention', resolveStoredStageProvider('intervention')),
+        biometricRec: resolveStoredStageModel('biometricRec', resolveStoredStageProvider('biometricRec')),
+        biometricProfile: resolveStoredStageModel('biometricProfile', resolveStoredStageProvider('biometricProfile')),
+        biometricChannel: resolveStoredStageModel('biometricChannel', resolveStoredStageProvider('biometricChannel')),
+        biometric: resolveStoredStageModel('biometric', resolveStoredStageProvider('biometric')),
+        revision: resolveStoredStageModel('revision', resolveStoredStageProvider('revision')),
+        sherlock: resolveStoredStageModel('sherlock', resolveStoredStageProvider('sherlock')),
+        sherlockRevision: resolveStoredStageModel('sherlockRevision', resolveStoredStageProvider('sherlockRevision')),
+        strategistBio: resolveStoredStageModel('strategistBio', resolveStoredStageProvider('strategistBio')),
+        knight: resolveStoredStageModel('knight', resolveStoredStageProvider('knight')),
+        spotterDaily: resolveStoredStageModel('spotterDaily', resolveStoredStageProvider('spotterDaily')),
+        strategistBioDaily: resolveStoredStageModel(
+            'strategistBioDaily',
+            resolveStoredStageProvider('strategistBioDaily'),
+        ),
+        grandmasterDaily: resolveStoredStageModel('grandmasterDaily', resolveStoredStageProvider('grandmasterDaily')),
+        agentMatch: resolveStoredStageModel('agentMatch', resolveStoredStageProvider('agentMatch')),
     },
+    turboTargetPhase: _turboTarget,
 };
+
+/** True when turbo-skip is active and hasn't reached target phase yet. */
+export function isTurboActive(): boolean {
+    return AppState.turboTargetPhase > 0 && PhaseState.maxPhaseReached < AppState.turboTargetPhase;
+}
 
 /**
  * Resolve the actual model name + API type for a pipeline stage.
@@ -169,69 +280,172 @@ export function getStageModel(stage: any) {
     }
 
     const entry = opts.find((o: any) => o.key === resolvedKey) || opts[0] || { model: 'unknown', type: 'openai' };
-    return { model: entry.model, type: entry.type, provider, key: AppState.apiKeys[provider] };
+    return {
+        model: entry.model,
+        type: entry.type,
+        provider,
+        key: AppState.apiKeys[provider],
+        reasoningEffort: entry.reasoningEffort,
+    };
+}
+
+/**
+ * Resolve stage model details for a specific provider without mutating
+ * stage provider/model preferences in AppState/localStorage.
+ */
+export function resolveStageModelForProvider(stage: any, providerOverride: string) {
+    const provider = MODEL_OPTIONS[providerOverride]
+        ? providerOverride
+        : AppState.stageProviders[stage] || AppState.selectedLLM;
+    const opts = MODEL_OPTIONS[provider] || [];
+    const fallbackKey = getDefaultStageModelKey(stage, provider);
+
+    const currentProvider = AppState.stageProviders[stage] || AppState.selectedLLM;
+    const currentKey = AppState.stageModels[stage];
+    // Only cross-map when the provider actually changed; otherwise honour the
+    // user's exact model pick (avoids collapsing same-tier siblings like
+    // flash-lite vs flash-lite-preview).
+    const preferredKey =
+        provider === currentProvider
+            ? currentKey
+            : mapModelAcrossProviders(currentProvider, currentKey, provider) || currentKey;
+
+    const resolvedKey = opts.some((o: any) => o.key === preferredKey) ? preferredKey : fallbackKey;
+    const entry = opts.find((o: any) => o.key === resolvedKey) || opts[0] || { model: 'unknown', type: 'openai' };
+
+    return {
+        model: entry.model,
+        type: entry.type,
+        provider,
+        key: AppState.apiKeys[provider],
+        modelKey: resolvedKey,
+        reasoningEffort: entry.reasoningEffort,
+        tier: entry.tier ?? 0,
+    };
 }
 
 // Phase chart flow state
-export const PhaseState: any = {
+export const PhaseState: IPhaseState = {
     isProcessing: false,
     effects: [],
-    wordCloudEffects: [],       // [{name, relevance}, ...] from fast model
+    wordCloudEffects: [],
     curvesData: null,
-    phase: 'idle',  // 'idle' | 'loading' | 'scanning' | 'word-cloud' | 'word-cloud-dismiss' | 'axes-revealed' | 'baseline-shown' | 'curves-drawn' | 'lx-sequential' | 'lx-rendered'
+    phase: 'idle' as PhaseLabel,
     interventionPromise: null,
     interventionResult: null,
     lxCurves: null,
-    incrementalSnapshots: null, // array from computeIncrementalLxOverlay
-    maxPhaseReached: -1,  // highest completed phase index (0/1/2)
-    viewingPhase: -1,     // currently displayed phase index
+    incrementalSnapshots: null,
+    hookSentence: null,
+    maxPhaseReached: -1,
+    viewingPhase: -1,
+    userGoal: null,
+    cycleFilename: null,
+    loadedCycleId: null,
 };
 
 // Biometric Loop state
-export const BiometricState: any = {
+export const BiometricState: IBiometricState = {
     selectedDevices: [],
     profileText: '',
+    profileDraftText: '',
+    profileDraftStatus: 'idle' as ProfileDraftStatus,
+    profileDraftError: null,
+    profileDirty: false,
+    profileSource: 'fallback' as ProfileSource,
+    profileDraftTensionDirectives: [],
     biometricResult: null,
     channels: [],
-    phase: 'idle',  // idle | selecting | profiling | loading | rendered
+    phase: 'idle' as BiometricPhase,
+    spotterHighlights: [],
 };
 
-// Revision state (Phase 4 — chess player re-evaluates after biometric data)
-export const RevisionState: any = {
+// Simulation state (Phase 5 — 24-hour animated simulation)
+export const SimulationState: ISimulationState = {
+    phase: 'idle' as SimulationPhase,
+    progress: 0,
+    speed: 1,
+    rafId: null,
+    schedule: [],
+};
+
+// Revision state (Phase 4 -- chess player re-evaluates after biometric data)
+export const RevisionState: IRevisionState = {
     revisionPromise: null,
     revisionResult: null,
     oldInterventions: null,
     newInterventions: null,
     diff: null,
     newLxCurves: null,
-    phase: 'idle',  // idle | pending | ready | animating | rendered
+    referenceBundle: null,
+    fitMetricsBefore: null,
+    fitMetricsAfter: null,
+    phase: 'idle' as RevisionPhase,
 };
 
 // Timeline engine state
-export const TimelineState: any = {
-    engine: null,       // TimelineEngine instance
-    ribbon: null,       // TimelineRibbon instance
-    active: false,      // Whether the timeline system is driving animations
-    cursor: 0,          // Current timeline build cursor (ms) for progressive building
-    interactionLocked: false, // Prevent seek/play while imperative first-run is still active
+export const TimelineState: ITimelineState = {
+    engine: null,
+    ribbon: null,
+    pipelineTimeline: null,
+    active: false,
+    cursor: 0,
+    interactionLocked: false,
+    onLxStepWait: null,
+    onLxStepWaitOwner: null,
+    playheadTrackers: {
+        prompt: { rafId: null, wallStart: null, timelineStart: null },
+        bioScan: { rafId: null, wallStart: null, timelineStart: null },
+        bioReveal: { rafId: null, wallStart: null, timelineStart: null },
+    },
+    runTasks: null,
 };
 
 // Sherlock narration state
-export const SherlockState: any = {
-    enabled: JSON.parse(localStorage.getItem('cortex_sherlock_enabled') || 'true'),
-    narrationResult: null,          // { intro, beats: [{substanceKey, text}], outro }
-    revisionNarrationResult: null,  // { intro, beats: [{action, substanceKey, text}], outro }
-    phase: 'idle',                  // idle | loading | ready | animating | rendered
+export const SherlockState: ISherlockState = {
+    enabled: settingsStore.getJson(STORAGE_KEYS.sherlockEnabled, true),
+    narrationResult: null,
+    revisionNarrationResult: null,
+    phase: 'idle' as SherlockPhase,
 };
 
 // Effect divider state (split-screen for 2-effect mode)
-export const DividerState: any = {
+export const DividerState: IDividerState = {
     active: false,
-    x: 480,             // SVG x-coord, default = center (maps to ~6pm)
-    fadeWidth: 50,       // crossfade zone width in SVG pixels
-    minOpacity: 0.12,    // ghost opacity on the "wrong" side
-    elements: null,      // { group, line, glow, diamond, hitArea }
-    masks: null,         // { leftGrad, rightGrad }
+    x: 480,
+    fadeWidth: 50,
+    minOpacity: 0.12,
+    elements: null,
+    masks: null,
     dragging: false,
     dragCleanup: null,
+};
+
+// Compile/Stream state (dose.player cartridge assembly)
+export const CompileState: ICompileState = {
+    phase: 'idle' as CompilePhase,
+    countdownTimer: null,
+    runId: 0,
+    cleanup: null,
+};
+
+// Agent match state (creator agent co-pilot selection)
+export const AgentMatchState: IAgentMatchState = {
+    matchedAgents: [],
+    matchResults: [],
+    selectedAgent: null,
+    phase: 'idle' as AgentMatchPhase,
+};
+
+// Multi-day iteration state (Days 0-7 weekly cycle)
+export const MultiDayState: IMultiDayState = {
+    phase: 'idle' as MultiDayPhase,
+    days: [],
+    currentDay: 0,
+    animationRafId: null,
+    speed: 1,
+    knightOutput: null,
+    startWeekday: null,
+    bioCorrectedBaseline: null,
+    lockedViewBoxHeight: null,
+    maxTimelineLanes: 0,
 };

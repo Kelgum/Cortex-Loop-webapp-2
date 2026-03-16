@@ -16,8 +16,59 @@
 <body>
     <div id="app">
 
-        <!-- Top-right controls -->
+        <!-- Top-left controls (flipped order: settings first, theme last) -->
         <div class="top-controls">
+            <!-- Settings gear -->
+            <button id="settings-btn" class="top-control-btn settings-btn" aria-label="Settings">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="3" />
+                    <path
+                        d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+            </button>
+
+            <!-- Debug panel toggle -->
+            <button id="debug-btn" class="top-control-btn" aria-label="LLM Debug Panel">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
+                    <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+                    <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" />
+                    <path d="M17.599 6.5a3 3 0 0 0 .399-1.375" />
+                    <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5" />
+                    <path d="M3.477 10.896a4 4 0 0 1 .585-.396" />
+                    <path d="M19.938 10.5a4 4 0 0 1 .585.396" />
+                    <path d="M6 18a4 4 0 0 1-1.967-.516" />
+                    <path d="M19.967 17.484A4 4 0 0 1 18 18" />
+                </svg>
+            </button>
+
+            <!-- Substance wall toggle (hidden until Phase 2, investor demo) -->
+            <button id="substance-wall-btn" class="top-control-btn hidden" aria-label="Substance wall">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="7" height="7" rx="1" />
+                    <rect x="14" y="3" width="7" height="7" rx="1" />
+                    <rect x="3" y="14" width="7" height="7" rx="1" />
+                    <rect x="14" y="14" width="7" height="7" rx="1" />
+                </svg>
+            </button>
+
+            <!-- Curve sculptor toggle (hidden until Phase 2, investor demo) -->
+            <button id="curve-sculptor-btn" class="top-control-btn hidden" aria-label="Curve sculptor">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 17c3.5-3.5 7-2 10 0s6.5-3.5 8-6" />
+                    <circle cx="17" cy="8" r="2" />
+                </svg>
+            </button>
+
+            <!-- Rx toggle (hidden until Phase 2, investor demo) -->
+            <button id="demo-rx-btn" class="top-control-btn hidden" aria-label="Toggle Rx substances">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:0.04em;">Rx</span>
+            </button>
+
             <!-- Theme toggle -->
             <button id="theme-toggle-btn" class="top-control-btn" aria-label="Toggle light/dark mode">
                 <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -38,38 +89,63 @@
                 </svg>
             </button>
 
-            <!-- Debug panel toggle -->
-            <button id="debug-btn" class="top-control-btn" aria-label="LLM Debug Panel">
+        </div>
+
+        <!-- Top-right controls (Agent marketplace buttons) -->
+        <div class="top-controls-right">
+            <button id="analogy-overlay-btn" class="top-control-btn" aria-label="Analogy overlay" title="Analogy Overlay">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
                     stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M9.5 2a2.5 2.5 0 0 1 5 0v.5H9.5V2z" />
-                    <path d="M12 2.5V4" />
-                    <path d="M15.5 4h-7a3 3 0 0 0-3 3v5a7 7 0 0 0 13 0V7a3 3 0 0 0-3-3z" />
-                    <path d="M12 18v3" />
-                    <path d="M5.5 7H3" />
-                    <path d="M21 7h-2.5" />
-                    <path d="M5.5 12H3" />
-                    <path d="M21 12h-2.5" />
-                    <path d="M8 18l-1.5 2" />
-                    <path d="M16 18l1.5 2" />
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <line x1="3" y1="9" x2="21" y2="9" />
+                    <line x1="9" y1="9" x2="9" y2="21" />
                 </svg>
             </button>
-
-            <!-- Settings gear -->
-            <button id="settings-btn" class="top-control-btn settings-btn" aria-label="Settings">
+            <button id="agent-designer-btn" class="top-control-btn" aria-label="Agent Designer" title="Agent Designer">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
                     stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="3" />
-                    <path
-                        d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                </svg>
+            </button>
+            <button id="agent-browser-btn" class="top-control-btn" aria-label="Agent Creators" title="Agent Creators">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M2 15c6.667-6 6.667 6 13.333 0 6.667-6 6.667 6 6.667 0" />
+                    <path d="M2 9c6.667-6 6.667 6 13.333 0 6.667-6 6.667 6 6.667 0" />
                 </svg>
             </button>
         </div>
 
-        <!-- LLM Debug Panel (slides in from right) -->
+        <div id="runtime-error-banner" class="runtime-error-banner hidden" role="status" aria-live="polite">
+            <div class="runtime-error-banner-header">
+                <div id="runtime-error-title" class="runtime-error-title">Agent bug detected</div>
+                <div class="runtime-error-banner-actions">
+                    <button id="runtime-error-copy-btn" class="runtime-error-copy-btn" type="button">Copy</button>
+                    <button id="runtime-error-hide-btn" class="runtime-error-hide-btn" type="button">Hide</button>
+                </div>
+            </div>
+            <div id="runtime-error-body" class="runtime-error-body"></div>
+            <div id="runtime-error-retry" class="runtime-error-retry"></div>
+        </div>
+
+        <!-- LLM Debug Panel (slides in from left) -->
         <div id="debug-panel" class="debug-panel">
             <div class="debug-panel-header">
-                <h2 class="debug-panel-title">LLM Pipeline</h2>
+                <div class="debug-panel-title-row">
+                    <svg class="debug-panel-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
+                        <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+                        <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" />
+                        <path d="M17.599 6.5a3 3 0 0 0 .399-1.375" />
+                        <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5" />
+                        <path d="M3.477 10.896a4 4 0 0 1 .585-.396" />
+                        <path d="M19.938 10.5a4 4 0 0 1 .585.396" />
+                        <path d="M6 18a4 4 0 0 1-1.967-.516" />
+                        <path d="M19.967 17.484A4 4 0 0 1 18 18" />
+                    </svg>
+                    <h2 class="debug-panel-title">Agent Pipeline</h2>
+                </div>
                 <button id="debug-close" class="debug-close-btn" aria-label="Close">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round">
@@ -83,34 +159,104 @@
 
         <!-- Settings Popover -->
         <div id="settings-popover" class="settings-popover hidden">
-            <label for="llm-select">Model</label>
-            <select id="llm-select" class="llm-select">
-                <option value="anthropic">Claude Opus 4.6</option>
-                <option value="openai">OpenAI GPT-5.2</option>
-                <option value="grok">Grok 4 (xAI)</option>
-                <option value="gemini">Gemini 3.1 Pro</option>
-            </select>
-
-            <label for="effects-select" style="margin-top: 12px;">Effects</label>
+            <label for="effects-select">Effects</label>
             <select id="effects-select" class="llm-select">
-                <option value="2">2 effects</option>
                 <option value="1">1 effect</option>
+                <option value="2">2 effects</option>
             </select>
-
-            <label for="api-key-input" style="margin-top: 12px;">API Key <span id="key-provider-label"
-                    class="key-provider-label">(Anthropic)</span></label>
-            <div class="api-key-row">
-                <input type="password" id="api-key-input" placeholder="sk-ant-..." autocomplete="off" />
-                <button id="api-key-save">Save</button>
+            <label for="start-phase-select">Start at phase</label>
+            <select id="start-phase-select" class="llm-select">
+                <option value="0">None (default)</option>
+                <option value="1">Optimize (Phase 1)</option>
+                <option value="2">Lx Overlay (Phase 2)</option>
+                <option value="3">Biometrics (Phase 3)</option>
+                <option value="4">Revision (Phase 4)</option>
+                <option value="5">7D Cycle (Phase 5)</option>
+            </select>
+            <div class="settings-section">
+                <label for="debug-export-run-btn">Debug Bundles</label>
+                <div class="settings-actions-row">
+                    <button id="debug-export-run-btn" class="settings-action-btn primary" type="button">Export current run</button>
+                </div>
+                <label class="settings-checkbox-row" for="debug-export-autosave">
+                    <input id="debug-export-autosave" type="checkbox" />
+                    <span>Auto-save pipeline bundles into <code>.cortex-debug/</code></span>
+                </label>
+                <p id="debug-export-status" class="settings-hint">Writes directly into <code>.cortex-debug/</code> at the repo root when running the app locally through Vite.</p>
             </div>
-            <p class="api-key-hint">Stored locally in browser.</p>
-            <p class="api-key-status" id="api-key-status"></p>
+            <div class="settings-section" id="saved-cycles-section">
+                <label>Saved Cycles</label>
+                <div id="saved-cycles-list" class="saved-cycles-list"></div>
+                <p id="saved-cycles-hint" class="settings-hint">No saved cycles yet.</p>
+            </div>
+            <div class="settings-version" id="settings-version"></div>
+        </div>
 
-            <label
-                style="margin-top: 14px; display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px;">
-                <input type="checkbox" id="sherlock-toggle" checked />
-                Sherlock narration
-            </label>
+        <!-- Agent Designer (full-page overlay) -->
+        <div id="agent-designer-page" class="agent-page hidden">
+            <div class="agent-page-header">
+                <button id="agent-designer-back" class="agent-back-btn" type="button" aria-label="Back to app">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="19" y1="12" x2="5" y2="12" />
+                        <polyline points="12 19 5 12 12 5" />
+                    </svg>
+                </button>
+                <div class="agent-page-title-block">
+                    <h2 class="agent-page-title">Protocol Agent Designer</h2>
+                    <p class="agent-page-subtitle">Encode your pharmacological philosophy into a deployable AI agent</p>
+                </div>
+                <div class="agent-page-actions">
+                    <button id="agent-preview-card-btn" class="settings-action-btn" type="button">Preview Agent Card</button>
+                    <button id="agent-save-btn" class="settings-action-btn agent-gold-btn" type="button">Save Agent</button>
+                </div>
+            </div>
+            <div id="agent-designer-content" class="agent-page-content agent-page-content--narrow"></div>
+        </div>
+
+        <!-- Agent Creators Browser (full-page overlay) -->
+        <div id="agent-browser-page" class="agent-page hidden">
+            <div class="agent-page-header">
+                <button id="agent-browser-back" class="agent-back-btn" type="button" aria-label="Back to app">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="19" y1="12" x2="5" y2="12" />
+                        <polyline points="12 19 5 12 12 5" />
+                    </svg>
+                </button>
+                <div class="agent-page-title-block">
+                    <h2 class="agent-page-title">Agent Creators</h2>
+                    <p class="agent-page-subtitle">Select a specialist agent to guide your intervention</p>
+                </div>
+                <div class="agent-page-actions">
+                    <input type="text" id="agent-search-input" class="agent-search-input"
+                        placeholder="Search agents..." autocomplete="off" spellcheck="false" />
+                </div>
+            </div>
+            <div id="agent-browser-content" class="agent-page-content"></div>
+        </div>
+
+        <!-- Agent JSON Panel (slides in from right) -->
+        <div id="agent-json-panel" class="ad-json-panel">
+            <div class="ad-json-panel-header">
+                <h3 class="ad-json-panel-title">Agent JSON</h3>
+                <div class="ad-json-panel-actions">
+                    <button id="agent-json-copy-btn" class="settings-action-btn primary" type="button">Copy JSON</button>
+                    <button id="agent-json-close-btn" class="agent-back-btn" type="button" aria-label="Close">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <pre id="agent-json-output" class="ad-json-output"></pre>
+        </div>
+
+        <!-- Agent Preview Card Modal -->
+        <div id="agent-preview-overlay" class="ad-preview-overlay hidden">
+            <div id="agent-preview-card" class="ad-preview-card"></div>
         </div>
 
         <!-- TOP: Prompt (starts vertically centered, slides up on submit) -->
@@ -130,6 +276,18 @@
                             <polyline points="12 5 19 12 12 19" />
                         </svg>
                     </button>
+                    <button type="button" id="cycle-save-btn" class="cycle-action-btn cycle-save-btn" aria-label="Save this cycle" style="display:none;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                    </button>
+                    <button type="button" id="cycle-break-btn" class="cycle-action-btn cycle-break-btn" aria-label="Break from cache and continue live" style="display:none;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                        </svg>
+                    </button>
                 </form>
 
                 <p id="prompt-hint" class="hint-text"><a id="hint-example" href="#">e.g. "4 hours of deep focus, no
@@ -139,9 +297,10 @@
 
         <!-- MAIN: Phase Chart (primary visual after prompt submit) -->
         <main id="main-content">
+            <p id="hook-sentence" class="hook-sentence" aria-live="polite"></p>
             <div id="phase-chart-container" class="phase-chart-container">
                 <div class="phase-svg-wrapper">
-                    <svg id="phase-chart-svg" viewBox="0 0 1120 500" xmlns="http://www.w3.org/2000/svg">
+                    <svg id="phase-chart-svg" viewBox="0 0 1120 500" preserveAspectRatio="xMidYMin meet" xmlns="http://www.w3.org/2000/svg">
                         <defs>
                             <filter id="orbital-ghost" x="-40%" y="-40%" width="180%" height="180%">
                                 <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur" />
@@ -163,6 +322,12 @@
                             <linearGradient id="bio-scan-line-grad" x1="0" y1="0" x2="0" y2="1">
                                 <stop offset="0%" stop-color="rgba(255,77,77,0)" />
                                 <stop offset="50%" stop-color="rgba(255,77,77,0.7)" />
+                                <stop offset="100%" stop-color="rgba(255,77,77,0)" />
+                            </linearGradient>
+                            <linearGradient id="sim-scan-line-grad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stop-color="rgba(160,160,255,0.5)" />
+                                <stop offset="35%" stop-color="rgba(245,200,80,0.5)" />
+                                <stop offset="65%" stop-color="rgba(255,77,77,0.6)" />
                                 <stop offset="100%" stop-color="rgba(255,77,77,0)" />
                             </linearGradient>
                             <marker id="arrowhead" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
@@ -189,6 +354,9 @@
                         <g id="phase-legend"></g>
                         <g id="phase-tooltip-overlay"></g>
                         <g id="phase-biometric-strips"></g>
+                        <g id="phase-spotter-highlights"></g>
+                        <g id="phase-poi-connectors"></g>
+                        <g id="phase-sim-scan-line"></g>
                     </svg>
                     <button id="phase-optimize-btn" class="phase-optimize-btn hidden">Optimize</button>
                     <button id="phase-lx-btn" class="phase-lx-btn hidden">Lx</button>
@@ -198,7 +366,7 @@
                 <!-- Biometric loop trigger (red + button, shown after Lx completes) -->
                 <div id="biometric-trigger-wrap" class="biometric-trigger-wrap hidden">
                     <span class="bio-trigger-label">Biometric Loop</span>
-                    <button id="bio-trigger-btn" class="bio-trigger-btn" aria-label="Start biometric loop">+</button>
+                    <button id="bio-trigger-btn" class="bio-trigger-btn" aria-label="Start biometric loop">∞</button>
                 </div>
 
                 <!-- Biometric strip UI (device selection + profile input) -->
@@ -212,57 +380,71 @@
                         <input type="text" id="bio-profile-input"
                             placeholder="e.g. resting HR 62, HRV 45ms, sleep score 78" autocomplete="off"
                             spellcheck="false" />
+                        <p id="bio-profile-status" class="bio-profile-status"></p>
                         <button id="bio-submit-btn" class="bio-submit-btn">Run biometric loop</button>
                     </div>
                 </div>
+
+                <!-- Multi-Day Controls (hidden until multi-day activates) - moved to fixed ribbon below -->
+
+                <!-- Creator Agent Match Panel (right-side card list, appears after Phase 2) -->
+                <div id="agent-match-panel" class="agent-match-panel hidden"></div>
             </div>
 
-            <!-- Cartridge + old chart (hidden, for later phase) -->
-            <div id="cartridge-section" class="hidden">
-                <div class="cartridge-housing">
-                    <svg id="cartridge-svg" viewBox="0 0 800 800" xmlns="http://www.w3.org/2000/svg">
-                        <defs></defs>
-                        <g id="timing-arcs"></g>
-                        <g id="timing-labels"></g>
-                        <g id="connector-lines"></g>
-                        <g id="label-ring"></g>
-                        <g id="capsule-wheel">
-                            <g id="back-layer"></g>
-                            <g id="front-layer"></g>
-                        </g>
-                        <g id="center-hub"></g>
-                    </svg>
-                    <div id="loading-overlay" class="loading-overlay hidden">
-                        <div class="spinner"></div>
-                        <span>Formulating stack...</span>
-                    </div>
-                </div>
-                <div id="effect-chart-panel" class="chart-panel">
-                    <svg id="effect-chart-svg" viewBox="0 0 520 360" xmlns="http://www.w3.org/2000/svg">
-                        <defs>
-                            <linearGradient id="chart-grid-fade" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stop-color="rgba(255,255,255,0.06)" />
-                                <stop offset="100%" stop-color="rgba(255,255,255,0.02)" />
-                            </linearGradient>
-                        </defs>
-                        <g id="chart-grid"></g>
-                        <g id="chart-axes"></g>
-                        <g id="chart-baseline"></g>
-                        <g id="chart-curves"></g>
-                        <g id="chart-dose-markers"></g>
-                        <g id="chart-cursor"></g>
-                        <g id="chart-legend"></g>
-                    </svg>
-                </div>
-            </div>
         </main>
 
-        <!-- BOTTOM: Stack summary (hidden, for later phase) -->
-        <footer id="stack-summary" class="hidden">
-            <div class="summary-pills" id="summary-pills"></div>
-        </footer>
+        <!-- LLM Pipeline Timeline (slides up on first animation) -->
+        <div id="pipeline-timeline" class="pipeline-timeline" aria-live="polite">
+            <button id="pipeline-toggle" class="pipeline-toggle" aria-label="Hide pipeline">
+                <svg width="10" height="6" viewBox="0 0 10 6" fill="currentColor">
+                    <path d="M1 1l4 4 4-4" />
+                </svg>
+            </button>
+            <div class="pipeline-timeline-header">
+                <span class="pipeline-timeline-title">Cortex Agent Pipeline</span>
+                <span id="pipeline-timeline-status" class="pipeline-timeline-status">LIVE</span>
+                <div class="pipeline-timeline-legend" aria-hidden="true">
+                    <span class="pipeline-legend-item"><i class="pipeline-legend-swatch queued"></i>Queued</span>
+                    <span class="pipeline-legend-item"><i class="pipeline-legend-swatch running"></i>Running</span>
+                    <span class="pipeline-legend-item"><i class="pipeline-legend-swatch done"></i>Done</span>
+                    <span class="pipeline-legend-item"><i class="pipeline-legend-swatch error"></i>Error</span>
+                </div>
+            </div>
+            <div id="pipeline-timeline-scroll" class="pipeline-timeline-scroll">
+                <canvas id="pipeline-timeline-canvas" class="pipeline-timeline-canvas"></canvas>
+            </div>
+            <div id="pipeline-timeline-tooltip" class="pipeline-timeline-tooltip hidden"></div>
+        </div>
 
-        <!-- Animation Timeline Ribbon (slides up on first animation) -->
+        <!-- Multi-Day VCR Ribbon (fixed bottom, mirrors timeline-ribbon design) -->
+        <div id="multi-day-ribbon" class="multi-day-ribbon">
+            <div class="ribbon-controls md-ribbon-controls">
+                <button id="day-play-pause" class="ribbon-btn md-play-pause" aria-label="Play/Pause">
+                    <svg width="14" height="14" viewBox="0 0 14 14"><polygon points="3,1 12,7 3,13" fill="currentColor"/></svg>
+                </button>
+                <span class="ribbon-time md-ribbon-time">
+                    Day <span id="day-number" class="md-day-number">0</span> / 7
+                </span>
+                <button id="day-speed-btn" class="ribbon-btn md-speed-btn">1x</button>
+                <div class="md-scrubber-wrap">
+                    <input type="range" id="day-scrubber" class="md-scrubber" min="0" max="7" step="1" value="0">
+                </div>
+            </div>
+        </div>
+
+        <!-- Compile / Stream Protocol overlay (dose.player assembly) -->
+        <div id="compile-overlay" class="compile-overlay hidden">
+            <div class="compile-delivery">
+                <div class="compile-delivery-timer">
+                    <span class="compile-eta-text">Arriving in <strong>30 minutes</strong></span>
+                </div>
+                <div class="compile-delivery-bar">
+                    <div class="compile-delivery-bar-fill"></div>
+                </div>
+                <p class="compile-tagline">Streaming Substances for a Better Longer Life</p>
+            </div>
+        </div>
+
         <div id="timeline-ribbon" class="timeline-ribbon">
             <button id="ribbon-toggle" class="ribbon-toggle" aria-label="Hide timeline">
                 <svg width="10" height="6" viewBox="0 0 10 6" fill="currentColor">
@@ -284,7 +466,6 @@
     </div>
 
     <script src="config.js"></script>
-    <script src="biometricDevices.js"></script>
     <script type="module" src="/src/main.ts"></script>
 </body>
 

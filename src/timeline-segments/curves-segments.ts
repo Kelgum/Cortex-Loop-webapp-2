@@ -6,11 +6,8 @@
 import type { AnimationSegment, SegmentContext } from '../timeline-engine';
 import { easeInOutCubic, easeOutCubic } from '../timeline-engine';
 import { PHASE_CHART, PHASE_SMOOTH_PASSES } from '../constants';
-import { svgEl, chartTheme, phaseChartX, phaseChartY } from '../utils';
-import {
-    smoothPhaseValues, phasePointsToPath, phasePointsToFillPath,
-    findMaxDivergence,
-} from '../curve-utils';
+import { svgEl, chartTheme, phaseChartX, phaseChartY, clamp } from '../utils';
+import { smoothPhaseValues, phasePointsToPath, phasePointsToFillPath, findMaxDivergence } from '../curve-utils';
 import { getEffectSubGroup, activateDivider, cleanupDivider } from '../divider';
 import { placePeakDescriptors, renderYAxisTransitionIndicators } from '../phase-chart';
 
@@ -42,14 +39,18 @@ export function createBaselineCurvesSegment(startTime: number): AnimationSegment
 
                 const fillPath = svgEl('path', {
                     d: phasePointsToFillPath(curve.baseline),
-                    fill: curve.color, 'fill-opacity': '0',
+                    fill: curve.color,
+                    'fill-opacity': '0',
                 }) as SVGElement;
                 sub.appendChild(fillPath);
                 created.push(fillPath);
 
                 const strokePath = svgEl('path', {
-                    d: pathD, fill: 'none', stroke: curve.color,
-                    class: 'phase-baseline-path', opacity: '0',
+                    d: pathD,
+                    fill: 'none',
+                    stroke: curve.color,
+                    class: 'phase-baseline-path',
+                    opacity: '0',
                 }) as SVGElement;
                 sub.appendChild(strokePath);
                 created.push(strokePath);
@@ -63,7 +64,7 @@ export function createBaselineCurvesSegment(startTime: number): AnimationSegment
             // Stagger per curve: curve 0 fills 0..0.8, curve 1 fills 0.2..1.0
             const curveCount = ctx.curvesData.length;
             for (let i = 0; i < curveCount; i++) {
-                const staggerT = Math.max(0, Math.min(1, (t - i * 0.2) / 0.8));
+                const staggerT = clamp((t - i * 0.2) / 0.8, 0, 1);
                 const strokeEl = created[i * 2 + 1];
                 const fillEl = created[i * 2];
                 if (strokeEl) strokeEl.setAttribute('opacity', (0.5 * staggerT).toFixed(2));
@@ -145,7 +146,8 @@ export function createMissionArrowsSegment(startTime: number): AnimationSegment 
 
                 const blSmoothed = smoothPhaseValues(curve.baseline, PHASE_SMOOTH_PASSES);
                 const match = blSmoothed.reduce((a: any, b: any) =>
-                    Math.abs(b.hour - div.hour) < Math.abs(a.hour - div.hour) ? b : a);
+                    Math.abs(b.hour - div.hour) < Math.abs(a.hour - div.hour) ? b : a,
+                );
 
                 const arrowSub = getEffectSubGroup(arrowGroup, i);
                 const x = phaseChartX(div.hour * 60);
@@ -153,17 +155,27 @@ export function createMissionArrowsSegment(startTime: number): AnimationSegment 
                 const y2 = phaseChartY(div.value);
 
                 const glowLine = svgEl('line', {
-                    x1: x.toFixed(1), y1: y1.toFixed(1),
-                    x2: x.toFixed(1), y2: y1.toFixed(1),
-                    stroke: curve.color, 'stroke-width': '4', 'stroke-opacity': '0',
-                    'stroke-linecap': 'round', fill: 'none', 'pointer-events': 'none',
+                    x1: x.toFixed(1),
+                    y1: y1.toFixed(1),
+                    x2: x.toFixed(1),
+                    y2: y1.toFixed(1),
+                    stroke: curve.color,
+                    'stroke-width': '4',
+                    'stroke-opacity': '0',
+                    'stroke-linecap': 'round',
+                    fill: 'none',
+                    'pointer-events': 'none',
                 }) as SVGElement;
                 arrowSub.appendChild(glowLine);
 
                 const arrowLine = svgEl('line', {
-                    x1: x.toFixed(1), y1: y1.toFixed(1),
-                    x2: x.toFixed(1), y2: y1.toFixed(1),
-                    stroke: curve.color, class: 'mission-arrow', opacity: '0',
+                    x1: x.toFixed(1),
+                    y1: y1.toFixed(1),
+                    x2: x.toFixed(1),
+                    y2: y1.toFixed(1),
+                    stroke: curve.color,
+                    class: 'mission-arrow',
+                    opacity: '0',
                 }) as SVGElement;
                 arrowSub.appendChild(arrowLine);
 
@@ -230,15 +242,20 @@ export function createMorphToDesiredSegment(startTime: number): AnimationSegment
                 const desiredSub = getEffectSubGroup(desiredGroup, i);
 
                 const fillPath = svgEl('path', {
-                    d: baseFillD, fill: curve.color, 'fill-opacity': '0',
+                    d: baseFillD,
+                    fill: curve.color,
+                    'fill-opacity': '0',
                     class: 'phase-desired-fill',
                 }) as SVGElement;
                 desiredSub.appendChild(fillPath);
                 fillEls.push(fillPath);
 
                 const strokePath = svgEl('path', {
-                    d: basePathD, fill: 'none', stroke: curve.color,
-                    class: 'phase-desired-path', opacity: '1',
+                    d: basePathD,
+                    fill: 'none',
+                    stroke: curve.color,
+                    class: 'phase-desired-path',
+                    opacity: '1',
                 }) as SVGElement;
                 desiredSub.appendChild(strokePath);
                 strokeEls.push(strokePath);

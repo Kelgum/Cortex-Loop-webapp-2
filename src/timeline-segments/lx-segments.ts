@@ -6,17 +6,21 @@
 import type { AnimationSegment, SegmentContext } from '../timeline-engine';
 import { easeInOutCubic, easeOutCubic } from '../timeline-engine';
 import { PHASE_CHART, PHASE_SMOOTH_PASSES, TIMELINE_ZONE } from '../constants';
-import { svgEl, chartTheme, phaseChartX, phaseChartY } from '../utils';
+import { svgEl, chartTheme, phaseChartX, phaseChartY, isLightMode, clamp } from '../utils';
 import {
-    smoothPhaseValues, phasePointsToPath, phasePointsToFillPath,
-    phaseBandPath, buildProgressiveMorphPoints, interpolatePointsAtTime,
+    smoothPhaseValues,
+    phasePointsToPath,
+    phasePointsToFillPath,
+    phaseBandPath,
+    buildProgressiveMorphPoints,
+    interpolatePointsAtTime,
 } from '../curve-utils';
 import { getEffectSubGroup } from '../divider';
 import { allocateTimelineLanes, transmuteDesiredCurves, animatePhaseChartViewBoxHeight } from '../lx-system';
 import { placePeakDescriptors } from '../phase-chart';
 
 function brightenTowardWhite(color: string, intensity: number): string {
-    const t = Math.max(0, Math.min(1, intensity));
+    const t = clamp(intensity, 0, 1);
     const hex = color.startsWith('#') ? color.slice(1) : '';
     if (hex.length === 6) {
         const r = parseInt(hex.slice(0, 2), 16);
@@ -84,24 +88,33 @@ export function createLxCurvesInitSegment(startTime: number): AnimationSegment {
             lxGroup.innerHTML = '';
             if (bandsGroup) bandsGroup.innerHTML = '';
 
-            const baselinePts = ctx.curvesData.map((c: any) =>
-                smoothPhaseValues(c.baseline, PHASE_SMOOTH_PASSES));
+            const baselinePts = ctx.curvesData.map((c: any) => smoothPhaseValues(c.baseline, PHASE_SMOOTH_PASSES));
 
             for (let ci = 0; ci < ctx.curvesData.length; ci++) {
                 const curve = ctx.curvesData[ci];
                 const initD = phasePointsToPath(baselinePts[ci], true);
                 const initFillD = phasePointsToFillPath(baselinePts[ci], true);
 
-                lxGroup.appendChild(svgEl('path', {
-                    d: initFillD, fill: curve.color, 'fill-opacity': '0',
-                    class: 'phase-lx-fill',
-                }));
-                lxGroup.appendChild(svgEl('path', {
-                    d: initD, fill: 'none', stroke: curve.color,
-                    'stroke-width': '2.2', 'stroke-opacity': '0.9',
-                    'stroke-linecap': 'round', 'stroke-linejoin': 'round',
-                    class: 'phase-lx-path',
-                }));
+                lxGroup.appendChild(
+                    svgEl('path', {
+                        d: initFillD,
+                        fill: curve.color,
+                        'fill-opacity': '0',
+                        class: 'phase-lx-fill',
+                    }),
+                );
+                lxGroup.appendChild(
+                    svgEl('path', {
+                        d: initD,
+                        fill: 'none',
+                        stroke: curve.color,
+                        'stroke-width': '2.2',
+                        'stroke-opacity': '0.9',
+                        'stroke-linecap': 'round',
+                        'stroke-linejoin': 'round',
+                        class: 'phase-lx-path',
+                    }),
+                );
             }
 
             // Dim baseline strokes
@@ -118,11 +131,15 @@ export function createLxCurvesInitSegment(startTime: number): AnimationSegment {
             if (!timelineGroup) return;
             timelineGroup.innerHTML = '';
 
-            timelineGroup.appendChild(svgEl('line', {
-                x1: String(PHASE_CHART.padL), y1: String(TIMELINE_ZONE.separatorY),
-                x2: String(PHASE_CHART.padL + PHASE_CHART.plotW), y2: String(TIMELINE_ZONE.separatorY),
-                class: 'timeline-separator',
-            }));
+            timelineGroup.appendChild(
+                svgEl('line', {
+                    x1: String(PHASE_CHART.padL),
+                    y1: String(TIMELINE_ZONE.separatorY),
+                    x2: String(PHASE_CHART.padL + PHASE_CHART.plotW),
+                    y2: String(TIMELINE_ZONE.separatorY),
+                    class: 'timeline-separator',
+                }),
+            );
             // Start collapsed; per-substance segments progressively expand lanes.
             void animatePhaseChartViewBoxHeight(ctx.svgRoot as SVGSVGElement, PHASE_CHART.viewH, 180);
         },
@@ -154,8 +171,8 @@ export function createSubstanceSweepSegment(
     startTime: number,
     stepIdx: number,
     substance: any,
-    sourcePts: any[],      // Current Lx points per curve (before this substance)
-    targetPts: any[],      // Lx points per curve (after this substance)
+    sourcePts: any[], // Current Lx points per curve (before this substance)
+    targetPts: any[], // Lx points per curve (after this substance)
     curvesData: any[],
 ): AnimationSegment {
     const sweepDuration = Math.max(1200, 2500 - stepIdx * 250);
@@ -170,7 +187,7 @@ export function createSubstanceSweepSegment(
     warpMult.fill(1);
     const SLOWMO_FACTOR = 8;
     const SIGMA_ENTRY = 0.06;
-    const SIGMA_EXIT = 0.10;
+    const SIGMA_EXIT = 0.1;
 
     const pharma = substance.substance?.pharma;
     if (pharma) {
@@ -195,10 +212,12 @@ export function createSubstanceSweepSegment(
 
     function warpedHour(wallT: number): number {
         const targetCum = wallT * warpTotal;
-        let lo = 0, hi = WARP_SAMPLES - 1;
+        let lo = 0,
+            hi = WARP_SAMPLES - 1;
         while (lo < hi) {
             const mid = (lo + hi) >> 1;
-            if (warpCum[mid + 1] <= targetCum) lo = mid + 1; else hi = mid;
+            if (warpCum[mid + 1] <= targetCum) lo = mid + 1;
+            else hi = mid;
         }
         const segStart = warpCum[lo];
         const segLen = warpMult[lo];
@@ -222,6 +241,8 @@ export function createSubstanceSweepSegment(
     let chevFill2: SVGElement | null = null;
     let bandClipRect: SVGElement | null = null;
     let bandClipId = '';
+    let cachedLxStrokes: NodeListOf<Element> | null = null;
+    let cachedLxFills: NodeListOf<Element> | null = null;
 
     const curveTotals: { ci: number; total: number }[] = [];
     for (let ci = 0; ci < curvesData.length; ci++) {
@@ -250,15 +271,23 @@ export function createSubstanceSweepSegment(
             // Create playhead
             playheadGroup = svgEl('g', { class: 'sequential-playhead' }) as SVGElement;
             phGlow = svgEl('rect', {
-                x: String(PHASE_CHART.padL - 8), y: String(PHASE_CHART.padT),
-                width: '18', height: String(PHASE_CHART.plotH),
-                fill: 'rgba(245, 200, 80, 0.06)', rx: '9', 'pointer-events': 'none',
+                x: String(PHASE_CHART.padL - 8),
+                y: String(PHASE_CHART.padT),
+                width: '18',
+                height: String(PHASE_CHART.plotH),
+                fill: 'rgba(245, 200, 80, 0.06)',
+                rx: '9',
+                'pointer-events': 'none',
             }) as SVGElement;
             playheadGroup.appendChild(phGlow);
             phLine = svgEl('rect', {
-                x: String(PHASE_CHART.padL), y: String(PHASE_CHART.padT),
-                width: '1.5', height: String(PHASE_CHART.plotH),
-                fill: 'rgba(245, 200, 80, 0.55)', rx: '0.75', 'pointer-events': 'none',
+                x: String(PHASE_CHART.padL),
+                y: String(PHASE_CHART.padT),
+                width: '1.5',
+                height: String(PHASE_CHART.plotH),
+                fill: 'rgba(245, 200, 80, 0.55)',
+                rx: '0.75',
+                'pointer-events': 'none',
             }) as SVGElement;
             playheadGroup.appendChild(phLine);
 
@@ -266,7 +295,8 @@ export function createSubstanceSweepSegment(
             const primaryChevColor = substance.substance?.color || curvesData[bestCurveIdx]?.color || '#f5c850';
             chevFill = svgEl('path', {
                 d: 'M -8 -10 L 0 2 L 8 -10 Z',
-                fill: primaryChevColor, 'pointer-events': 'none',
+                fill: primaryChevColor,
+                'pointer-events': 'none',
             }) as SVGElement;
             chevronGroup.appendChild(chevFill);
             playheadGroup.appendChild(chevronGroup);
@@ -288,7 +318,10 @@ export function createSubstanceSweepSegment(
             const defs = svg.querySelector('defs')!;
             const clip = svgEl('clipPath', { id: bandClipId });
             bandClipRect = svgEl('rect', {
-                x: String(PHASE_CHART.padL), y: '0', width: '0', height: '1200',
+                x: String(PHASE_CHART.padL),
+                y: '0',
+                width: '0',
+                height: '1200',
             }) as SVGElement;
             clip.appendChild(bandClipRect);
             defs.appendChild(clip);
@@ -300,15 +333,26 @@ export function createSubstanceSweepSegment(
                     const bandD = phaseBandPath(targetPts[ci], sourcePts[ci]);
                     if (!bandD) continue;
                     const substanceColor = substance.substance?.color || curvesData[ci].color;
-                    bandsGroup.appendChild(svgEl('path', {
-                        d: bandD, fill: substanceColor, 'fill-opacity': '0.18',
-                        class: 'lx-auc-band',
-                        'clip-path': `url(#${bandClipId})`,
-                        'data-substance-key': String(substance.key || ''),
-                        'data-step-idx': String(stepIdx),
-                        'data-curve-idx': String(ci),
-                    }));
+                    bandsGroup.appendChild(
+                        svgEl('path', {
+                            d: bandD,
+                            fill: substanceColor,
+                            'fill-opacity': '0.18',
+                            class: 'lx-auc-band',
+                            'clip-path': `url(#${bandClipId})`,
+                            'data-substance-key': String(substance.key || ''),
+                            'data-step-idx': String(stepIdx),
+                            'data-curve-idx': String(ci),
+                        }),
+                    );
                 }
+            }
+
+            // Cache Lx stroke/fill NodeLists for use in render() — avoids querySelectorAll per frame
+            const lxGroupEnter = ctx.groups['phase-lx-curves'];
+            if (lxGroupEnter) {
+                cachedLxStrokes = lxGroupEnter.querySelectorAll('.phase-lx-path');
+                cachedLxFills = lxGroupEnter.querySelectorAll('.phase-lx-fill');
             }
         },
 
@@ -326,7 +370,7 @@ export function createSubstanceSweepSegment(
                 phLine.setAttribute('fill', `rgba(245, 200, 80, ${lineOp.toFixed(2)})`);
             }
             if (phGlow) {
-                const glowOp = 0.06 + smo * 0.10;
+                const glowOp = 0.06 + smo * 0.1;
                 phGlow.setAttribute('x', (playheadX - 9).toFixed(1));
                 phGlow.setAttribute('fill', `rgba(245, 200, 80, ${glowOp.toFixed(2)})`);
             }
@@ -336,17 +380,19 @@ export function createSubstanceSweepSegment(
                 bandClipRect.setAttribute('width', (playheadX - PHASE_CHART.padL).toFixed(1));
             }
 
-            // Morph Lx strokes + fills
-            const lxGroup = ctx.groups['phase-lx-curves'];
-            if (!lxGroup) return;
-            const lxStrokes = lxGroup.querySelectorAll('.phase-lx-path');
-            const lxFills = lxGroup.querySelectorAll('.phase-lx-fill');
+            // Morph Lx strokes + fills (use cached NodeLists from enter(), fallback to query)
+            if (!cachedLxStrokes || !cachedLxFills) {
+                const lxGroup = ctx.groups['phase-lx-curves'];
+                if (!lxGroup) return;
+                cachedLxStrokes = lxGroup.querySelectorAll('.phase-lx-path');
+                cachedLxFills = lxGroup.querySelectorAll('.phase-lx-fill');
+            }
+            const lxStrokes = cachedLxStrokes;
+            const lxFills = cachedLxFills;
 
             for (let ci = 0; ci < curvesData.length; ci++) {
                 if (!sourcePts[ci] || !targetPts[ci]) continue;
-                const morphed = buildProgressiveMorphPoints(
-                    sourcePts[ci], targetPts[ci], playheadHour, BLEND_WIDTH
-                );
+                const morphed = buildProgressiveMorphPoints(sourcePts[ci], targetPts[ci], playheadHour, BLEND_WIDTH);
                 const strokeD = phasePointsToPath(morphed, true);
                 if (lxStrokes[ci]) lxStrokes[ci].setAttribute('d', strokeD);
                 if (lxFills[ci]) lxFills[ci].setAttribute('d', phasePointsToFillPath(morphed, true));
@@ -355,7 +401,10 @@ export function createSubstanceSweepSegment(
             // Primary chevron tracks the most impacted curve.
             if (chevronGroup && chevFill && sourcePts[bestCurveIdx] && targetPts[bestCurveIdx]) {
                 const morphed = buildProgressiveMorphPoints(
-                    sourcePts[bestCurveIdx], targetPts[bestCurveIdx], playheadHour, BLEND_WIDTH
+                    sourcePts[bestCurveIdx],
+                    targetPts[bestCurveIdx],
+                    playheadHour,
+                    BLEND_WIDTH,
                 );
                 const morphedVal = interpolatePointsAtTime(morphed, playheadHour);
                 const curveY = phaseChartY(morphedVal);
@@ -378,9 +427,18 @@ export function createSubstanceSweepSegment(
             }
 
             // Secondary chevron tracks the second-most impacted curve.
-            if (chevron2Group && chevFill2 && secondCurveIdx != null && sourcePts[secondCurveIdx] && targetPts[secondCurveIdx]) {
+            if (
+                chevron2Group &&
+                chevFill2 &&
+                secondCurveIdx != null &&
+                sourcePts[secondCurveIdx] &&
+                targetPts[secondCurveIdx]
+            ) {
                 const morphed = buildProgressiveMorphPoints(
-                    sourcePts[secondCurveIdx], targetPts[secondCurveIdx], playheadHour, BLEND_WIDTH
+                    sourcePts[secondCurveIdx],
+                    targetPts[secondCurveIdx],
+                    playheadHour,
+                    BLEND_WIDTH,
                 );
                 const morphedVal = interpolatePointsAtTime(morphed, playheadHour);
                 const curveY = phaseChartY(morphedVal);
@@ -411,6 +469,8 @@ export function createSubstanceSweepSegment(
             chevFill = null;
             chevron2Group = null;
             chevFill2 = null;
+            cachedLxStrokes = null;
+            cachedLxFills = null;
 
             // Remove clip
             const svg = ctx.svgRoot;
@@ -475,24 +535,28 @@ export function createSubstancePillSegment(
                 .slice(0, stepIdx + 1)
                 .reduce((max: number, a: any) => Math.max(max, a.laneIdx + 1), 0);
             const neededH = TIMELINE_ZONE.top + visibleLaneCount * laneStep + TIMELINE_ZONE.bottomPad;
-            void animatePhaseChartViewBoxHeight(ctx.svgRoot as SVGSVGElement, Math.max(PHASE_CHART.viewH, neededH), 260);
+            void animatePhaseChartViewBoxHeight(
+                ctx.svgRoot as SVGSVGElement,
+                Math.max(PHASE_CHART.viewH, neededH),
+                260,
+            );
 
             // Add lane stripes incrementally as lanes appear.
-            const stripeFill = document.body.classList.contains('light-mode')
-                ? 'rgba(0,0,0,0.03)'
-                : 'rgba(255,255,255,0.02)';
+            const stripeFill = isLightMode() ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.02)';
             for (let idx = 1; idx < visibleLaneCount; idx += 2) {
                 if (timelineGroup.querySelector(`.timeline-lane-stripe[data-lane-idx="${idx}"]`)) continue;
-                timelineGroup.appendChild(svgEl('rect', {
-                    x: String(PHASE_CHART.padL),
-                    y: (TIMELINE_ZONE.top + idx * laneStep).toFixed(1),
-                    width: String(PHASE_CHART.plotW),
-                    height: String(TIMELINE_ZONE.laneH),
-                    fill: stripeFill,
-                    class: 'timeline-lane-stripe',
-                    'data-lane-idx': String(idx),
-                    'pointer-events': 'none',
-                }));
+                timelineGroup.appendChild(
+                    svgEl('rect', {
+                        x: String(PHASE_CHART.padL),
+                        y: (TIMELINE_ZONE.top + idx * laneStep).toFixed(1),
+                        width: String(PHASE_CHART.plotW),
+                        height: String(TIMELINE_ZONE.laneH),
+                        fill: stripeFill,
+                        class: 'timeline-lane-stripe',
+                        'data-lane-idx': String(idx),
+                        'pointer-events': 'none',
+                    }),
+                );
             }
 
             const x1 = phaseChartX(startMin);
@@ -503,7 +567,8 @@ export function createSubstancePillSegment(
             const rx = TIMELINE_ZONE.pillRx;
 
             pillG = svgEl('g', {
-                class: 'timeline-pill-group', opacity: '0',
+                class: 'timeline-pill-group',
+                opacity: '0',
                 'data-substance-key': substance.key,
                 'data-time-minutes': String(substance.timeMinutes),
             }) as SVGElement;
@@ -512,48 +577,75 @@ export function createSubstancePillSegment(
             const targetIdx = substance.targetCurveIdx ?? 0;
             const curveColor = curvesData[targetIdx]?.color || color;
             const timeH = substance.timeMinutes / 60;
-            const desiredVal = lxCurves[targetIdx]
-                ? interpolatePointsAtTime(lxCurves[targetIdx].desired, timeH) : 50;
+            const desiredVal = lxCurves[targetIdx] ? interpolatePointsAtTime(lxCurves[targetIdx].desired, timeH) : 50;
             const connectorTopY = phaseChartY(desiredVal);
 
-            pillG.appendChild(svgEl('line', {
-                x1: x1.toFixed(1), y1: connectorTopY.toFixed(1),
-                x2: x1.toFixed(1), y2: String(y),
-                stroke: curveColor, 'stroke-opacity': '0.25', 'stroke-width': '0.75',
-                'stroke-dasharray': '2 3',
-                class: 'timeline-connector', 'pointer-events': 'none',
-                'data-curve-idx': String(targetIdx), 'data-time-h': timeH.toFixed(3),
-            }));
+            pillG.appendChild(
+                svgEl('line', {
+                    x1: x1.toFixed(1),
+                    y1: connectorTopY.toFixed(1),
+                    x2: x1.toFixed(1),
+                    y2: String(y),
+                    stroke: curveColor,
+                    'stroke-opacity': '0.25',
+                    'stroke-width': '0.75',
+                    'stroke-dasharray': '2 3',
+                    class: 'timeline-connector',
+                    'pointer-events': 'none',
+                    'data-curve-idx': String(targetIdx),
+                    'data-time-h': timeH.toFixed(3),
+                }),
+            );
 
-            pillG.appendChild(svgEl('circle', {
-                cx: x1.toFixed(1), cy: connectorTopY.toFixed(1), r: '2.5',
-                fill: curveColor, 'fill-opacity': '0.6',
-                class: 'timeline-curve-dot', 'pointer-events': 'none',
-                'data-curve-idx': String(targetIdx), 'data-time-h': timeH.toFixed(3),
-            }));
+            pillG.appendChild(
+                svgEl('circle', {
+                    cx: x1.toFixed(1),
+                    cy: connectorTopY.toFixed(1),
+                    r: '2.5',
+                    fill: curveColor,
+                    'fill-opacity': '0.6',
+                    class: 'timeline-curve-dot',
+                    'pointer-events': 'none',
+                    'data-curve-idx': String(targetIdx),
+                    'data-time-h': timeH.toFixed(3),
+                }),
+            );
 
             // Bar
-            pillG.appendChild(svgEl('rect', {
-                x: x1.toFixed(1), y: y.toFixed(1),
-                width: barW.toFixed(1), height: String(h),
-                rx: String(rx), fill: color, 'fill-opacity': '0.18',
-                stroke: color, 'stroke-opacity': '0.35', 'stroke-width': '0.75',
-                class: 'timeline-bar',
-            }));
+            pillG.appendChild(
+                svgEl('rect', {
+                    x: x1.toFixed(1),
+                    y: y.toFixed(1),
+                    width: barW.toFixed(1),
+                    height: String(h),
+                    rx: String(rx),
+                    fill: color,
+                    'fill-opacity': '0.18',
+                    stroke: color,
+                    'stroke-opacity': '0.35',
+                    'stroke-width': '0.75',
+                    class: 'timeline-bar',
+                }),
+            );
 
             // Label
             const name = sub?.name || substance.key;
             const dose = substance.dose || sub?.standardDose || '';
             const label = svgEl('text', {
-                x: (x1 + 6).toFixed(1), y: (y + h / 2 + 3.5).toFixed(1),
-                class: 'timeline-bar-label', fill: color, 'font-size': '9',
+                x: (x1 + 6).toFixed(1),
+                y: (y + h / 2 + 3.5).toFixed(1),
+                class: 'timeline-bar-label',
+                fill: color,
+                'font-size': '9',
             });
             label.textContent = dose ? `${name} ${dose}` : name;
             // Rx badge as inline tspan after label text
             const regStatus = sub ? (sub.regulatoryStatus || '').toLowerCase() : '';
             if (regStatus === 'rx' || regStatus === 'controlled') {
                 const rxSpan = svgEl('tspan', {
-                    fill: '#e11d48', 'font-size': '7', 'font-weight': '700',
+                    fill: '#e11d48',
+                    'font-size': '7',
+                    'font-weight': '700',
                     dy: '-0.5',
                 });
                 rxSpan.textContent = ' Rx';
@@ -579,7 +671,11 @@ export function createSubstancePillSegment(
                     .slice(0, stepIdx)
                     .reduce((max: number, a: any) => Math.max(max, a.laneIdx + 1), 0);
                 const neededH = TIMELINE_ZONE.top + remainingLaneCount * laneStep + TIMELINE_ZONE.bottomPad;
-                void animatePhaseChartViewBoxHeight(ctx.svgRoot as SVGSVGElement, Math.max(PHASE_CHART.viewH, neededH), 220);
+                void animatePhaseChartViewBoxHeight(
+                    ctx.svgRoot as SVGSVGElement,
+                    Math.max(PHASE_CHART.viewH, neededH),
+                    220,
+                );
 
                 timelineGroup.querySelectorAll('.timeline-lane-stripe').forEach((el: any) => {
                     const idx = parseInt(el.getAttribute('data-lane-idx') || '-1', 10);
@@ -609,15 +705,23 @@ export function createCinematicPlayheadSegment(startTime: number): AnimationSegm
             const svg = ctx.svgRoot;
             playheadGroup = svgEl('g', { id: 'morph-playhead' }) as SVGElement;
             phGlow = svgEl('rect', {
-                x: String(PHASE_CHART.padL - 8), y: String(PHASE_CHART.padT),
-                width: '18', height: String(PHASE_CHART.plotH),
-                fill: 'rgba(245, 200, 80, 0.06)', rx: '9', 'pointer-events': 'none',
+                x: String(PHASE_CHART.padL - 8),
+                y: String(PHASE_CHART.padT),
+                width: '18',
+                height: String(PHASE_CHART.plotH),
+                fill: 'rgba(245, 200, 80, 0.06)',
+                rx: '9',
+                'pointer-events': 'none',
             }) as SVGElement;
             playheadGroup.appendChild(phGlow);
             phLine = svgEl('rect', {
-                x: String(PHASE_CHART.padL), y: String(PHASE_CHART.padT),
-                width: '1.5', height: String(PHASE_CHART.plotH),
-                fill: 'rgba(245, 200, 80, 0.55)', rx: '0.75', 'pointer-events': 'none',
+                x: String(PHASE_CHART.padL),
+                y: String(PHASE_CHART.padT),
+                width: '1.5',
+                height: String(PHASE_CHART.plotH),
+                fill: 'rgba(245, 200, 80, 0.55)',
+                rx: '0.75',
+                'pointer-events': 'none',
             }) as SVGElement;
             playheadGroup.appendChild(phLine);
 
@@ -680,8 +784,7 @@ export function createCinematicPlayheadSegment(startTime: number): AnimationSegm
             const arrowGroup = ctx.groups['phase-mission-arrows'];
             if (arrowGroup) {
                 const arrowOp = Math.max(0, 0.7 * (1 - ease * 1.5));
-                Array.from(arrowGroup.children).forEach((a: any) =>
-                    a.setAttribute('opacity', arrowOp.toFixed(3)));
+                Array.from(arrowGroup.children).forEach((a: any) => a.setAttribute('opacity', arrowOp.toFixed(3)));
             }
         },
 

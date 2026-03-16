@@ -1,0 +1,62 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - button "Settings" [ref=e4] [cursor=pointer]:
+      - img [ref=e5]
+    - button "LLM Debug Panel" [ref=e8] [cursor=pointer]:
+      - img [ref=e9]
+    - button "Toggle light/dark mode" [ref=e19] [cursor=pointer]:
+      - img [ref=e20]
+  - generic [ref=e22]:
+    - button "Agent Designer" [ref=e23] [cursor=pointer]:
+      - img [ref=e24]
+    - button "Agent Creators" [ref=e26] [cursor=pointer]:
+      - img [ref=e27]
+  - generic [ref=e31]:
+    - generic [ref=e32]:
+      - img [ref=e33]
+      - heading "Agent Pipeline" [level=2] [ref=e43]
+    - button "Close" [ref=e44] [cursor=pointer]:
+      - img [ref=e45]
+  - generic [ref=e50]:
+    - heading "Agent JSON" [level=3] [ref=e51]
+    - generic [ref=e52]:
+      - button "Copy JSON" [ref=e53] [cursor=pointer]
+      - button "Close" [ref=e54] [cursor=pointer]:
+        - img [ref=e55]
+  - banner [ref=e59]:
+    - generic [ref=e60]:
+      - heading "Cortex Loop (5)" [level=1] [ref=e61]
+      - generic [ref=e62]:
+        - textbox "Describe your desired outcome..." [ref=e63]
+        - button "Generate stack" [ref=e64] [cursor=pointer]:
+          - img [ref=e65]
+      - paragraph [ref=e67]:
+        - link "e.g. \"4 hours of deep focus, no sleep impact\"" [ref=e68] [cursor=pointer]:
+          - /url: "#"
+  - main [ref=e69]:
+    - generic:
+      - generic:
+        - img
+  - generic:
+    - button "Hide pipeline":
+      - img
+    - generic:
+      - generic: Cortex Agent Pipeline
+      - generic: LIVE
+      - generic:
+        - generic: Queued
+        - generic: Running
+        - generic: Done
+        - generic: Error
+  - generic:
+    - button "Hide timeline":
+      - img
+    - generic:
+      - button "Play":
+        - img
+      - generic: 00:00.0 / 00:00.0
+      - button "1x"
+```

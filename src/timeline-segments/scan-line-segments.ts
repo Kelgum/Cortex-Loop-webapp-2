@@ -3,23 +3,29 @@
 // ============================================
 // Loading indicator scan lines that ping-pong across chart zones.
 
-import type { AnimationSegment, SegmentContext } from '../timeline-engine';
+import type { AnimationSegment } from '../timeline-engine';
 import { PHASE_CHART, TIMELINE_ZONE, BIOMETRIC_ZONE } from '../constants';
-import { svgEl, chartTheme } from '../utils';
+import { svgEl } from '../utils';
+import {
+    MAIN_SCAN_LOOP_PERIOD,
+    createMainScanLineElements,
+    createMainScanMotionState,
+    renderMainScanLineFrame,
+    resetMainScanMotionState,
+    type MainScanLineElements,
+    type MainScanMotionState,
+} from '../chart-scan-lines';
 
 // --- Shared scan line logic ---
 function scanLinePosition(loopProgress: number): number {
-    // ping-pong: 0→1→0 over one loop period
-    const pingPong = loopProgress <= 0.5
-        ? loopProgress * 2
-        : 2 - loopProgress * 2;
-    return pingPong;
+    // Smooth sinusoidal ease: decelerates at edges, accelerates through center
+    return 0.5 - 0.5 * Math.cos(loopProgress * 2 * Math.PI);
 }
 
 // --- Main chart scan line ---
 export function createMainScanLineSegment(startTime: number, duration: number): AnimationSegment {
-    let glow: SVGElement | null = null;
-    let line: SVGElement | null = null;
+    let elements: MainScanLineElements | null = null;
+    let motionState: MainScanMotionState = createMainScanMotionState();
 
     return {
         id: 'main-scan-line',
@@ -28,46 +34,34 @@ export function createMainScanLineSegment(startTime: number, duration: number): 
         startTime,
         duration,
         phaseIdx: 0,
-        loopPeriod: 2500, // 1.25s per traverse × 2 for round trip
+        loopPeriod: MAIN_SCAN_LOOP_PERIOD,
 
         enter(ctx) {
             const group = ctx.groups['phase-scan-line'];
             if (!group) return;
-            group.innerHTML = '';
-            const t = chartTheme();
-            glow = svgEl('rect', {
-                x: String(PHASE_CHART.padL - 4), y: String(PHASE_CHART.padT),
-                width: '10', height: String(PHASE_CHART.plotH),
-                fill: t.scanGlow, rx: '5',
-            });
-            group.appendChild(glow);
-            line = svgEl('rect', {
-                x: String(PHASE_CHART.padL), y: String(PHASE_CHART.padT),
-                width: '2', height: String(PHASE_CHART.plotH),
-                fill: 'url(#scan-line-grad)', opacity: '0.7',
-            });
-            group.appendChild(line);
+            motionState = createMainScanMotionState();
+            elements = createMainScanLineElements(group);
         },
 
         render(t, ctx) {
-            if (!line || !glow) return;
-            const pos = scanLinePosition(t);
-            const x = PHASE_CHART.padL + pos * PHASE_CHART.plotW;
-            line.setAttribute('x', x.toFixed(1));
-            glow.setAttribute('x', (x - 4).toFixed(1));
+            if (!elements) return;
+            const elapsedMs = t >= 1 && Number.isFinite(this.duration) ? this.duration : t * MAIN_SCAN_LOOP_PERIOD;
+            renderMainScanLineFrame(elapsedMs, elements, motionState, ctx.groups['phase-word-cloud']);
         },
 
         exit(ctx) {
             const group = ctx.groups['phase-scan-line'];
             if (group) group.innerHTML = '';
-            glow = null;
-            line = null;
+            elements = null;
+            resetMainScanMotionState(motionState);
         },
     };
 }
 
 // --- Scan line fade-out (when LLM returns) ---
 export function createScanLineFadeSegment(startTime: number): AnimationSegment {
+    let baseOpacities = new Map<SVGElement, number>();
+
     return {
         id: 'scan-line-fade',
         label: 'Fade',
@@ -76,32 +70,37 @@ export function createScanLineFadeSegment(startTime: number): AnimationSegment {
         duration: 400,
         phaseIdx: 0,
 
-        enter(ctx) {},
-
-        render(t, ctx) {
+        enter(ctx) {
+            baseOpacities = new Map<SVGElement, number>();
             const group = ctx.groups['phase-scan-line'];
             if (!group) return;
-            const opacity = 0.7 * (1 - t);
-            group.querySelectorAll('rect').forEach((el: any) => {
-                el.setAttribute('opacity', opacity.toFixed(2));
+            group.querySelectorAll('rect, path').forEach(el => {
+                const svgEl = el as SVGElement;
+                baseOpacities.set(svgEl, parseFloat(svgEl.getAttribute('opacity') || '1'));
             });
         },
 
-        exit(ctx) {
-            // Don't clear the group — scan line elements belong to the main scan line segment.
-            // Just restore opacity on any scan line elements that may still exist.
-            const group = ctx.groups['phase-scan-line'];
-            if (group) {
-                group.querySelectorAll('rect').forEach((el: any) => {
-                    el.setAttribute('opacity', '0.7');
-                });
-            }
+        render(t, _ctx) {
+            baseOpacities.forEach((baseOpacity, el) => {
+                el.setAttribute('opacity', (baseOpacity * (1 - t)).toFixed(3));
+            });
+        },
+
+        exit(_ctx) {
+            baseOpacities.forEach((baseOpacity, el) => {
+                el.setAttribute('opacity', baseOpacity.toFixed(3));
+            });
+            baseOpacities.clear();
         },
     };
 }
 
 // --- Timeline zone scan line (during intervention model wait) ---
-export function createTimelineScanLineSegment(startTime: number, duration: number, laneCount: number): AnimationSegment {
+export function createTimelineScanLineSegment(
+    startTime: number,
+    duration: number,
+    laneCount: number,
+): AnimationSegment {
     let glow: SVGElement | null = null;
     let line: SVGElement | null = null;
 
@@ -121,20 +120,26 @@ export function createTimelineScanLineSegment(startTime: number, duration: numbe
             const group = ctx.groups['phase-substance-timeline'];
             if (!group) return;
             glow = svgEl('rect', {
-                x: String(PHASE_CHART.padL - 4), y: String(TIMELINE_ZONE.separatorY),
-                width: '10', height: String(zoneH),
-                fill: 'rgba(245, 200, 80, 0.08)', rx: '5',
+                x: String(PHASE_CHART.padL - 4),
+                y: String(TIMELINE_ZONE.separatorY),
+                width: '10',
+                height: String(zoneH),
+                fill: 'rgba(245, 200, 80, 0.08)',
+                rx: '5',
             });
             group.appendChild(glow);
             line = svgEl('rect', {
-                x: String(PHASE_CHART.padL), y: String(TIMELINE_ZONE.separatorY),
-                width: '2', height: String(zoneH),
-                fill: 'url(#tl-scan-line-grad)', opacity: '0.7',
+                x: String(PHASE_CHART.padL),
+                y: String(TIMELINE_ZONE.separatorY),
+                width: '2',
+                height: String(zoneH),
+                fill: 'url(#tl-scan-line-grad)',
+                opacity: '0.7',
             });
             group.appendChild(line);
         },
 
-        render(t, ctx) {
+        render(t, _ctx) {
             if (!line || !glow) return;
             const pos = scanLinePosition(t);
             const x = PHASE_CHART.padL + pos * PHASE_CHART.plotW;
@@ -142,7 +147,7 @@ export function createTimelineScanLineSegment(startTime: number, duration: numbe
             glow.setAttribute('x', (x - 4).toFixed(1));
         },
 
-        exit(ctx) {
+        exit(_ctx) {
             if (line) line.remove();
             if (glow) glow.remove();
             line = null;
@@ -158,8 +163,12 @@ export function createBioScanLineSegment(startTime: number, duration: number, ch
     let bg: SVGElement | null = null;
     let savedViewBoxH: number = 0;
 
-    const zoneH = Math.max(80, channelCount * (BIOMETRIC_ZONE.laneH + BIOMETRIC_ZONE.laneGap)
-        + BIOMETRIC_ZONE.separatorPad * 2 + BIOMETRIC_ZONE.bottomPad);
+    const zoneH = Math.max(
+        80,
+        channelCount * (BIOMETRIC_ZONE.laneH + BIOMETRIC_ZONE.laneGap) +
+            BIOMETRIC_ZONE.separatorPad * 2 +
+            BIOMETRIC_ZONE.bottomPad,
+    );
 
     return {
         id: 'bio-scan-line',
@@ -185,28 +194,37 @@ export function createBioScanLineSegment(startTime: number, duration: number, ch
             const zoneHeight = zoneH - BIOMETRIC_ZONE.separatorPad - BIOMETRIC_ZONE.bottomPad;
 
             bg = svgEl('rect', {
-                x: String(PHASE_CHART.padL), y: String(zoneTop),
-                width: String(PHASE_CHART.plotW), height: String(zoneHeight),
-                fill: 'rgba(255, 77, 77, 0.02)', rx: '2',
+                x: String(PHASE_CHART.padL),
+                y: String(zoneTop),
+                width: String(PHASE_CHART.plotW),
+                height: String(zoneHeight),
+                fill: 'rgba(255, 77, 77, 0.02)',
+                rx: '2',
             });
             group.appendChild(bg);
 
             glow = svgEl('rect', {
-                x: String(PHASE_CHART.padL - 4), y: String(zoneTop),
-                width: '10', height: String(zoneHeight),
-                fill: 'rgba(255, 77, 77, 0.12)', rx: '5',
+                x: String(PHASE_CHART.padL - 4),
+                y: String(zoneTop),
+                width: '10',
+                height: String(zoneHeight),
+                fill: 'rgba(255, 77, 77, 0.12)',
+                rx: '5',
             });
             group.appendChild(glow);
 
             line = svgEl('rect', {
-                x: String(PHASE_CHART.padL), y: String(zoneTop),
-                width: '2', height: String(zoneHeight),
-                fill: 'url(#bio-scan-line-grad)', opacity: '0.8',
+                x: String(PHASE_CHART.padL),
+                y: String(zoneTop),
+                width: '2',
+                height: String(zoneHeight),
+                fill: 'url(#bio-scan-line-grad)',
+                opacity: '0.8',
             });
             group.appendChild(line);
         },
 
-        render(t, ctx) {
+        render(t, _ctx) {
             if (!line || !glow) return;
             const pos = scanLinePosition(t);
             const x = PHASE_CHART.padL + pos * PHASE_CHART.plotW;
