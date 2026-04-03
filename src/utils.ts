@@ -1,6 +1,6 @@
 /**
  * Utils — SVG element helpers, theme detection, time formatting, and coordinate math.
- * Exports: svgEl, isLightMode, chartTheme, phaseChartX, phaseChartY, sleep, interpolatePrompt, formatMsAsTimestamp, escapeHtml, clamp
+ * Exports: svgEl, isLightMode, chartTheme, phaseChartX, phaseChartY, sleep, interpolatePrompt, formatMsAsTimestamp, escapeHtml, clamp, teleportInterpolation
  * Depends on: constants (SVG_NS, PHASE_CHART)
  */
 import { SVG_NS, CENTER, PHASE_CHART } from './constants';
@@ -116,6 +116,35 @@ export function clamp(v: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, v));
 }
 
+/**
+ * Attach a self-healing onerror handler to an <img> element.
+ * On load failure, retries up to `maxRetries` times with exponential back-off.
+ * After all retries are exhausted the element is hidden so no broken-image icon is shown.
+ */
+export function withImageRetry(img: HTMLImageElement, maxRetries = 3): HTMLImageElement {
+    let attempts = 0;
+    img.onerror = () => {
+        if (attempts >= maxRetries) {
+            img.style.visibility = 'hidden';
+            return;
+        }
+        attempts++;
+        const delay = 200 * Math.pow(2, attempts - 1); // 200, 400, 800ms
+        const src = img.src;
+        setTimeout(() => {
+            // Bust browser cache by appending a unique query param
+            const separator = src.includes('?') ? '&' : '?';
+            img.src = `${src.split('?')[0]}${separator}_r=${Date.now()}`;
+        }, delay);
+    };
+    img.onload = () => {
+        // Reset retry counter on successful load (e.g. after theme switch)
+        attempts = 0;
+        img.style.visibility = '';
+    };
+    return img;
+}
+
 /** Escape HTML entities for safe insertion into innerHTML */
 export function escapeHtml(s: string): string {
     return s
@@ -133,4 +162,46 @@ export function phaseChartX(minutes: any) {
 export function phaseChartY(effectVal: any) {
     const clamped = clamp(effectVal, 0, PHASE_CHART.maxEffect);
     return PHASE_CHART.padT + PHASE_CHART.plotH - (clamped / PHASE_CHART.maxEffect) * PHASE_CHART.plotH;
+}
+
+// ── Teleport animation interpolation ──────────────────────────
+
+export interface TeleportFrame {
+    /** Origin ghost: position fraction (0 → driftFraction) — slight drift toward destination */
+    originPos: number;
+    /** Origin ghost: opacity (1 → 0) */
+    originOpacity: number;
+    /** Destination ghost: position fraction ((1-driftFraction) → 1.0) — drift into final spot */
+    destPos: number;
+    /** Destination ghost: opacity (0 → 1) */
+    destOpacity: number;
+}
+
+/**
+ * Compute parallel portal animation values for a given normalized time t (0-1).
+ * Both origin fade-out and destination fade-in happen simultaneously.
+ *
+ * Origin:      drifts 0 → driftFraction,        opacity 1 → 0
+ * Destination: drifts (1-driftFraction) → 1.0,   opacity 0 → 1
+ */
+export function teleportInterpolation(t: number, driftFraction: number): TeleportFrame {
+    const p = Math.max(0, Math.min(1, t));
+    return {
+        originPos: driftFraction * p,
+        originOpacity: 1 - p,
+        destPos: 1 - driftFraction + driftFraction * p,
+        destOpacity: p,
+    };
+}
+
+/** Parse a dose string like "5g", "1000mg", "200mcg" into milligrams. Returns null if unparseable. */
+export function parseDoseToMg(dose: string): number | null {
+    const m = dose.match(/^([\d.]+)\s*(g|mg|mcg|ug)$/i);
+    if (!m) return null;
+    const v = parseFloat(m[1]);
+    const u = m[2].toLowerCase();
+    if (u === 'g') return v * 1000;
+    if (u === 'mg') return v;
+    if (u === 'mcg' || u === 'ug') return v / 1000;
+    return null;
 }

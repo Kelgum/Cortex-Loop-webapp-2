@@ -1,10 +1,16 @@
 // ============================================
-// Pharmacokinetic Model — pure math, no DOM
+// Pharmacodynamic Model — pure math, no DOM
 // ============================================
 
 /**
- * Compute the effect value of a single substance dose at a given time.
- * Uses a piecewise model: ramp up → peak → plateau → exponential decay → optional rebound.
+ * Compute the pharmacodynamic effect of a single substance dose at a given time.
+ * First computes the PK concentration curve (piecewise: ramp up → peak → plateau →
+ * exponential decay → optional rebound), then applies a Hill equation (Sigmoid Emax)
+ * transform to convert plasma concentration into biological effect.
+ *
+ * Hill params (per-substance, with defaults):
+ *   ec50 — fraction of peak concentration at which 50% of max PD effect occurs
+ *   hill — Hill coefficient controlling sigmoid steepness (cooperativity)
  */
 export function substanceEffectAt(minutesSinceDose: any, pharma: any) {
     if (minutesSinceDose < 0) return 0;
@@ -37,7 +43,51 @@ export function substanceEffectAt(minutesSinceDose: any, pharma: any) {
         effect = residual - reboundDip;
     }
 
+    // ── PD Hill equation transform (Sigmoid Emax) ──
+    // Converts PK concentration to PD biological effect via receptor occupancy sigmoid.
+    // Only applies to positive values; rebound (negative) is already a PD phenomenon.
+    if (effect > 0 && strength > 0) {
+        const ec = pharma.ec50 ?? 0.5;
+        const n = pharma.hill ?? 2.0;
+        const f = effect / strength; // fraction of peak concentration (0-1)
+        const fn = Math.pow(f, n);
+        const en = Math.pow(ec, n);
+        const norm = en + 1; // hill response at f=1 → normalizes so peak = strength
+        effect = (strength * fn * norm) / (en + fn);
+    }
+
+    // ── Chronobiotic tail: persistent circadian phase-shift beyond PK clearance ──
+    // Melatonin and other chronobiotic substances advance the circadian clock;
+    // that phase shift persists long after the molecule clears.  Applied post-Hill
+    // because this is already a PD phenomenon, not a PK concentration.
+    if (pharma.chronobioticTail && minutesSinceDose > duration && strength > 0) {
+        const elapsed = minutesSinceDose - duration;
+        const tailHL = pharma.chronobioticHalfLife || halfLife * 10;
+        const tailEffect = pharma.chronobioticTail * strength * Math.pow(0.5, elapsed / tailHL);
+        effect = Math.max(effect, tailEffect);
+    }
+
     return effect;
+}
+
+// ── Normalized shape (0-1) for gap-referenced overlay computation ──
+
+/** Returns the PD effect value at peak time for a given pharma profile. */
+export function peakEffectValue(pharma: any): number {
+    return substanceEffectAt(pharma.peak, pharma);
+}
+
+/**
+ * Returns the normalized PD shape at a given time: 1.0 at peak, tapering
+ * toward 0 during onset/decay, and negative during rebound.  Used by the
+ * gap-referenced overlay path so that impact vectors represent "fraction
+ * of gap to fill at peak."
+ */
+export function normalizedEffectAt(minutesSinceDose: number, pharma: any): number {
+    const raw = substanceEffectAt(minutesSinceDose, pharma);
+    const peakVal = peakEffectValue(pharma);
+    if (peakVal <= 0) return 0;
+    return raw / peakVal;
 }
 
 // ── Tolerance modeling for multi-day substance cycling ──

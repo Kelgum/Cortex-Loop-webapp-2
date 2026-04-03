@@ -3,7 +3,7 @@
  * Exports: callFastModel, callMainModelForCurves, callInterventionModel, callRevisionModel, callSherlockModel, callSherlockRevisionModel, extractAndParseJSON
  * Depends on: constants (API_ENDPOINTS), state (AppState, getStageModel), prompts (PROMPTS), debug-panel (DebugLog)
  */
-import { API_ENDPOINTS } from './constants';
+import { API_ENDPOINTS, BADGE_CATEGORIES } from './constants';
 import {
     AppState,
     PhaseState,
@@ -17,7 +17,8 @@ import { PROMPTS, JSON_POSTAMBLE } from './prompts';
 import { DebugLog } from './debug-panel';
 import { getActiveSubstances } from './substances';
 import { LLMCache } from './llm-cache';
-import { validateStageResponseShape } from './llm-response-shape';
+import { validateStageResponseShape, extractInterventionsData } from './llm-response-shape';
+import { validateInterventions, computeStackingPeaks, pruneConcurrentOverload } from './lx-compute';
 import { reportRuntimeBug, reportRuntimeFallback } from './runtime-error-banner';
 import { resolveCachedStageHit } from './stage-cache';
 import {
@@ -26,6 +27,7 @@ import {
     serializeRevisionInterventions,
 } from './revision-reference';
 import type { PipelineStage, RevisionReferenceBundle, StageResultMap } from './types';
+import { LLMLog, classifyError, inferErrorContext, generateCallId } from './llm-failure-log';
 
 export { getStageModel } from './state';
 
@@ -118,7 +120,7 @@ type StageFallbackOptions<TResult> = {
 const FALLBACK_SEQUENCE: string[] = ['gemini', 'anthropic', 'openai', 'grok'];
 const REQUEST_TIMEOUT_FAST_MS = 45_000;
 const REQUEST_TIMEOUT_MID_MS = 100_000;
-const REQUEST_TIMEOUT_MAIN_MS = 120_000;
+const REQUEST_TIMEOUT_MAIN_MS = 150_000;
 
 function providerPrettyName(provider: string): string {
     switch (provider) {
@@ -170,6 +172,7 @@ export async function callStageWithFallback<TResult>(options: StageFallbackOptio
     const attemptProviders = buildProviderAttemptOrder(initial.provider);
     const stageErrors: string[] = [];
     let lastFailure: { provider: string; model: string; message: string } | null = null;
+    const callId = generateCallId();
 
     for (let i = 0; i < attemptProviders.length; i++) {
         const provider = attemptProviders[i];
@@ -186,15 +189,46 @@ export async function callStageWithFallback<TResult>(options: StageFallbackOptio
                 message: noKeyMessage,
                 retryProvider: nextProvider,
             });
+            LLMLog.record({
+                cid: callId,
+                stage: options.stageClass,
+                label: options.stageLabel,
+                provider,
+                model: modelInfo.model,
+                ok: false,
+                ms: 0,
+                http: 0,
+                err: 'missing_key',
+                msg: noKeyMessage,
+                seq: i,
+                fb: i > 0,
+                resolved: false,
+                resolvedBy: null,
+            });
             continue;
         }
 
-        const timeoutMs =
+        const tierTimeout =
             modelInfo.tier === 2
                 ? REQUEST_TIMEOUT_MAIN_MS
                 : modelInfo.tier === 1
                   ? REQUEST_TIMEOUT_MID_MS
                   : REQUEST_TIMEOUT_FAST_MS;
+        // Heavy stages (maxTokens >= 8192) need at least mid-tier timeout regardless of model tier
+        const timeoutMs = options.maxTokens >= 8192 ? Math.max(tierTimeout, REQUEST_TIMEOUT_MID_MS) : tierTimeout;
+
+        // Defensive: if a tier-2 model is used for a lightweight stage, bump maxTokens
+        const effectiveMaxTokens =
+            modelInfo.tier >= 2 && options.maxTokens < 4096 ? Math.max(options.maxTokens * 2, 2048) : options.maxTokens;
+
+        // Skip models whose output cap can't satisfy the stage's token requirement
+        if (modelInfo.maxOutput && modelInfo.maxOutput < effectiveMaxTokens) {
+            const skipMsg = `Skipping ${providerPrettyName(provider)}/${modelInfo.model} — maxOutput ${modelInfo.maxOutput} < required ${effectiveMaxTokens}`;
+            console.warn(`[LLM] ${skipMsg}`);
+            stageErrors.push(`${provider}: ${skipMsg}`);
+            lastFailure = { provider, model: modelInfo.model, message: skipMsg };
+            continue;
+        }
 
         const debugEntry = DebugLog.addEntry({
             stage: options.stageLabel,
@@ -215,7 +249,7 @@ export async function callStageWithFallback<TResult>(options: StageFallbackOptio
                       stageClass: options.stageClass,
                       systemPrompt: options.systemPrompt,
                       userPrompt: options.userPrompt,
-                      maxTokens: options.maxTokens,
+                      maxTokens: effectiveMaxTokens,
                       provider,
                       model: modelInfo.model,
                       type: modelInfo.type,
@@ -233,7 +267,7 @@ export async function callStageWithFallback<TResult>(options: StageFallbackOptio
                       modelInfo.type,
                       provider,
                       options.systemPrompt,
-                      options.maxTokens,
+                      effectiveMaxTokens,
                       modelInfo.reasoningEffort,
                       timeoutMs,
                   );
@@ -272,6 +306,23 @@ export async function callStageWithFallback<TResult>(options: StageFallbackOptio
                     activeModel: resolvedModel,
                 });
             }
+            LLMLog.record({
+                cid: callId,
+                stage: options.stageClass,
+                label: options.stageLabel,
+                provider,
+                model: resolvedModel,
+                ok: true,
+                ms: Math.round(performance.now() - started),
+                http: 200,
+                err: null,
+                msg: null,
+                seq: i,
+                fb: provider !== initial.provider,
+                resolved: true,
+                resolvedBy: provider,
+            });
+            LLMLog.resolveStage(callId, true, provider);
             return validated;
         } catch (err: any) {
             const message = err?.message || String(err);
@@ -290,9 +341,28 @@ export async function callStageWithFallback<TResult>(options: StageFallbackOptio
                 message,
                 retryProvider: nextProvider,
             });
+            const errCtx = inferErrorContext(err);
+            LLMLog.record({
+                cid: callId,
+                stage: options.stageClass,
+                label: options.stageLabel,
+                provider,
+                model: modelInfo.model,
+                ok: false,
+                ms: Math.round(performance.now() - started),
+                http: errCtx.httpStatus,
+                err: classifyError(message, errCtx.httpStatus, errCtx.context),
+                msg: message,
+                seq: i,
+                fb: i > 0,
+                resolved: false,
+                resolvedBy: null,
+            });
         }
     }
 
+    LLMLog.resolveStage(callId, false, null);
+    LLMLog.flush();
     throw new Error(`${options.stageLabel} failed across providers: ${stageErrors.join(' | ')}`);
 }
 
@@ -472,7 +542,7 @@ async function fetchJsonWithRetry(
                 : err instanceof Error
                   ? err
                   : new Error(String(err));
-            if (!isTransientNetworkError(resolvedError) || attempt === maxAttempts) {
+            if (didTimeout || !isTransientNetworkError(resolvedError) || attempt === maxAttempts) {
                 throw resolvedError;
             }
             const waitMs = computeRetryDelayMs(attempt);
@@ -496,7 +566,8 @@ async function fetchJsonWithRetry(
             }
 
             const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
-            const waitMs = Math.max(300, retryAfterMs ?? computeRetryDelayMs(attempt));
+            const isOverloaded = response.status === 529 || response.status === 503;
+            const waitMs = Math.max(isOverloaded ? 3000 : 300, retryAfterMs ?? computeRetryDelayMs(attempt));
             console.warn(
                 `[LLM:${providerLabel}] transient provider error "${info.type}" on attempt ${attempt}/${maxAttempts}; retrying in ${waitMs}ms`,
             );
@@ -1206,6 +1277,7 @@ export async function callGeminiGeneric(
 export function buildFastModelSystemPrompt() {
     return interpolatePrompt(PROMPTS.fastModel, {
         maxEffects: AppState.maxEffects,
+        badgeCategories: BADGE_CATEGORIES.join(', '),
     });
 }
 
@@ -1258,14 +1330,19 @@ export async function callMainModelForCurves(prompt: string): Promise<StageResul
 
 export function buildSubstanceListSummary(): string {
     const active = getActiveSubstances();
-    const list = Object.entries(active).map(([key, s]: [string, any]) => ({
-        key,
-        name: s.name,
-        class: s.class,
-        standardDose: s.standardDose,
-        pharma: s.pharma,
-    }));
-    return JSON.stringify(list, null, 1);
+    const list = Object.entries(active).map(([key, s]: [string, any]) => {
+        // Strip pharma fields the LLM doesn't need (strength is internal to pharma-model.ts curve scaling).
+        // Keep rebound — it signals which substances cause rebound effects that need compensating.
+        const { strength, ...llmPharma } = s.pharma || {};
+        return {
+            key,
+            name: s.name,
+            class: s.class,
+            standardDose: s.standardDose,
+            pharma: llmPharma,
+        };
+    });
+    return JSON.stringify(list);
 }
 
 export function getRxInstructionSuffix(): string {
@@ -1285,7 +1362,7 @@ export function buildSlimCurveSummary(curvesData: any[]): string {
         baseline: (c.baseline || []).filter((_: any, i: number) => i % 4 === 0),
         desired: (c.desired || []).filter((_: any, i: number) => i % 4 === 0),
     }));
-    return JSON.stringify(summary, null, 1);
+    return JSON.stringify(summary);
 }
 
 export function buildFullCurveSummary(curvesData: any[]): string {
@@ -1297,21 +1374,160 @@ export function buildFullCurveSummary(curvesData: any[]): string {
         baseline: c.baseline,
         desired: c.desired,
     }));
-    return JSON.stringify(summary, null, 1);
+    return JSON.stringify(summary);
 }
 
 // ============================================
 // 10d. INTERVENTION MODEL (Lx pipeline)
 // ============================================
 
+/** Summarize the baseline→desired gap at key hours for each effect curve.
+ *  Injected into the Chess Player / Grandmaster prompts so the LLM can
+ *  calibrate impact vectors to the actual gap magnitude. */
+export function buildGapContext(curvesData: any[]): string {
+    if (!curvesData) return '[]';
+    const keyHours = [6, 8, 10, 12, 14, 16, 18, 20, 22, 0];
+    return JSON.stringify(
+        curvesData.map((c: any) => {
+            const bl = c.baseline || [];
+            const ds = c.desired || [];
+            const gapByHour: Record<string, number> = {};
+            for (const hour of keyHours) {
+                const idx = bl.findIndex((p: any) => Math.abs(p.hour - hour) < 0.5);
+                if (idx >= 0 && ds[idx]) {
+                    gapByHour[`${hour}:00`] = Math.round(ds[idx].value - bl[idx].value);
+                }
+            }
+            let maxGap = 0;
+            for (let i = 0; i < bl.length && i < ds.length; i++) {
+                maxGap = Math.max(maxGap, Math.abs((ds[i]?.value ?? 0) - (bl[i]?.value ?? 0)));
+            }
+            return { effect: c.effect, maxGap: Math.round(maxGap), gapByHour };
+        }),
+        null,
+        1,
+    );
+}
+
 export function buildInterventionSystemPrompt(userGoal: any, curvesData: any) {
+    const protectedEffect = PhaseState.strategistProtectedEffect || '';
+    const protectedBlock = protectedEffect ? `\nPROTECTED EFFECT (do not worsen this axis): ${protectedEffect}\n` : '';
     return (
         interpolatePrompt(PROMPTS.intervention, {
             userGoal: userGoal,
             substanceList: buildSubstanceListSummary(),
             curveSummary: buildFullCurveSummary(curvesData),
-        }) + getRxInstructionSuffix()
+            gapContext: buildGapContext(curvesData),
+        }) +
+        protectedBlock +
+        getRxInstructionSuffix()
     );
+}
+
+// ============================================
+// Stacking validation + LLM correction loop
+// ============================================
+
+export const STACKING_THRESHOLD = 1.1;
+
+/**
+ * Check stacking of validated interventions against curvesData.
+ * Returns a human-readable correction prompt if any curve's peak normSum > threshold,
+ * or null if stacking is acceptable.
+ */
+export function buildStackingCorrectionPrompt(interventions: any[], curvesData: any[]): string | null {
+    const validated = validateInterventions(interventions, curvesData);
+    if (validated.length === 0) return null;
+
+    const reports = computeStackingPeaks(validated, curvesData);
+    const violations = reports.filter(r => Math.abs(r.peakNormSum) > STACKING_THRESHOLD);
+    if (violations.length === 0) {
+        for (const r of reports) {
+            console.log(`[Stacking] Curve "${r.curve}" peakNormSum=${r.peakNormSum} at ${r.peakHour}:00 — OK`);
+        }
+        return null;
+    }
+
+    const lines = ['STACKING OVERSHOOT DETECTED — your protocol exceeds the desired curve on these axes:'];
+    for (const v of violations) {
+        const hourStr = v.peakHour >= 24 ? `${v.peakHour - 24}:00+1` : `${v.peakHour}:00`;
+        lines.push(`\n• ${v.curve}: peak stacked impact = ${v.peakNormSum} at ${hourStr}`);
+        for (const b of v.breakdown) {
+            lines.push(`  - ${b.key}: contribution ${b.contribution}`);
+        }
+        lines.push(`  (Target: ≤ 1.0)`);
+        console.warn(`[Stacking] Curve "${v.curve}" peakNormSum=${v.peakNormSum} at ${hourStr} — OVERSHOOT`);
+    }
+    lines.push(
+        '\nReduce individual impact values so the peak stacked impact on EACH curve stays between 0.8 and 1.0. ' +
+            'The more substances overlapping on one axis, the smaller each impact must be. ' +
+            'Output the complete corrected interventions array as JSON.',
+    );
+    return lines.join('\n');
+}
+
+/**
+ * After an LLM returns interventions, validate stacking and make one correction call if needed.
+ * Returns the (possibly corrected) result.
+ */
+async function correctStackingIfNeeded(
+    result: StageResultMap['intervention'],
+    curvesData: any[],
+    systemPrompt: string,
+    stageOpts: { stageLabel: string; stageClass: string; maxTokens: number },
+): Promise<StageResultMap['intervention']> {
+    const interventions = result.interventions || [];
+    if (interventions.length === 0) return result;
+
+    const correctionPrompt = buildStackingCorrectionPrompt(interventions, curvesData);
+    if (!correctionPrompt) return result;
+
+    console.log(`[Stacking] Correction needed — calling LLM for adjustment (${stageOpts.stageLabel})`);
+
+    const originalJson = JSON.stringify(
+        interventions.map((iv: any) => ({
+            key: iv.key,
+            dose: iv.dose,
+            doseMultiplier: iv.doseMultiplier,
+            timeMinutes: iv.timeMinutes,
+            impacts: iv.impacts,
+            rationale: iv.rationale,
+        })),
+        null,
+        1,
+    );
+
+    const correctionUserPrompt =
+        `Your previous protocol output:\n\`\`\`json\n${originalJson}\n\`\`\`\n\n` + correctionPrompt;
+
+    try {
+        const corrected = await callStageWithFallback<StageResultMap['intervention']>({
+            stage: 'intervention',
+            stageLabel: `${stageOpts.stageLabel} (stacking correction)`,
+            stageClass: stageOpts.stageClass,
+            systemPrompt,
+            userPrompt: correctionUserPrompt,
+            maxTokens: stageOpts.maxTokens,
+        });
+
+        // Validate the corrected result has interventions
+        const correctedIvs = corrected?.interventions || [];
+        if (correctedIvs.length >= 2) {
+            // Log the corrected stacking
+            const revalidated = validateInterventions(correctedIvs, curvesData);
+            const newReports = computeStackingPeaks(revalidated, curvesData);
+            for (const r of newReports) {
+                console.log(`[Stacking] Corrected "${r.curve}" peakNormSum=${r.peakNormSum} at ${r.peakHour}:00`);
+            }
+            return corrected;
+        }
+
+        console.warn('[Stacking] Correction produced < 2 interventions — keeping original');
+        return result;
+    } catch (err) {
+        console.warn('[Stacking] Correction call failed — keeping original:', err);
+        return result;
+    }
 }
 
 export async function callInterventionModel(prompt: string, curvesData: any): Promise<StageResultMap['intervention']> {
@@ -1320,14 +1536,46 @@ export async function callInterventionModel(prompt: string, curvesData: any): Pr
     const userPrompt =
         'Analyze the baseline vs desired curves and prescribe the optimal supplement intervention protocol.';
 
-    const result = await runCachedStage<StageResultMap['intervention']>({
+    // Check if this will be a cache hit — skip correction for cached results
+    const isCached = LLMCache.isEnabled(stageClass) && LLMCache.hasData(stageClass);
+
+    let result = await runCachedStage<StageResultMap['intervention']>({
         stage: 'intervention',
         stageLabel: 'Intervention Model',
         stageClass,
         systemPrompt,
         userPrompt,
-        maxTokens: 4096,
+        maxTokens: 8192,
     });
+
+    // Stacking correction loop — only for fresh LLM calls
+    if (!isCached && curvesData) {
+        result = await correctStackingIfNeeded(result, curvesData, systemPrompt, {
+            stageLabel: 'Chess Player',
+            stageClass,
+            maxTokens: 8192,
+        });
+
+        // Concurrent density pruning — remove low-value substances from over-dense clusters
+        if (result.interventions?.length) {
+            const validated = validateInterventions(result.interventions, curvesData);
+            const { pruned, removed } = pruneConcurrentOverload(validated, curvesData);
+            if (removed.length > 0) {
+                result = { ...result, interventions: pruned };
+                // Re-validate stacking after rescaling
+                result = await correctStackingIfNeeded(result, curvesData, systemPrompt, {
+                    stageLabel: 'Chess Player (post-prune)',
+                    stageClass,
+                    maxTokens: 8192,
+                });
+            }
+        }
+
+        // Persist the finalized payload, not the pre-correction draft cached by runCachedStage().
+        // Otherwise saved/replayed cycles can reuse stale impact vectors while the live run used
+        // the corrected intervention set to render the Lx curves.
+        persistPostProcessedStageResult(stageClass, systemPrompt, userPrompt, result);
+    }
 
     PhaseState.interventionResult = result;
     return result;
@@ -1372,6 +1620,9 @@ export function buildRevisionSystemPrompt(userGoal: any, referenceBundle: Revisi
                   .join('\n')
             : 'No external events reported.';
 
+    const protectedEffect = PhaseState.strategistProtectedEffect || '';
+    const protectedBlock = protectedEffect ? `\nPROTECTED EFFECT (do not worsen this axis): ${protectedEffect}\n` : '';
+
     let revisionPrompt =
         interpolatePrompt(PROMPTS.revision, {
             userGoal,
@@ -1381,7 +1632,9 @@ export function buildRevisionSystemPrompt(userGoal: any, referenceBundle: Revisi
             biometricSummary: buildBiometricSummary(),
             spotterHighlights,
             substanceList: buildSubstanceListSummary(),
-        }) + getRxInstructionSuffix();
+        }) +
+        protectedBlock +
+        getRxInstructionSuffix();
 
     // Inject selected creator agent mandate as co-pilot context
     if (AgentMatchState.selectedAgent?.mandate) {
@@ -1400,7 +1653,9 @@ export async function callRevisionModel(
     const systemPrompt = buildRevisionSystemPrompt(userGoal, referenceBundle);
     const userPrompt = 'Revise the intervention protocol based on the biometric feedback. Respond with JSON only.';
 
-    const result = await runCachedStage<StageResultMap['revision']>({
+    const isCached = LLMCache.isEnabled(stageClass) && LLMCache.hasData(stageClass);
+
+    let result = await runCachedStage<StageResultMap['revision']>({
         stage: 'revision',
         stageLabel: 'Revision Model',
         stageClass,
@@ -1408,6 +1663,32 @@ export async function callRevisionModel(
         userPrompt,
         maxTokens: 8192,
     });
+
+    // Stacking correction loop — only for fresh LLM calls
+    if (!isCached && PhaseState.curvesData) {
+        result = await correctStackingIfNeeded(result, PhaseState.curvesData, systemPrompt, {
+            stageLabel: 'Grandmaster',
+            stageClass,
+            maxTokens: 8192,
+        });
+
+        // Concurrent density pruning — remove low-value substances from over-dense clusters
+        if (result.interventions?.length) {
+            const validated = validateInterventions(result.interventions, PhaseState.curvesData);
+            const { pruned, removed } = pruneConcurrentOverload(validated, PhaseState.curvesData);
+            if (removed.length > 0) {
+                result = { ...result, interventions: pruned };
+                result = await correctStackingIfNeeded(result, PhaseState.curvesData, systemPrompt, {
+                    stageLabel: 'Grandmaster (post-prune)',
+                    stageClass,
+                    maxTokens: 8192,
+                });
+            }
+        }
+
+        // Keep the persisted bundle aligned with the corrected revision actually rendered live.
+        persistPostProcessedStageResult(stageClass, systemPrompt, userPrompt, result);
+    }
 
     return result;
 }
@@ -1430,8 +1711,8 @@ function buildStrategistBioSystemPrompt(userGoal: any, curvesData: any) {
 
     return interpolatePrompt(PROMPTS.strategistBio, {
         userGoal,
-        baselineCurves: JSON.stringify(baselineCurves, null, 1),
-        desiredCurves: JSON.stringify(desiredCurves, null, 1),
+        baselineCurves: JSON.stringify(baselineCurves),
+        desiredCurves: JSON.stringify(desiredCurves),
         biometricSummary,
         profileText: BiometricState.profileText || 'No profile available.',
     });
@@ -1461,6 +1742,19 @@ export interface StageOptions<TResult> {
     systemPrompt: string;
     userPrompt: string;
     maxTokens: number;
+}
+
+export function persistPostProcessedStageResult<TResult>(
+    stageClass: string,
+    systemPrompt: string,
+    userPrompt: string,
+    result: TResult,
+): void {
+    LLMCache.set(stageClass, result, {
+        systemPrompt: `${systemPrompt}\n\n${JSON_POSTAMBLE}`,
+        userPrompt,
+        requestBody: null,
+    });
 }
 
 /**
@@ -1539,7 +1833,7 @@ export function buildSherlockSystemPrompt(userGoal: any, interventions: any, cur
             1,
         ),
         interventionRationale: PhaseState.interventionResult?.rationale || '',
-        selectedSubstanceInfo: JSON.stringify(selectedSubstanceInfo, null, 1),
+        selectedSubstanceInfo: JSON.stringify(selectedSubstanceInfo),
         curveSummary: buildSlimCurveSummary(curvesData),
         substanceCount: String(interventions.length),
     });
@@ -1627,7 +1921,7 @@ export function buildSherlockRevisionSystemPrompt(userGoal: any, oldIvs: any, ne
             null,
             1,
         ),
-        revisionDiff: JSON.stringify(revisionDiff, null, 1),
+        revisionDiff: JSON.stringify(revisionDiff),
         biometricSummary,
     });
 }

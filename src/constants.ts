@@ -101,12 +101,19 @@ export const MAIN_MODELS: any = {
 
 export const MODEL_OPTIONS: any = {
     anthropic: [
-        { key: 'haiku', model: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', type: 'anthropic', tier: 0 },
+        {
+            key: 'haiku',
+            model: 'claude-haiku-4-5-20251001',
+            label: 'Haiku 4.5',
+            type: 'anthropic',
+            tier: 0,
+            maxOutput: 8192,
+        },
         { key: 'sonnet', model: 'claude-sonnet-4-6', label: 'Sonnet 4.6', type: 'anthropic', tier: 1 },
         { key: 'opus', model: 'claude-opus-4-6', label: 'Opus 4.6', type: 'anthropic', tier: 2 },
     ],
     openai: [
-        { key: '5.3-instant', model: 'gpt-5.3-chat-latest', label: '5.3 Instant', type: 'openai', tier: 0 },
+        { key: '5.3-instant', model: 'gpt-5.3-chat-latest', label: '5.3 Instant', type: 'openai', tier: 0, maxOutput: 8192 },
         { key: '5.4', model: 'gpt-5.4', label: '5.4', type: 'openai', tier: 1 },
         {
             key: '5.4-thinking',
@@ -118,11 +125,18 @@ export const MODEL_OPTIONS: any = {
         },
     ],
     grok: [
-        { key: 'fast', model: 'grok-4-1-fast-non-reasoning', label: '4.1 Fast', type: 'openai', tier: 0 },
+        { key: 'fast', model: 'grok-4-1-fast-non-reasoning', label: '4.1 Fast', type: 'openai', tier: 0, maxOutput: 8192 },
         { key: 'full', model: 'grok-4-0709', label: '4', type: 'openai', tier: 2 },
     ],
     gemini: [
-        { key: 'flash-lite', model: 'gemini-2.5-flash-lite', label: '2.5 Flash Lite', type: 'gemini', tier: 0 },
+        {
+            key: 'flash-lite',
+            model: 'gemini-2.5-flash-lite',
+            label: '2.5 Flash Lite',
+            type: 'gemini',
+            tier: 0,
+            maxOutput: 8192,
+        },
         {
             key: 'flash-lite-preview',
             model: 'gemini-3.1-flash-lite-preview',
@@ -202,11 +216,28 @@ export const PHASE_SMOOTH_PASSES = 3;
 
 /**
  * Gap-adaptive Lx coverage fraction.
- * At peak intervention effect, the Lx curve can cover up to this fraction of
- * the baseline→desired gap for each curve.  0.95 = 95% coverage, leaving a
- * small visual margin so Lx sits just below the desired curve.
+ * @deprecated Used only by the legacy global-scale-factor path (when fixedScaleFactors
+ * are explicitly provided). The primary normalized path computes overlay as
+ * normalizedPharmaShape × impactVector × localGap — no global scaling needed.
  */
 export const LX_GAP_COVERAGE = 0.95;
+
+// ── Substance density / pruning thresholds ──────────────────────────────────
+
+/** Plateau duration threshold (minutes) — substances with plateau >= this are "background" */
+export const BACKGROUND_DURATION_THRESHOLD = 480;
+
+/** Max tactical (non-background) substances in any temporal cluster */
+export const CONCURRENT_SUBSTANCE_MAX = 5;
+
+/** Substance exceeding cluster cap is kept if it contributes >= this % within the cluster */
+export const CONCURRENT_KEEP_THRESHOLD = 5;
+
+/** Max total substances (background + tactical) across the entire day */
+export const DAILY_SUBSTANCE_MAX = 15;
+
+/** Never prune below this count */
+export const SUBSTANCE_MIN = 2;
 
 export const DESCRIPTOR_LEVELS = [0, 11, 22, 33, 44, 56, 67, 78, 89, 100];
 
@@ -228,6 +259,8 @@ export const TIMELINE_ZONE = {
     laneGap: 1,
     pillRx: 3,
     minBarW: 40,
+    doseBaseW: 70, // pill width at doseMultiplier = 1.0
+    doseMaxW: 200, // max pill width (high multipliers)
     bottomPad: 6,
 };
 
@@ -273,7 +306,7 @@ export const BIOMETRIC_ZONE = {
     laneH: 16,
     laneGap: 1,
     labelWidth: 58,
-    bottomPad: 8,
+    bottomPad: 24,
 };
 
 export const SPOTTER_MARKER = {
@@ -295,6 +328,50 @@ export const SPOTTER_MARKER = {
     infoPillRx: 4, // info pill corner radius
     infoPillPadX: 5, // info pill horizontal padding
     infoPillGap: 3, // gap between strip top and info pill
+};
+
+export const TELEPORT = {
+    thresholdMin: 240, // 4 hours — minimum time-shift to trigger portal instead of smooth glide
+    thresholdLanes: 2, // minimum lane distance (≥2 = more than 1 lane) to trigger vertical portal
+    driftFraction: 0.12, // how far the pill drifts before vanishing / after spawning (0-1)
+};
+
+// ── Badge Categories ────────────────────────────────────────────────
+// Single source of truth: used in Scout prompt (LLM picks one) and badge renderer.
+export const BADGE_CATEGORIES = [
+    'NEURO',
+    'SLEEP',
+    'METABOLIC',
+    'CARDIO',
+    'MOOD',
+    'HORMONAL',
+    'RECOVERY',
+    'IMMUNE',
+    'PAIN',
+    'PERFORMANCE',
+    'LONGEVITY',
+    'GUT',
+    'BEAUTY',
+    'ADDICTION',
+] as const;
+
+export type BadgeCategory = (typeof BADGE_CATEGORIES)[number];
+
+export const BADGE_CATEGORY_CSS: Record<BadgeCategory, string> = {
+    NEURO: 'badge-neuro',
+    SLEEP: 'badge-sleep',
+    METABOLIC: 'badge-metabolic',
+    CARDIO: 'badge-cardio',
+    MOOD: 'badge-mood',
+    HORMONAL: 'badge-hormonal',
+    RECOVERY: 'badge-recovery',
+    IMMUNE: 'badge-immune',
+    PAIN: 'badge-pain',
+    PERFORMANCE: 'badge-performance',
+    LONGEVITY: 'badge-longevity',
+    GUT: 'badge-gut',
+    BEAUTY: 'badge-beauty',
+    ADDICTION: 'badge-addiction',
 };
 
 export const COMPOSITE_SLEEP = {

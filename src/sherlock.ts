@@ -9,6 +9,8 @@
 import { PHASE_CHART } from './constants';
 import { SherlockState, TimelineState, isTurboActive } from './state';
 import { formatMinutesAsClockTime } from './utils';
+import { SUBSTANCE_DB } from './substances';
+import type { Sherlock7DBeat } from './types';
 
 let _panel: HTMLElement | null = null;
 let _repositionRAF: number | null = null;
@@ -62,26 +64,6 @@ function parseTimeMinutes(value: string | null): number | null {
 
 function setCurveFocus(curveIdx: number | null): void {
     const focusIdx = curveIdx !== null && curveIdx >= 0 ? curveIdx : null;
-
-    const lxGroup = document.getElementById('phase-lx-curves');
-    if (lxGroup) {
-        lxGroup.querySelectorAll('.phase-lx-path').forEach((p, i) => {
-            (p as SVGElement).style.opacity = focusIdx === null || i === focusIdx ? '1' : '0.15';
-        });
-        lxGroup.querySelectorAll('.phase-lx-fill').forEach((f, i) => {
-            (f as SVGElement).style.opacity = focusIdx === null || i === focusIdx ? '1' : '0.05';
-        });
-    }
-
-    document.querySelectorAll('.timeline-curve-dot').forEach(dot => {
-        const dotIdx = parseInt(dot.getAttribute('data-curve-idx') || '-1', 10);
-        (dot as SVGElement).style.opacity = focusIdx === null || dotIdx === focusIdx ? '1' : '0.15';
-    });
-
-    document.querySelectorAll('.timeline-connector').forEach(conn => {
-        const connIdx = parseInt(conn.getAttribute('data-curve-idx') || '-1', 10);
-        (conn as SVGElement).style.opacity = focusIdx === null || connIdx === focusIdx ? '1' : '0.15';
-    });
 
     document.querySelectorAll('.timeline-pill-group').forEach(pill => {
         pill.classList.remove('pill-dim', 'pill-highlight');
@@ -189,7 +171,6 @@ function syncScrollableCenterState(): void {
     cards.forEach(card => {
         card.classList.toggle('sherlock-scroll-active', card === centerCard);
     });
-    setCurveFocus(parseCurveIdx(centerCard?.getAttribute('data-curve-idx') || null));
 }
 
 function queueScrollableCenterSync(): void {
@@ -285,8 +266,6 @@ function layoutAnimatedStack(panel: HTMLElement): void {
         cumulativeOffset += cardEl.offsetHeight + CARD_STACK_GAP;
         cardEl.style.top = `${activeTop - cumulativeOffset}px`;
     }
-
-    setCurveFocus(parseCurveIdx(activeEl.getAttribute('data-curve-idx')));
 }
 
 // ── Panel lifecycle ─────────────────────────────────────────
@@ -345,6 +324,7 @@ export interface SherlockCardData {
     direction?: 'up' | 'down' | 'neutral';
     curveIdx?: number;
     timeMinutes?: number;
+    dayLabel?: string;
 }
 
 // ── Card rendering helpers ──────────────────────────────────
@@ -387,6 +367,11 @@ function highlightSubstance(text: string, name?: string, color?: string): string
         if (qualifier.length >= 3) alts.add(escapeRegex(qualifier));
     }
 
+    // Collapsed form (strip hyphens/spaces): "Alpha-GPC" → "AlphaGPC"
+    // Handles LLM variations that merge segments into one word.
+    const collapsed = stripped.replace(/[\s-]+/g, '');
+    if (collapsed !== stripped && collapsed.length >= 4) alts.add(escapeRegex(collapsed));
+
     // Generate acronym from multi-segment names:
     //   "N-Acetyl cysteine"  → ["N","Acetyl","cysteine"] → "NAC"
     //   "Alpha-GPC"          → ["Alpha","GPC"] → "AG" (too short, skipped)
@@ -423,12 +408,14 @@ function highlightSubstance(text: string, name?: string, color?: string): string
 // Time formatting moved to utils.ts — use formatMinutesAsClockTime
 
 function buildCardHTML(c: SherlockCardData): string {
-    const timeLabel =
-        typeof c.timeMinutes === 'number' && isFinite(c.timeMinutes)
-            ? `<span class="waze-card-time">${formatMinutesAsClockTime(c.timeMinutes)}</span>`
-            : '';
+    let headerLabel = '';
+    if (typeof c.timeMinutes === 'number' && isFinite(c.timeMinutes)) {
+        headerLabel = `<span class="waze-card-time">${formatMinutesAsClockTime(c.timeMinutes)}</span>`;
+    } else if (c.dayLabel) {
+        headerLabel = `<span class="waze-card-day-label">${c.dayLabel}</span>`;
+    }
     return `
-        ${timeLabel}
+        ${headerLabel}
         <div class="waze-col-left">
             ${getArrowSvg(c.direction)}
         </div>
@@ -457,12 +444,7 @@ function attachHoverListeners(cardEl: Element): void {
         // Restore to clicked card's highlight (if any), otherwise clear
         applyBandPillHighlight(_clickedSubstanceKey);
 
-        if (_panel && _panel.classList.contains('scrollable')) {
-            queueScrollableCenterSync();
-        } else {
-            const active = _panel?.querySelector('.waze-card.sherlock-active') as HTMLElement | null;
-            setCurveFocus(parseCurveIdx(active?.getAttribute('data-curve-idx') || null));
-        }
+        clearCurveFocus();
     });
 
     cardEl.addEventListener('click', () => {
@@ -541,6 +523,7 @@ function enterAnimatedCardMode(panel: HTMLElement): void {
     panel.style.removeProperty('--sherlock-scroll-pad');
     panel.scrollTop = 0;
     unbindScrollTracking();
+    clearCurveFocus();
 }
 
 export function showSherlockStack(cards: SherlockCardData[], activeIdx: number): void {
@@ -1044,4 +1027,118 @@ export function awaitLxStep(stepIdx: number, total: number): Promise<void> {
             resolve();
         };
     });
+}
+
+// ── Sherlock 7D — Circular carousel for STREAM sequence ──
+
+let _7dCardsBuilt = false;
+
+/**
+ * Display all 7D beats as a circular carousel.
+ * Active card at the usual vertical center; previous days above, next days below.
+ * All cards visible with fading based on distance from active.
+ * CSS transitions on `.waze-card` handle the smooth slide as active day changes.
+ */
+export function showSherlock7DStack(beats: Sherlock7DBeat[], activeDayIdx: number): void {
+    if (!SherlockState.enabled || beats.length === 0) return;
+    const panel = ensureNarrationPanel();
+    const n = beats.length;
+    const activeIdx = Math.max(0, Math.min(activeDayIdx, n - 1));
+
+    // Build card DOM once — reuse on subsequent calls (only positions/opacity change)
+    const existingCards = panel.querySelectorAll('.waze-card');
+    if (!_7dCardsBuilt || existingCards.length !== n) {
+        // Remove existing cards but keep the header
+        existingCards.forEach(el => el.remove());
+
+        const cards: SherlockCardData[] = beats.map(beat => {
+            const subColor = beat.topSubstanceKey
+                ? SUBSTANCE_DB[beat.topSubstanceKey]?.color
+                : undefined;
+            return {
+                id: `day7d-${beat.day}`,
+                text: beat.text,
+                direction: beat.direction || 'neutral',
+                dose: undefined,
+                substanceName: beat.topSubstanceName || undefined,
+                substanceKey: beat.topSubstanceKey || undefined,
+                substanceColor: subColor,
+                dayLabel: `Day ${beat.day} — ${beat.weekday}`,
+            };
+        });
+        cards.forEach(card => panel.appendChild(createCardElement(card)));
+        _7dCardsBuilt = true;
+
+        // Ensure animated card mode (absolute positioning, no scroll)
+        panel.classList.remove('scrollable');
+        panel.style.removeProperty('--sherlock-scroll-pad');
+    }
+
+    // Position all cards relative to the active one
+    const allCards = Array.from(panel.querySelectorAll('.waze-card')) as HTMLElement[];
+    if (allCards.length === 0) return;
+
+    const centerY = panel.clientHeight / 2;
+    const gap = CARD_STACK_GAP;
+
+    // Measure each card's height
+    const cardH = allCards.map(el => el.offsetHeight || 60);
+    const activeH = cardH[activeIdx];
+    const activeTop = centerY - activeH / 2;
+
+    // For each card compute signed offset from active (-3..+3 for 7 cards)
+    const half = Math.floor(n / 2);
+
+    allCards.forEach((el, i) => {
+        let offset = i - activeIdx;
+        if (offset > half) offset -= n;
+        else if (offset < -half) offset += n;
+
+        // Accumulate position from center
+        let top: number;
+        if (offset === 0) {
+            top = activeTop;
+        } else if (offset > 0) {
+            // Below active
+            let y = activeTop + activeH + gap;
+            for (let s = 1; s < offset; s++) {
+                const si = ((activeIdx + s) % n + n) % n;
+                y += cardH[si] + gap;
+            }
+            top = y;
+        } else {
+            // Above active
+            let y = activeTop;
+            for (let s = -1; s >= offset; s--) {
+                const si = ((activeIdx + s) % n + n) % n;
+                y -= cardH[si] + gap;
+            }
+            top = y;
+        }
+
+        el.style.top = `${top}px`;
+
+        // Opacity based on distance from active
+        const dist = Math.abs(offset);
+        if (dist === 0) {
+            el.classList.add('sherlock-active');
+            el.classList.remove('sherlock-stale');
+            el.style.opacity = '1';
+        } else {
+            el.classList.remove('sherlock-active');
+            el.classList.add('sherlock-stale');
+            el.style.opacity = Math.max(0.08, 0.47 - dist * 0.15).toFixed(2);
+        }
+    });
+}
+
+/** Reset 7D card build state (call when leaving STREAM mode). */
+export function reset7DCardState(): void {
+    _7dCardsBuilt = false;
+}
+
+/** Hide the Sherlock 7D panel and clear 7D narration state. */
+export function hideSherlock7D(): void {
+    reset7DCardState();
+    hideNarrationPanel();
 }

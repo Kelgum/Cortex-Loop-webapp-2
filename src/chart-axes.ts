@@ -1,10 +1,10 @@
 /**
- * Chart Axes — X/Y axis rendering, grid lines, level descriptors, hover tooltips, and curve highlight toggling.
- * Exports: buildPhaseXAxis, buildPhaseYAxes, buildPhaseGrid, getChartLevelDesc, highlightCurve, renderYAxisTransitionIndicators
- * Depends on: constants (PHASE_CHART, DESCRIPTOR_LEVELS), state (PhaseState, DividerState), utils, curve-utils, divider, baseline-editor
+ * Chart Axes — X/Y axis rendering, grid lines, level descriptors, hover tooltips, curve highlight toggling, and week strip.
+ * Exports: buildPhaseXAxis, buildPhaseYAxes, buildPhaseGrid, getChartLevelDesc, highlightCurve, renderYAxisTransitionIndicators, buildWeekStrip, updateWeekStripDay, hideWeekStrip
+ * Depends on: constants (PHASE_CHART, DESCRIPTOR_LEVELS), state (PhaseState, DividerState, MultiDayState), utils, curve-utils, divider, baseline-editor
  */
 import { PHASE_CHART, PHASE_SMOOTH_PASSES, DESCRIPTOR_LEVELS } from './constants';
-import { PhaseState, DividerState, isTurboActive } from './state';
+import { PhaseState, DividerState, MultiDayState, isTurboActive } from './state';
 import { svgEl, chartTheme, phaseChartX, phaseChartY, isLightMode } from './utils';
 import {
     smoothPhaseValues,
@@ -16,6 +16,37 @@ import {
 } from './curve-utils';
 import { getEffectSubGroup } from './divider';
 import { getLevelData } from './baseline-editor';
+
+// ── X-axis label format (pluggable via A/B test) ────────────────────
+interface XAxisFormat {
+    format: (hour: number) => string;
+    fontFamily: string;
+    fontSize: number;
+    fontWeight: string;
+    letterSpacing?: string;
+    shouldLabel?: (hour: number) => boolean;
+    secondaryLabel?: (hour: number) => string | null;
+}
+
+// Default: 24h military format (variant A)
+const DEFAULT_X_AXIS_FORMAT: XAxisFormat = {
+    format: h => `${String(h).padStart(2, '0')}:00`,
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 9.5,
+    fontWeight: '400',
+};
+
+let _xAxisFormat: XAxisFormat = { ...DEFAULT_X_AXIS_FORMAT };
+
+/** Replace the x-axis label format (used by A/B test variants) */
+export function setXAxisFormat(fmt: XAxisFormat): void {
+    _xAxisFormat = fmt;
+}
+
+/** Reset to the default 24h format */
+export function resetXAxisFormat(): void {
+    _xAxisFormat = { ...DEFAULT_X_AXIS_FORMAT };
+}
 
 /** Darken a hex color for readability on light backgrounds. */
 function darkenForLightMode(hex: string): string {
@@ -169,7 +200,7 @@ export function buildPhaseXAxis(): void {
         );
     }
 
-    // --- Even-hour ticks + labels every 2h in HH:00 format ---
+    // --- Even-hour ticks + labels every 2h ---
     for (let h = PHASE_CHART.startHour; h <= PHASE_CHART.endHour; h += 2) {
         const x = phaseChartX(h * 60);
         const displayHour = h % 24;
@@ -186,17 +217,42 @@ export function buildPhaseXAxis(): void {
             }),
         );
 
+        const fmt = _xAxisFormat;
+        // Skip hours that the current format doesn't want labeled
+        if (fmt.shouldLabel && !fmt.shouldLabel(displayHour)) continue;
+
         group.appendChild(
             svgEl('text', {
                 x: x.toFixed(1),
                 y: String(labelY),
                 fill: t.labelNormal,
-                'font-family': "'IBM Plex Mono', monospace",
-                'font-size': '9.5',
-                'font-weight': '400',
+                'font-family': fmt.fontFamily,
+                'font-size': String(fmt.fontSize),
+                'font-weight': fmt.fontWeight,
                 'text-anchor': 'middle',
+                'letter-spacing': fmt.letterSpacing || '0',
             }),
-        ).textContent = `${String(displayHour).padStart(2, '0')}:00`;
+        ).textContent = fmt.format(displayHour);
+
+        // Optional secondary label below (for contextual anchors)
+        if (fmt.secondaryLabel) {
+            const secondary = fmt.secondaryLabel(displayHour);
+            if (secondary) {
+                group.appendChild(
+                    svgEl('text', {
+                        x: x.toFixed(1),
+                        y: String(labelY + 10),
+                        fill: t.labelNormal,
+                        'font-family': "'Space Grotesk', sans-serif",
+                        'font-size': '7.5',
+                        'font-weight': '600',
+                        'text-anchor': 'middle',
+                        'letter-spacing': '0.08em',
+                        opacity: '0.5',
+                    }),
+                ).textContent = secondary;
+            }
+        }
     }
 }
 
@@ -485,11 +541,13 @@ export function buildSingleYAxis(
             overlay.appendChild(detailGroup);
             entry.detailGroup = detailGroup;
 
+            // Topmost tick (v=100): lower descriptor to avoid overlap with Y-axis effect label
+            const sideLabelY = v === 100 ? y + 22 : y;
             const sideLabelGroup = svgEl('g', { class: 'tick-tooltip', opacity: '0', 'pointer-events': 'none' });
             sideLabelGroup.appendChild(
                 svgEl('rect', {
                     x: sideBoxX.toFixed(1),
-                    y: (y - sideBoxH / 2).toFixed(1),
+                    y: (sideLabelY - sideBoxH / 2).toFixed(1),
                     width: sideBoxW.toFixed(1),
                     height: String(sideBoxH),
                     rx: '10',
@@ -500,7 +558,7 @@ export function buildSingleYAxis(
             );
             const sideLabelText = svgEl('text', {
                 x: String(sideTextX),
-                y: y.toFixed(1),
+                y: sideLabelY.toFixed(1),
                 fill: labelColor,
                 'fill-opacity': '0.95',
                 'font-family': "'Space Grotesk', sans-serif",
@@ -570,10 +628,13 @@ export function buildSingleYAxis(
                 entry.numLabel.style.transition = 'filter 150ms ease';
             }
 
+            // Re-append to overlay so these paint on top of gamification boxes
             if (entry.detailGroup) {
+                entry.detailGroup.parentElement?.appendChild(entry.detailGroup);
                 entry.detailGroup.setAttribute('opacity', '1');
             }
             if (entry.sideLabelGroup) {
+                entry.sideLabelGroup.parentElement?.appendChild(entry.sideLabelGroup);
                 entry.sideLabelGroup.setAttribute('opacity', '1');
             }
 
@@ -923,11 +984,13 @@ function renderChangeIndicator(
     container.appendChild(originDot);
 
     // -- FROM label (centered in margin, subdued) --
-    placeLabel(container, baseDesc, labelX, baseY, maxLabelW, curve.color, 11, '600', 0.72);
+    const baseLabelY = baseLevel === 100 ? baseY + 22 : baseY;
+    placeLabel(container, baseDesc, labelX, baseLabelY, maxLabelW, curve.color, 11, '600', 0.72);
 
     // -- TO label (centered in margin, bold — animated reveal) --
+    const toLabelY = desiredLevel === 100 ? desiredY + 22 : desiredY;
     const toLabelWrap = svgEl('g', { opacity: '0' });
-    placeLabel(toLabelWrap, desiredDesc, labelX, desiredY, maxLabelW, curve.color, 13, '700', 1.0);
+    placeLabel(toLabelWrap, desiredDesc, labelX, toLabelY, maxLabelW, curve.color, 13, '700', 1.0);
     container.appendChild(toLabelWrap);
 
     group.appendChild(container);
@@ -1027,13 +1090,15 @@ function renderKeepIndicator(
         'data-effect-idx': String(curveIdx),
     });
 
-    // -- Labels (centered in margin) --
+    // -- Labels (centered in margin) — lower top label when at max level to avoid Y-axis effect label overlap --
+    const topLabelY = topLevel === 100 ? topY + 22 : topY;
     if (hasRange) {
-        if (topDesc) placeLabel(container, topDesc, labelX, topY, maxLabelW, curve.color, 11, '600', 0.85);
+        if (topDesc) placeLabel(container, topDesc, labelX, topLabelY, maxLabelW, curve.color, 11, '600', 0.85);
         if (botDesc) placeLabel(container, botDesc, labelX, botY, maxLabelW, curve.color, 11, '600', 0.85);
     } else {
         const desc = topDesc || botDesc || '';
-        placeLabel(container, desc, labelX, centerY, maxLabelW, curve.color, 11, '600', 0.85);
+        const singleLabelY = topLevel === 100 ? centerY + 22 : centerY;
+        placeLabel(container, desc, labelX, singleLabelY, maxLabelW, curve.color, 11, '600', 0.85);
     }
 
     // -- Horizontal line with center dot --
@@ -1101,4 +1166,361 @@ function renderKeepIndicator(
         container.setAttribute('opacity', String(0.92 * (1 - Math.pow(1 - t, 3))));
         if (t < 1) requestAnimationFrame(animate);
     })();
+}
+
+// ============================================
+// Week Day Strip — replaces Day/Night bands during multi-day sequence
+// ============================================
+
+const WEEKDAY_ABBREVS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const WEEKDAY_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/**
+ * Build a 7-day week strip that replaces the Day/Night bands above the X-axis.
+ * Each day cell spans `plotW / totalDays` and is labeled with the weekday abbreviation.
+ * @param totalDays Number of days in the sequence (typically 7: Mon–Sun)
+ */
+export function buildWeekStrip(totalDays: number = 7): void {
+    const group = document.getElementById('phase-week-strip');
+    if (!group) return;
+    group.innerHTML = '';
+
+    const isLight = isLightMode();
+    const startWeekday = MultiDayState.startWeekday || 'Monday';
+    const startIdx = WEEKDAY_FULL.findIndex(d => d.toLowerCase() === startWeekday.toLowerCase());
+    const baseIdx = startIdx === -1 ? 1 : startIdx; // default Monday
+
+    const stripTop = 0;
+    const stripH = 24;
+    const plotL = PHASE_CHART.padL;
+    const plotW = PHASE_CHART.plotW;
+    const cellW = plotW / totalDays;
+
+    // Background strip spanning full plot width
+    group.appendChild(
+        svgEl('rect', {
+            x: String(plotL),
+            y: String(stripTop),
+            width: String(plotW),
+            height: String(stripH),
+            fill: isLight ? 'rgba(180,190,210,0.08)' : 'rgba(100,120,160,0.08)',
+            rx: '3',
+            'pointer-events': 'none',
+        }),
+    );
+
+    // Day cells + labels
+    for (let i = 0; i < totalDays; i++) {
+        const weekdayIdx = (baseIdx + i) % 7;
+        const abbrev = WEEKDAY_ABBREVS[weekdayIdx];
+        const x = plotL + i * cellW;
+
+        // Cell background (alternating subtle tint)
+        const isWeekend = weekdayIdx === 0 || weekdayIdx === 6;
+        const cellFill = isWeekend
+            ? isLight
+                ? 'rgba(80,110,185,0.06)'
+                : 'rgba(90,120,200,0.07)'
+            : isLight
+              ? 'rgba(210,155,40,0.05)'
+              : 'rgba(210,155,40,0.05)';
+
+        group.appendChild(
+            svgEl('rect', {
+                x: x.toFixed(1),
+                y: String(stripTop),
+                width: cellW.toFixed(1),
+                height: String(stripH),
+                fill: cellFill,
+                'pointer-events': 'none',
+                class: 'week-strip-cell',
+                'data-day-index': String(i),
+            }),
+        );
+
+        // Separator line between cells (skip first)
+        if (i > 0) {
+            group.appendChild(
+                svgEl('line', {
+                    x1: x.toFixed(1),
+                    y1: String(stripTop),
+                    x2: x.toFixed(1),
+                    y2: String(stripTop + stripH),
+                    stroke: isLight ? 'rgba(80,100,140,0.15)' : 'rgba(140,160,200,0.12)',
+                    'stroke-width': '0.5',
+                    'pointer-events': 'none',
+                }),
+            );
+        }
+
+        // Day label
+        const labelColor = isLight ? 'rgba(60,70,90,0.55)' : 'rgba(180,195,220,0.50)';
+        group.appendChild(
+            svgEl('text', {
+                x: (x + cellW / 2).toFixed(1),
+                y: String(stripTop + stripH / 2 + 1),
+                fill: labelColor,
+                'text-anchor': 'middle',
+                'dominant-baseline': 'middle',
+                'font-family': "'IBM Plex Mono', monospace",
+                'font-size': '9',
+                'font-weight': '500',
+                'letter-spacing': '0.06em',
+                'pointer-events': 'none',
+                class: 'week-strip-label',
+                'data-day-index': String(i),
+            }),
+        ).textContent = abbrev;
+    }
+
+    // ClipPath so the highlight rect(s) get clipped to the strip bounds.
+    // This enables the "portal" wrap-around effect: the rect slides off the
+    // right edge (clipped) while a ghost copy enters from the left edge.
+    const clipId = 'week-strip-clip';
+    const clipPath = svgEl('clipPath', { id: clipId });
+    clipPath.appendChild(
+        svgEl('rect', {
+            x: String(plotL),
+            y: String(stripTop - 2),
+            width: String(plotW),
+            height: String(stripH + 4),
+        }),
+    );
+    group.appendChild(clipPath);
+
+    // Clipped group containing the highlight rect + its ghost clone
+    const hlGroup = svgEl('g', { 'clip-path': `url(#${clipId})`, 'pointer-events': 'none' });
+
+    const highlightAttrs = {
+        x: String(plotL),
+        y: String(stripTop),
+        width: cellW.toFixed(1),
+        height: String(stripH),
+        fill: isLight ? 'rgba(30,144,255,0.12)' : 'rgba(30,144,255,0.15)',
+        stroke: isLight ? 'rgba(30,144,255,0.45)' : 'rgba(30,144,255,0.50)',
+        'stroke-width': '1.5',
+        rx: '3',
+        'pointer-events': 'none',
+        opacity: '0',
+    };
+
+    // Ghost highlight — visible only during wrap-around portal transition
+    const ghostRect = svgEl('rect', { ...highlightAttrs, id: 'week-strip-highlight-ghost', opacity: '0' });
+    hlGroup.appendChild(ghostRect);
+
+    // Active day highlight rect (no label inside — cell labels bold on overlap)
+    const highlightRect = svgEl('rect', { ...highlightAttrs, id: 'week-strip-highlight' });
+    hlGroup.appendChild(highlightRect);
+
+    group.appendChild(hlGroup);
+
+    // Inline play icon — small triangle centered in the highlight, hidden by default
+    const playIconSize = 8;
+    const playCX = plotL + cellW / 2;
+    const playCY = stripTop + stripH / 2;
+    const playIcon = svgEl('polygon', {
+        id: 'week-strip-play-icon',
+        points: `${(playCX - playIconSize * 0.4).toFixed(1)},${(playCY - playIconSize * 0.5).toFixed(1)} ${(playCX + playIconSize * 0.6).toFixed(1)},${playCY.toFixed(1)} ${(playCX - playIconSize * 0.4).toFixed(1)},${(playCY + playIconSize * 0.5).toFixed(1)}`,
+        fill: isLight ? 'rgba(30,100,200,0.75)' : 'rgba(180,215,255,0.80)',
+        'pointer-events': 'none',
+        opacity: '0',
+    });
+    group.appendChild(playIcon);
+
+    // Transparent interaction hit area — captures pointer events for drag-to-scrub
+    const hitRect = svgEl('rect', {
+        id: 'week-strip-hit',
+        x: String(plotL),
+        y: String(stripTop),
+        width: String(plotW),
+        height: String(stripH),
+        fill: 'transparent',
+        'pointer-events': 'all',
+        cursor: 'grab',
+    });
+    group.appendChild(hitRect);
+
+    // Hide the original Day/Night bands
+    _hideDayNightBands(true);
+}
+
+/**
+ * Update the week strip to highlight the current day (instant snap).
+ * @param dayIndex 0-based day index in the sequence
+ * @param totalDays total days (must match what was passed to buildWeekStrip)
+ */
+export function updateWeekStripDay(dayIndex: number, totalDays: number = 7): void {
+    interpolateWeekStripHighlight(dayIndex, dayIndex, 0, totalDays);
+}
+
+/**
+ * Smoothly interpolate the week strip highlight between two day positions.
+ * Called per-frame during day-to-day transitions for continuous sliding motion.
+ * @param fromDayIndex source day (0-based)
+ * @param toDayIndex target day (0-based)
+ * @param t interpolation factor 0..1
+ * @param totalDays total days in the sequence
+ */
+export function interpolateWeekStripHighlight(
+    fromDayIndex: number,
+    toDayIndex: number,
+    t: number,
+    totalDays: number = 7,
+): void {
+    const group = document.getElementById('phase-week-strip');
+    if (!group) return;
+
+    const plotL = PHASE_CHART.padL;
+    const plotW = PHASE_CHART.plotW;
+    const cellW = plotW / totalDays;
+    const isLight = isLightMode();
+
+    const highlight = document.getElementById('week-strip-highlight');
+    const ghost = document.getElementById('week-strip-highlight-ghost');
+
+    // ── Portal wrap-around: highlight continues rightward off the right edge
+    //    while a ghost copy enters from the left edge (both clipped to strip bounds).
+    const isWrapAround = toDayIndex < fromDayIndex && fromDayIndex !== toDayIndex;
+    let curX: number;
+
+    if (isWrapAround) {
+        // Virtual rightward travel distance (cells) going forward through the right edge
+        const virtualTravel = totalDays - fromDayIndex + toDayIndex;
+        const virtualPos = fromDayIndex + virtualTravel * t;
+        // Primary rect: continues rightward (may extend past strip — clipped)
+        curX = plotL + virtualPos * cellW;
+        // Ghost rect: same position but shifted left by the full strip width
+        const ghostX = curX - plotW;
+
+        if (highlight) {
+            highlight.setAttribute('x', curX.toFixed(1));
+            highlight.setAttribute('width', cellW.toFixed(1));
+            highlight.setAttribute('opacity', '1');
+        }
+        if (ghost) {
+            ghost.setAttribute('x', ghostX.toFixed(1));
+            ghost.setAttribute('width', cellW.toFixed(1));
+            ghost.setAttribute('opacity', '1');
+        }
+    } else {
+        // Normal forward slide
+        const fromX = plotL + fromDayIndex * cellW;
+        const toX = plotL + toDayIndex * cellW;
+        curX = fromX + (toX - fromX) * t;
+
+        if (highlight) {
+            highlight.setAttribute('x', curX.toFixed(1));
+            highlight.setAttribute('width', cellW.toFixed(1));
+            highlight.setAttribute('opacity', '1');
+        }
+        // Hide ghost when not wrapping
+        if (ghost) ghost.setAttribute('opacity', '0');
+    }
+
+    // Bold the cell label that has majority overlap from the highlight
+    // (use the effective visual position — for wrap-around, consider both rects)
+    const dimColor = isLight ? 'rgba(60,70,90,0.55)' : 'rgba(180,195,220,0.50)';
+    const boldColor = isLight ? 'rgba(20,80,180,0.92)' : 'rgba(100,180,255,0.95)';
+    const labels = group.querySelectorAll('.week-strip-label');
+    labels.forEach((el: Element) => {
+        const idx = parseInt(el.getAttribute('data-day-index') || '-1', 10);
+        if (idx < 0) return;
+
+        const cellLeft = plotL + idx * cellW;
+        const cellRight = cellLeft + cellW;
+
+        // Overlap from primary highlight
+        let overlap = Math.max(0, Math.min(cellRight, curX + cellW) - Math.max(cellLeft, curX)) / cellW;
+
+        // During wrap-around, also check overlap with the ghost
+        if (isWrapAround) {
+            const ghostX = curX - plotW;
+            const ghostOverlap = Math.max(0, Math.min(cellRight, ghostX + cellW) - Math.max(cellLeft, ghostX)) / cellW;
+            overlap = Math.max(overlap, ghostOverlap);
+        }
+
+        if (overlap > 0.5) {
+            el.setAttribute('fill', boldColor);
+            el.setAttribute('font-weight', '700');
+            el.setAttribute('font-size', '10.5');
+        } else {
+            el.setAttribute('fill', dimColor);
+            el.setAttribute('font-weight', '500');
+            el.setAttribute('font-size', '9');
+        }
+    });
+}
+
+/**
+ * Show/hide the inline play icon inside the week strip highlight.
+ * When visible, it's centered within the current highlight rect position.
+ */
+export function showWeekStripPlayIcon(visible: boolean): void {
+    const icon = document.getElementById('week-strip-play-icon');
+    if (!icon) return;
+
+    if (visible) {
+        // Reposition to the current highlight center
+        const highlight = document.getElementById('week-strip-highlight');
+        if (highlight) {
+            const hx = parseFloat(highlight.getAttribute('x') || '0');
+            const hw = parseFloat(highlight.getAttribute('width') || '0');
+            const stripH = 24;
+            const cx = hx + hw / 2;
+            const cy = stripH / 2;
+            const sz = 8;
+            icon.setAttribute(
+                'points',
+                `${(cx - sz * 0.4).toFixed(1)},${(cy - sz * 0.5).toFixed(1)} ` +
+                    `${(cx + sz * 0.6).toFixed(1)},${cy.toFixed(1)} ` +
+                    `${(cx - sz * 0.4).toFixed(1)},${(cy + sz * 0.5).toFixed(1)}`,
+            );
+        }
+        icon.setAttribute('opacity', '1');
+    } else {
+        icon.setAttribute('opacity', '0');
+    }
+}
+
+/**
+ * Remove the week strip and restore the Day/Night bands.
+ */
+export function hideWeekStrip(): void {
+    const group = document.getElementById('phase-week-strip');
+    if (group) group.innerHTML = '';
+    _hideDayNightBands(false);
+}
+
+/** Toggle visibility of the Day/Night bands in the x-axis group */
+function _hideDayNightBands(hide: boolean): void {
+    const xAxisGroup = document.getElementById('phase-x-axis');
+    if (!xAxisGroup) return;
+    // The Day/Night bands are the first few rect children (the tinted bands) and the Day/Night text labels.
+    // We identify them by the y attribute (bandTop=2) and text content.
+    for (const child of Array.from(xAxisGroup.children)) {
+        const tag = child.tagName.toLowerCase();
+        if (tag === 'rect') {
+            const y = parseFloat(child.getAttribute('y') || '999');
+            if (y <= 15) {
+                (child as HTMLElement).style.opacity = hide ? '0' : '';
+            }
+        }
+        if (tag === 'text') {
+            const text = child.textContent?.trim() || '';
+            if (text === 'Day' || text === 'Night') {
+                (child as HTMLElement).style.opacity = hide ? '0' : '';
+            }
+        }
+    }
+}
+
+// ── A/B test: x-axis time label format ──────────────────────────────
+
+function activateTimeLabelsA() {
+    resetXAxisFormat();
+    const group = document.getElementById('phase-x-axis');
+    if (group && group.children.length > 0) buildPhaseXAxis();
+}
+function deactivateTimeLabelsA() {
+    /* noop */
 }

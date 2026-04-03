@@ -3,21 +3,23 @@
  * Exports: diffInterventions, animateRevisionScan
  * Depends on: constants (PHASE_CHART, TIMELINE_ZONE), state (BiometricState), utils, svg-animate, lx-system, sherlock
  */
-import { PHASE_CHART, TIMELINE_ZONE } from './constants';
+import { PHASE_CHART, TIMELINE_ZONE, TELEPORT } from './constants';
 import { BiometricState, isTurboActive } from './state';
 import { easeInOutCubic, easeOutCubic } from './timeline-engine';
-import { svgEl, phaseChartX, sleep, isLightMode, clamp } from './utils';
+import { svgEl, phaseChartX, sleep, isLightMode, clamp, teleportInterpolation } from './utils';
 import { animateSvgOpacity } from './svg-animate';
 import {
     renderSubstanceTimeline,
     preserveBiometricStrips,
     revealTimelinePillsInstant,
     getBioSeparatorEffectiveY,
+    getTimelineBottomY,
     slideBiometricZoneDown,
     animatePhaseChartViewBoxHeight,
 } from './lx-system';
 import { showNarrationPanel, showSherlockStack, enableSherlockScrollMode } from './sherlock';
 import { buildSherlockRevisionCards } from './timeline-segments/sherlock-segments';
+import { updateGamificationCurveData } from './gamification-overlay';
 
 interface RevisionAnimationOptions {
     morphLxStep?: (entry: any, entryIdx: number, durationMs: number) => Promise<void> | void;
@@ -362,7 +364,7 @@ function animateMove(
     pill: Element | null,
     from: BarRect,
     to: BarRect,
-    duration = 700,
+    duration = 1100,
     targetLabelPos?: { x: number; y: number } | null,
 ): Promise<void> {
     if (!pill) return Promise.resolve();
@@ -374,6 +376,12 @@ function animateMove(
     const dx = to.x - from.x;
     const dy = to.y - from.y;
     const dw = to.width - from.width;
+
+    // Determine if this move is large enough to warrant a portal effect
+    const teleportThresholdPx = (TELEPORT.thresholdMin / PHASE_CHART.totalMin) * PHASE_CHART.plotW;
+    const laneStep = TIMELINE_ZONE.laneH + TIMELINE_ZONE.laneGap;
+    const laneDist = Math.abs(dy) / laneStep;
+    const isTeleport = Math.abs(dx) > teleportThresholdPx || laneDist >= TELEPORT.thresholdLanes;
 
     const { bar, label, connector, dot } = getPillParts(pill);
     pill.setAttribute('opacity', '1');
@@ -388,7 +396,9 @@ function animateMove(
     const connStartX1 = connector ? parseFloat(connector.getAttribute('x1') || '0') : 0;
     const connStartX2 = connector ? parseFloat(connector.getAttribute('x2') || '0') : 0;
     const connStartY2 = connector ? parseFloat(connector.getAttribute('y2') || '0') : 0;
+    const connBaseOpacity = connector ? parseFloat(connector.getAttribute('stroke-opacity') || '0.25') : 0.25;
     const dotStartCx = dot ? parseFloat(dot.getAttribute('cx') || '0') : 0;
+    const dotBaseOpacity = dot ? parseFloat(dot.getAttribute('fill-opacity') || '0.65') : 0.65;
 
     // Also move clip-path rect if present
     const clippedG = pill.querySelector('[clip-path]');
@@ -409,56 +419,131 @@ function animateMove(
         }
     }
 
+    // ── Portal mode: create a destination ghost that fades in simultaneously ──
+    let ghost: Element | null = null;
+    let ghostParts: ReturnType<typeof getPillParts> = { bar: null, label: null, connector: null, dot: null };
+    if (isTeleport && pill.parentNode) {
+        ghost = pill.cloneNode(true) as Element;
+        // Remove clip-path IDs from clone to avoid duplicate IDs
+        ghost.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+        ghost.querySelectorAll('[clip-path]').forEach(el => el.removeAttribute('clip-path'));
+        ghost.setAttribute('opacity', '0');
+        pill.parentNode.insertBefore(ghost, pill.nextSibling);
+        ghostParts = getPillParts(ghost);
+        // Position ghost bar/label/connector/dot at the destination approach point
+        const destStartFrac = 1 - TELEPORT.driftFraction;
+        if (ghostParts.bar) {
+            ghostParts.bar.setAttribute('x', (from.x + dx * destStartFrac).toFixed(1));
+            ghostParts.bar.setAttribute('y', (from.y + dy * destStartFrac).toFixed(1));
+            ghostParts.bar.setAttribute('width', to.width.toFixed(1));
+        }
+        if (ghostParts.label) {
+            ghostParts.label.setAttribute('x', (labelStartX + labelDx * destStartFrac).toFixed(1));
+            ghostParts.label.setAttribute('y', (labelStartY + labelDy * destStartFrac).toFixed(1));
+        }
+        if (ghostParts.connector) {
+            ghostParts.connector.setAttribute('x1', (connStartX1 + dx * destStartFrac).toFixed(1));
+            ghostParts.connector.setAttribute('x2', (connStartX2 + dx * destStartFrac).toFixed(1));
+        }
+        if (ghostParts.dot) {
+            ghostParts.dot.setAttribute('cx', (dotStartCx + dx * destStartFrac).toFixed(1));
+        }
+    }
+
     return new Promise<void>(resolve => {
         const startTs = performance.now();
         (function tick(now: number) {
             const rawT = Math.min(1, (now - startTs) / duration);
             const ease = easeInOutCubic(rawT);
 
-            // Interpolate bar position directly
-            const curX = from.x + dx * ease;
-            const curY = from.y + dy * ease;
-            if (bar) {
-                bar.setAttribute('x', curX.toFixed(1));
-                bar.setAttribute('y', curY.toFixed(1));
-            }
+            if (isTeleport) {
+                // ── Portal: origin fades out + drifts, destination fades in + drifts — in parallel ──
+                const tf = teleportInterpolation(ease, TELEPORT.driftFraction);
 
-            // Interpolate width if it changed
-            if (bar && Math.abs(dw) > 0.5) {
-                const curW = Math.max(1, from.width + dw * ease);
-                bar.setAttribute('width', curW.toFixed(1));
-            }
-
-            // Move label with bar (uses independent deltas when offsets differ)
-            if (label) {
-                label.setAttribute('x', (labelStartX + labelDx * ease).toFixed(1));
-                label.setAttribute('y', (labelStartY + labelDy * ease).toFixed(1));
-            }
-
-            // Move clip-path rect with bar
-            if (clipRect) {
-                clipRect.setAttribute('x', (clipStartX + dx * ease).toFixed(1));
-                clipRect.setAttribute('y', (clipStartY + dy * ease).toFixed(1));
-                if (Math.abs(dw) > 0.5) {
-                    const clipDw = to.width + 40 - clipStartW; // label overflow
-                    clipRect.setAttribute('width', (clipStartW + clipDw * ease).toFixed(1));
+                // Origin pill: drift slightly toward destination, fade out
+                pill.setAttribute('opacity', tf.originOpacity.toFixed(3));
+                if (bar) {
+                    bar.setAttribute('x', (from.x + dx * tf.originPos).toFixed(1));
+                    bar.setAttribute('y', (from.y + dy * tf.originPos).toFixed(1));
                 }
-            }
+                if (label) {
+                    label.setAttribute('x', (labelStartX + labelDx * tf.originPos).toFixed(1));
+                    label.setAttribute('y', (labelStartY + labelDy * tf.originPos).toFixed(1));
+                }
+                if (connector) {
+                    connector.setAttribute('x1', (connStartX1 + dx * tf.originPos).toFixed(1));
+                    connector.setAttribute('x2', (connStartX2 + dx * tf.originPos).toFixed(1));
+                    connector.setAttribute('stroke-opacity', (connBaseOpacity * tf.originOpacity).toFixed(3));
+                }
+                if (dot) {
+                    dot.setAttribute('cx', (dotStartCx + dx * tf.originPos).toFixed(1));
+                    dot.setAttribute('fill-opacity', (dotBaseOpacity * tf.originOpacity).toFixed(3));
+                }
 
-            // Move connector and dot with bar (keep them visible during move)
-            if (connector) {
-                connector.setAttribute('x1', (connStartX1 + dx * ease).toFixed(1));
-                connector.setAttribute('x2', (connStartX2 + dx * ease).toFixed(1));
-                connector.setAttribute('y2', (connStartY2 + dy * ease).toFixed(1));
-            }
-            if (dot) {
-                dot.setAttribute('cx', (dotStartCx + dx * ease).toFixed(1));
+                // Destination ghost: drift into final position, fade in
+                if (ghost) {
+                    ghost.setAttribute('opacity', tf.destOpacity.toFixed(3));
+                    if (ghostParts.bar) {
+                        ghostParts.bar.setAttribute('x', (from.x + dx * tf.destPos).toFixed(1));
+                        ghostParts.bar.setAttribute('y', (from.y + dy * tf.destPos).toFixed(1));
+                    }
+                    if (ghostParts.label) {
+                        ghostParts.label.setAttribute('x', (labelStartX + labelDx * tf.destPos).toFixed(1));
+                        ghostParts.label.setAttribute('y', (labelStartY + labelDy * tf.destPos).toFixed(1));
+                    }
+                    if (ghostParts.connector) {
+                        ghostParts.connector.setAttribute('x1', (connStartX1 + dx * tf.destPos).toFixed(1));
+                        ghostParts.connector.setAttribute('x2', (connStartX2 + dx * tf.destPos).toFixed(1));
+                        ghostParts.connector.setAttribute(
+                            'stroke-opacity',
+                            (connBaseOpacity * tf.destOpacity).toFixed(3),
+                        );
+                    }
+                    if (ghostParts.dot) {
+                        ghostParts.dot.setAttribute('cx', (dotStartCx + dx * tf.destPos).toFixed(1));
+                        ghostParts.dot.setAttribute('fill-opacity', (dotBaseOpacity * tf.destOpacity).toFixed(3));
+                    }
+                }
+            } else {
+                // ── Normal smooth glide ──
+                if (bar) {
+                    bar.setAttribute('x', (from.x + dx * ease).toFixed(1));
+                    bar.setAttribute('y', (from.y + dy * ease).toFixed(1));
+                }
+                if (bar && Math.abs(dw) > 0.5) {
+                    bar.setAttribute('width', Math.max(1, from.width + dw * ease).toFixed(1));
+                }
+                if (label) {
+                    label.setAttribute('x', (labelStartX + labelDx * ease).toFixed(1));
+                    label.setAttribute('y', (labelStartY + labelDy * ease).toFixed(1));
+                }
+                if (clipRect) {
+                    clipRect.setAttribute('x', (clipStartX + dx * ease).toFixed(1));
+                    clipRect.setAttribute('y', (clipStartY + dy * ease).toFixed(1));
+                    if (Math.abs(dw) > 0.5) {
+                        const clipDw = to.width + 40 - clipStartW;
+                        clipRect.setAttribute('width', (clipStartW + clipDw * ease).toFixed(1));
+                    }
+                }
+                if (connector) {
+                    connector.setAttribute('x1', (connStartX1 + dx * ease).toFixed(1));
+                    connector.setAttribute('x2', (connStartX2 + dx * ease).toFixed(1));
+                    connector.setAttribute('y2', (connStartY2 + dy * ease).toFixed(1));
+                }
+                if (dot) {
+                    dot.setAttribute('cx', (dotStartCx + dx * ease).toFixed(1));
+                }
             }
 
             if (rawT < 1) {
                 requestAnimationFrame(tick);
             } else {
+                // Clean up ghost and snap original to target
+                if (ghost) ghost.remove();
                 snapPillToTarget(pill, to);
+                pill.setAttribute('opacity', '1');
+                if (connector) connector.setAttribute('stroke-opacity', connBaseOpacity.toFixed(3));
+                if (dot) dot.setAttribute('fill-opacity', dotBaseOpacity.toFixed(3));
                 resolve();
             }
         })(performance.now());
@@ -635,6 +720,26 @@ function _animTick(durationMs: number, onFrame: (t: number) => void): Promise<vo
     });
 }
 
+/** Strip Rx badge and contribution-% text that tspans render separately. */
+function stripTspanText(text: string): string {
+    return text.replace(/\s*Rx\b/, '').replace(/\s+\d+%/, '');
+}
+
+/** Clone the Rx-badge and %-contribution tspans from a label so they survive textContent wipes. */
+function saveLabelTspans(label: Element): SVGTSpanElement[] {
+    return Array.from(label.querySelectorAll('tspan'))
+        .filter(ts => {
+            const t = ts.textContent || '';
+            return t.includes('Rx') || t.includes('%');
+        })
+        .map(ts => ts.cloneNode(true) as SVGTSpanElement);
+}
+
+/** Re-append previously saved tspans to a label. */
+function restoreLabelTspans(label: Element, tspans: SVGTSpanElement[]) {
+    tspans.forEach(ts => label.appendChild(ts));
+}
+
 /** Parse dose from label text like "Caffeine (IR) 100mg" → { prefix, number, unit } */
 function parseLabelDose(text: string): { prefix: string; number: string; unit: string } | null {
     const m = text.match(/^(.*?)([\d.]+)\s*(mg|mcg|µg|μg|g|IU|ml)\b/i);
@@ -665,6 +770,9 @@ async function animateDoseChange(
     const { label } = getPillParts(pill);
     if (!label) return;
 
+    // Preserve styled Rx-badge and %-contribution tspans before we wipe the label
+    const preservedTspans = saveLabelTspans(label);
+
     const isUp = parseFloat(newDose.number) > parseFloat(oldDose.number);
     const oldNum = parseFloat(oldDose.number);
     const newNum = parseFloat(newDose.number);
@@ -674,8 +782,11 @@ async function animateDoseChange(
     const newDec = newDose.number.includes('.') ? newDose.number.split('.')[1].length : 0;
     const decimals = Math.max(oldDec, newDec);
 
-    // Build the suffix after the number (e.g. " mg …")
-    const restAfterNum = oldLabelText.slice(oldDose.prefix.length + oldDose.number.length);
+    // Build the suffix after the number (e.g. " mg …"), stripping Rx/% text
+    // that is rendered separately by tspans
+    const restAfterNum = stripTspanText(
+        oldLabelText.slice(oldDose.prefix.length + oldDose.number.length),
+    );
 
     // Read font size for arrow sizing
     const cs = getComputedStyle(label);
@@ -701,7 +812,7 @@ async function animateDoseChange(
     arrowSpan.textContent = isUp ? ' ▲' : ' ▼';
     label.appendChild(arrowSpan);
 
-    await _animTick(700, t => {
+    await _animTick(1100, t => {
         // Number counting (easeOut — fast start, gentle landing)
         const ease = easeOutCubic(t);
         const cur = oldNum + (newNum - oldNum) * ease;
@@ -724,8 +835,9 @@ async function animateDoseChange(
         arrowSpan.setAttribute('dy', dy.toFixed(1));
     });
 
-    // Settle: restore final state
-    label.textContent = newLabelText;
+    // Settle: restore final state (strip Rx/% — they come back via preserved tspans)
+    label.textContent = stripTspanText(newLabelText);
+    restoreLabelTspans(label, preservedTspans);
     const finalArrow = svgEl('tspan', {
         fill: arrowColor,
         'font-size': String(arrowFontSize),
@@ -881,7 +993,14 @@ function copyPillVisualState(fromPill: any, toPill: any, skipLabelText = false) 
         });
     }
     if (fromLabel && toLabel) {
-        if (!skipLabelText) toLabel.textContent = fromLabel.textContent || '';
+        if (!skipLabelText) {
+            // Clone full child-node structure (text nodes + styled tspans) instead
+            // of copying flat textContent, which would strip Rx-badge and % styling.
+            toLabel.textContent = '';
+            Array.from(fromLabel.childNodes).forEach(node => {
+                toLabel.appendChild(node.cloneNode(true));
+            });
+        }
         ['x', 'y', 'fill', 'opacity'].forEach(attr => {
             const value = fromLabel.getAttribute(attr);
             if (value != null) toLabel.setAttribute(attr, value);
@@ -921,7 +1040,7 @@ function createRevisionDayScanLine(svg: any, timelineLayer: any, oldLayer: any, 
     const glowColor = isLight ? 'rgba(180, 83, 9, 0.18)' : 'rgba(251, 191, 36, 0.2)';
     const markerColor = isLight ? '#b45309' : '#fbbf24';
     const HALO_BASE = 0.24;
-    const SWEEP_SPEED_PX_PER_MS = 0.06; // ~13.7s across full plot width (70% slower)
+    const SWEEP_SPEED_PX_PER_MS = 0.036; // ~22.8s across full plot width (40% slower than 0.06)
 
     const boxes: any[] = [];
     const collect = (layer: any) => {
@@ -1472,7 +1591,8 @@ export async function animateRevisionScan(
     const cards = buildSherlockRevisionCards(sherlockCtx);
     if (cards.length > 0) showNarrationPanel();
 
-    // Bio strip slide if new layout needs more lanes
+    // Slide bio strips DOWN if new layout needs more lanes (don't slide up yet —
+    // old pills are still visible; upward adjustment happens after revision completes)
     let maxLaneBottom = 0;
     timelineGroup.querySelectorAll('.timeline-pill-group').forEach((pill: any) => {
         const box = getPillBBox(pill);
@@ -1509,9 +1629,9 @@ export async function animateRevisionScan(
         // ---- Build unified trigger list across all phases ----
         // One continuous left-to-right sweep. Each trigger knows its action type.
         // Sorted by X position; at the same X, removals fire before moves before additions.
-        const REMOVE_DUR = 800;
-        const MOVE_DUR = 700;
-        const ADD_DUR = 600;
+        const REMOVE_DUR = 1200;
+        const MOVE_DUR = 1100;
+        const ADD_DUR = 900;
 
         interface UnifiedTrigger {
             x: number;
@@ -1793,10 +1913,29 @@ export async function animateRevisionScan(
             })();
 
             // Sweep and fire pill triggers
-            await dayScan.sweepWithTriggers(allTriggers, { minGapMs: 120 });
+            await dayScan.sweepWithTriggers(allTriggers, { minGapMs: 180 });
 
-            // Wait for all pill animations + Lx morphs still in flight
-            await Promise.all([...inflight, morphChain]);
+            // Safety: resolve any orphaned spatial-conflict gate promises.
+            // A gate promise can remain unresolved when `findPillByIntervention`
+            // fails to semantically match an old pill that was detected as a
+            // spatial conflict (by bounding-box overlap). Without this, the
+            // addition gated on the unresolved promise would hang forever,
+            // deadlocking the entire revision animation.
+            for (const [pill, entry] of oldPillCleared) {
+                entry.resolve();
+            }
+
+            // Slide bio strips to match reduced lane count — starts AFTER sweep
+            // so pills are already fading out and won't be overlaid.
+            const bioSlide = slideBiometricZoneDown(getTimelineBottomY(), 800);
+
+            // Wait for all pill animations + Lx morphs + bio slide still in flight.
+            // Safety ceiling: if any animation stalls (e.g. rAF throttled in a
+            // background tab), force-continue after 15 seconds so the UI never
+            // permanently freezes.
+            const allAnimations = Promise.all([...inflight, morphChain, bioSlide]);
+            const ceiling = new Promise<void>(r => setTimeout(r, 15_000));
+            await Promise.race([allAnimations, ceiling]);
 
             // Check for remaining removed-key pills
             const removedKeys = phase1Entries.map((e: any) => e.oldIv?.key).filter(Boolean);
@@ -1847,6 +1986,7 @@ export async function animateRevisionScan(
 
         await dayScan.outro();
         if (cards.length > 0) enableSherlockScrollMode();
+        updateGamificationCurveData(newLxCurves);
         cursorClosed = true;
     } finally {
         timelineGroup.classList.remove('revision-animating');
@@ -1863,6 +2003,6 @@ export async function animateRevisionScan(
         stopPoiTracking();
         if (!cursorClosed) dayScan.remove();
         tempGroup.remove();
-        preserveBiometricStrips(true);
+        preserveBiometricStrips(true, true);
     }
 }

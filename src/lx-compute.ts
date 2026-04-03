@@ -2,10 +2,21 @@
 // Lx OVERLAY COMPUTATION
 // ============================================
 
-import { PHASE_CHART, PHASE_SMOOTH_PASSES, LX_GAP_COVERAGE, CLASS_PALETTE, substanceColorFromIndex } from './constants';
+import {
+    PHASE_CHART,
+    PHASE_SMOOTH_PASSES,
+    LX_GAP_COVERAGE,
+    CLASS_PALETTE,
+    substanceColorFromIndex,
+    BACKGROUND_DURATION_THRESHOLD,
+    CONCURRENT_SUBSTANCE_MAX,
+    CONCURRENT_KEEP_THRESHOLD,
+    DAILY_SUBSTANCE_MAX,
+    SUBSTANCE_MIN,
+} from './constants';
 import { SUBSTANCE_DB, getActiveSubstances, resolveSubstance } from './substances';
 import { smoothPhaseValues } from './curve-utils';
-import { substanceEffectAt } from './pharma-model';
+import { substanceEffectAt, normalizedEffectAt } from './pharma-model';
 import { reportRuntimeBug } from './runtime-error-banner';
 import { clamp } from './utils';
 
@@ -213,6 +224,30 @@ function ivRawEffectAt(iv: any, curveIdx: number, sampleMin: number, curvesData:
     return baseWave * (iv.doseMultiplier || 1.0);
 }
 
+/**
+ * Gap-normalized effect: returns a "gap-fraction" at a given time point.
+ * 0.6 means "this substance fills 60% of the gap at this moment."
+ * Uses the normalized pharma shape (0-1 at peak) × doseMultiplier × impactValue.
+ */
+function ivNormalizedEffectAt(iv: any, curveIdx: number, sampleMin: number, curvesData: any) {
+    const sub = iv.substance;
+    if (!sub || !sub.pharma) return 0;
+    const curveName = curvesData[curveIdx].effect || '';
+
+    if (iv.impacts && typeof iv.impacts === 'object') {
+        const impactValue = matchImpactToCurve(iv.impacts, curveName);
+        if (impactValue === 0) return 0;
+        const normWave = normalizedEffectAt(sampleMin - iv.timeMinutes, sub.pharma);
+        return normWave * (iv.doseMultiplier || 1.0) * impactValue;
+    }
+
+    // Legacy fallback (no impacts dict)
+    const targetIdx =
+        iv.targetCurveIdx != null ? iv.targetCurveIdx : mapSubstanceToEffectAxis(iv.key, curvesData)[0] || 0;
+    if (targetIdx !== curveIdx) return 0;
+    return normalizedEffectAt(sampleMin - iv.timeMinutes, sub.pharma) * (iv.doseMultiplier || 1.0);
+}
+
 export function computeLxScaleFactors(interventions: any, curvesData: any, curveInfoOverride?: any[]) {
     const curveInfo = curveInfoOverride || buildCurveInfo(curvesData);
     const sorted = Array.isArray(interventions)
@@ -286,17 +321,15 @@ export function computeLxOverlay(interventions: any, curvesData: any, fixedScale
         points: [] as any[],
     }));
 
-    const scaleFactors =
-        Array.isArray(fixedScaleFactors) && fixedScaleFactors.length === curvesData.length
-            ? fixedScaleFactors
-            : computeLxScaleFactors(interventions, curvesData, curveInfo);
+    // Legacy path: when fixedScaleFactors are explicitly provided (revision animation),
+    // use the old global-scale approach for backward compatibility.
+    const useLegacyScaling = Array.isArray(fixedScaleFactors) && fixedScaleFactors.length === curvesData.length;
 
-    // Compute raw pharmacokinetic contribution per curve using multi-vector impacts
+    const scaleFactors = useLegacyScaling ? fixedScaleFactors! : null; // normalized path — no global scale factor
+
     for (let ci = 0; ci < curvesData.length; ci++) {
         const lx = lxCurves[ci];
         const curveName = (curvesData[ci].effect || '').toLowerCase();
-        const points: any[] = [];
-        let maxRawEffect = 0;
 
         // Diagnostic: log which interventions match this curve
         const matchLog = interventions
@@ -316,57 +349,67 @@ export function computeLxOverlay(interventions: any, curvesData: any, fixedScale
             );
         }
 
-        for (let j = 0; j < lx.baseline.length; j++) {
-            const hourVal = lx.baseline[j].hour;
-            const sampleMin = hourVal * 60;
-            let rawEffect = 0;
-
-            for (const iv of interventions) {
-                rawEffect += ivRawEffectAt(iv, ci, sampleMin, curvesData);
+        if (useLegacyScaling) {
+            // ── Legacy path: global scale factor ──
+            const points: any[] = [];
+            let maxRawEffect = 0;
+            for (let j = 0; j < lx.baseline.length; j++) {
+                const hourVal = lx.baseline[j].hour;
+                const sampleMin = hourVal * 60;
+                let rawEffect = 0;
+                for (const iv of interventions) {
+                    rawEffect += ivRawEffectAt(iv, ci, sampleMin, curvesData);
+                }
+                maxRawEffect = Math.max(maxRawEffect, Math.abs(rawEffect));
+                points.push({ hour: hourVal, rawEffect });
             }
-
-            maxRawEffect = Math.max(maxRawEffect, Math.abs(rawEffect));
-            points.push({ hour: hourVal, rawEffect });
+            const ceiling = curveInfo[ci].maxDesiredGap * LX_GAP_COVERAGE;
+            const scaleFactor = scaleFactors![ci] ?? (maxRawEffect > 0 ? ceiling / maxRawEffect : 0);
+            lx.points = points.map((p: any, j: number) => {
+                const baseVal = lx.baseline[j].value;
+                const scaledEffect = p.rawEffect * scaleFactor;
+                const value = baseVal + scaledEffect;
+                return { hour: p.hour, value: clamp(value, 0, 100) };
+            });
+        } else {
+            // ── Normalized path: impact vectors × local gap ──
+            // Split positive (gap-filling) and negative (collateral) contributions:
+            // - Positive impacts adapt to gap direction (normSum × localGap)
+            // - Negative impacts have a FIXED direction (normSum × |localGap|)
+            // Without this split, a stimulant's negative Sleep Pressure impact
+            // would visually INCREASE sleep pressure when localGap is also negative.
+            lx.points = lx.baseline.map((bp: any, j: number) => {
+                const sampleMin = bp.hour * 60;
+                let posSum = 0;
+                let negSum = 0;
+                for (const iv of interventions) {
+                    const contrib = ivNormalizedEffectAt(iv, ci, sampleMin, curvesData);
+                    if (contrib >= 0) posSum += contrib;
+                    else negSum += contrib;
+                }
+                const localGap = lx.desired[j].value - bp.value;
+                const scaledEffect = posSum * localGap + negSum * Math.abs(localGap);
+                const value = bp.value + scaledEffect;
+                return { hour: bp.hour, value: clamp(value, 0, 100) };
+            });
         }
-
-        // Normalize and apply to baseline
-        const ceiling = curveInfo[ci].maxDesiredGap * LX_GAP_COVERAGE;
-        const scaleFactor = scaleFactors[ci] ?? (maxRawEffect > 0 ? ceiling / maxRawEffect : 0);
-
-        lx.points = points.map((p: any, j: number) => {
-            const baseVal = lx.baseline[j].value;
-            const scaledEffect = p.rawEffect * scaleFactor;
-            // Impact vectors from the LLM already encode direction (positive=up, negative=down),
-            // so we always ADD — no polarity flip needed.
-            const value = baseVal + scaledEffect;
-            return { hour: p.hour, value: clamp(value, 0, 100) };
-        });
     }
 
     return lxCurves;
 }
 
 /**
- * Compute incremental Lx curve snapshots — one per substance "step" (grouped by dose time).
- * Uses a GLOBAL scale factor from the full intervention set so the Y-axis scale stays consistent.
+ * Compute incremental Lx curve snapshots — one per substance "step".
  * Returns: [ { lxCurves: [...], step: [intervention, ...] }, ... ]
  */
 export function computeIncrementalLxOverlay(interventions: any, curvesData: any, fixedScaleFactors?: number[] | null) {
-    // 1. Sort by time
     const sorted = [...interventions].sort((a: any, b: any) => a.timeMinutes - b.timeMinutes);
-
-    // 2. Each intervention is its own step (no grouping)
     const steps = sorted.map((iv: any) => [iv]);
-
     const curveInfo = buildCurveInfo(curvesData);
 
-    // 4. Compute GLOBAL scale factor using ALL interventions
-    const globalScaleFactors =
-        Array.isArray(fixedScaleFactors) && fixedScaleFactors.length === curvesData.length
-            ? fixedScaleFactors
-            : computeLxScaleFactors(sorted, curvesData, curveInfo);
+    const useLegacyScaling = Array.isArray(fixedScaleFactors) && fixedScaleFactors.length === curvesData.length;
+    const globalScaleFactors = useLegacyScaling ? fixedScaleFactors! : null;
 
-    // 5. For each step, compute cumulative curves
     const snapshots: any[] = [];
     for (let k = 0; k < steps.length; k++) {
         const activeInterventions = steps.slice(0, k + 1).flat();
@@ -374,14 +417,30 @@ export function computeIncrementalLxOverlay(interventions: any, curvesData: any,
         const lxCurves = curveInfo.map((ci: any, curveIdx: number) => {
             const points = ci.blSmoothed.map((bp: any, j: number) => {
                 const sampleMin = bp.hour * 60;
-                let rawEffect = 0;
-                for (const iv of activeInterventions) {
-                    rawEffect += ivRawEffectAt(iv, curveIdx, sampleMin, curvesData);
+
+                if (useLegacyScaling) {
+                    // Legacy path: global scale factor
+                    let rawEffect = 0;
+                    for (const iv of activeInterventions) {
+                        rawEffect += ivRawEffectAt(iv, curveIdx, sampleMin, curvesData);
+                    }
+                    const scaledEffect = rawEffect * globalScaleFactors![curveIdx];
+                    const value = bp.value + scaledEffect;
+                    return { hour: bp.hour, value: clamp(value, 0, 100) };
+                } else {
+                    // Split positive (gap-filling) and negative (collateral) contributions
+                    let posSum = 0;
+                    let negSum = 0;
+                    for (const iv of activeInterventions) {
+                        const contrib = ivNormalizedEffectAt(iv, curveIdx, sampleMin, curvesData);
+                        if (contrib >= 0) posSum += contrib;
+                        else negSum += contrib;
+                    }
+                    const localGap = ci.dsSmoothed[j].value - bp.value;
+                    const scaledEffect = posSum * localGap + negSum * Math.abs(localGap);
+                    const value = bp.value + scaledEffect;
+                    return { hour: bp.hour, value: clamp(value, 0, 100) };
                 }
-                const scaledEffect = rawEffect * globalScaleFactors[curveIdx];
-                // Impact vectors already encode direction — always ADD.
-                const value = bp.value + scaledEffect;
-                return { hour: bp.hour, value: clamp(value, 0, 100) };
             });
             return {
                 baseline: ci.blSmoothed,
@@ -396,4 +455,432 @@ export function computeIncrementalLxOverlay(interventions: any, curvesData: any,
     }
 
     return snapshots;
+}
+
+// ============================================
+// Stacking analysis — used by the LLM correction loop
+// ============================================
+
+const STACKING_SAMPLE_HOURS = [
+    6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+];
+
+export interface StackingBreakdown {
+    key: string;
+    contribution: number;
+}
+export interface StackingReport {
+    curve: string;
+    peakNormSum: number;
+    peakHour: number;
+    breakdown: StackingBreakdown[];
+}
+
+/**
+ * Compute peak stacked normSum per curve across the 24h window.
+ * At the peak hour, records each substance's individual contribution.
+ * Used by the LLM correction loop to detect and report overshoot.
+ *
+ * Interventions must already be validated (iv.substance resolved).
+ */
+export function computeStackingPeaks(interventions: any[], curvesData: any[]): StackingReport[] {
+    return curvesData.map((curve: any, ci: number) => {
+        const curveName = curve.effect || '';
+        let peakNormSum = 0;
+        let peakHour = 0;
+        let peakBreakdown: StackingBreakdown[] = [];
+
+        for (const hour of STACKING_SAMPLE_HOURS) {
+            const sampleMin = hour * 60;
+            let normSum = 0;
+            const breakdown: StackingBreakdown[] = [];
+
+            for (const iv of interventions) {
+                const contrib = ivNormalizedEffectAt(iv, ci, sampleMin, curvesData);
+                if (Math.abs(contrib) > 1e-6) {
+                    normSum += contrib;
+                    breakdown.push({ key: iv.key, contribution: Math.round(contrib * 1000) / 1000 });
+                }
+            }
+
+            if (Math.abs(normSum) > Math.abs(peakNormSum)) {
+                peakNormSum = normSum;
+                peakHour = hour;
+                peakBreakdown = breakdown;
+            }
+        }
+
+        return {
+            curve: curveName,
+            peakNormSum: Math.round(peakNormSum * 100) / 100,
+            peakHour,
+            breakdown: peakBreakdown,
+        };
+    });
+}
+
+/**
+ * Compute each substance's share of total protocol effect (0-100).
+ * Integrates ivNormalizedEffectAt across the day for every intervention,
+ * then expresses each substance as a percentage of the total positive contribution.
+ * Averaged across all curves (effects).
+ */
+export function computeSubstanceContributions(
+    interventions: any[],
+    curvesData: any[],
+): Map<string, number> {
+    const result = new Map<string, number>();
+    if (!interventions?.length || !curvesData?.length) return result;
+
+    const totals = new Map<string, number>();
+    let grandTotal = 0;
+
+    for (const iv of interventions) {
+        let ivTotal = 0;
+        for (let ci = 0; ci < curvesData.length; ci++) {
+            for (const hour of STACKING_SAMPLE_HOURS) {
+                const contrib = ivNormalizedEffectAt(iv, ci, hour * 60, curvesData);
+                if (contrib > 0) ivTotal += contrib;
+            }
+        }
+        const key = iv.key || iv.substanceKey || '';
+        totals.set(key, (totals.get(key) || 0) + ivTotal);
+        grandTotal += ivTotal;
+    }
+
+    if (grandTotal <= 0) return result;
+    for (const [key, total] of totals) {
+        result.set(key, Math.round((total / grandTotal) * 100));
+    }
+    return result;
+}
+
+// ============================================
+// Cluster-based concurrent density pruning
+// ============================================
+
+interface ActiveZone {
+    iv: any;
+    start: number; // minutes-since-midnight
+    end: number;
+}
+
+interface Cluster {
+    start: number;
+    end: number;
+    members: any[];
+}
+
+interface PruneResult {
+    pruned: any[];
+    removed: Array<{ key: string; reason: string; peakContribution: number }>;
+}
+
+/**
+ * Classify interventions into background (long-acting, plateau >= threshold)
+ * and tactical (time-targeted, shorter plateau).
+ */
+function classifySubstances(interventions: any[]): { background: any[]; tactical: any[] } {
+    const background: any[] = [];
+    const tactical: any[] = [];
+    for (const iv of interventions) {
+        const pharma = iv.substance?.pharma;
+        if (!pharma) {
+            tactical.push(iv);
+            continue;
+        }
+        const plateauDuration = pharma.duration * 0.6;
+        if (plateauDuration >= BACKGROUND_DURATION_THRESHOLD) {
+            background.push(iv);
+        } else {
+            tactical.push(iv);
+        }
+    }
+    return { background, tactical };
+}
+
+/**
+ * Compute active zones for tactical interventions and merge overlapping
+ * zones into clusters via interval merging.
+ */
+function detectClusters(tacticalInterventions: any[]): Cluster[] {
+    if (tacticalInterventions.length === 0) return [];
+
+    // Build active zones: [doseTime + onset, doseTime + duration * 0.6]
+    const zones: ActiveZone[] = tacticalInterventions.map((iv) => {
+        const pharma = iv.substance?.pharma || { onset: 30, duration: 240 };
+        const doseMin = iv.timeMinutes || 0;
+        return {
+            iv,
+            start: doseMin + pharma.onset,
+            end: doseMin + pharma.duration * 0.6,
+        };
+    });
+
+    // Sort by start time
+    zones.sort((a, b) => a.start - b.start);
+
+    // Interval merge
+    const clusters: Cluster[] = [];
+    let current: Cluster = { start: zones[0].start, end: zones[0].end, members: [zones[0].iv] };
+
+    for (let i = 1; i < zones.length; i++) {
+        if (zones[i].start <= current.end) {
+            // Overlapping — extend cluster
+            current.end = Math.max(current.end, zones[i].end);
+            current.members.push(zones[i].iv);
+        } else {
+            // Gap — finalize current, start new
+            clusters.push(current);
+            current = { start: zones[i].start, end: zones[i].end, members: [zones[i].iv] };
+        }
+    }
+    clusters.push(current);
+
+    return clusters;
+}
+
+/**
+ * Compute each substance's contribution within a cluster's time window,
+ * as a percentage of total positive effect in that window.
+ */
+function computeClusterContributions(
+    members: any[],
+    clusterStart: number,
+    clusterEnd: number,
+    curvesData: any[],
+): Map<any, number> {
+    const totals = new Map<any, number>();
+    let grandTotal = 0;
+
+    // Sample at 15-min intervals within the cluster
+    const sampleMinutes: number[] = [];
+    for (let m = clusterStart; m <= clusterEnd; m += 15) {
+        sampleMinutes.push(m);
+    }
+    if (sampleMinutes.length === 0) sampleMinutes.push(clusterStart);
+
+    for (const iv of members) {
+        let ivTotal = 0;
+        for (let ci = 0; ci < curvesData.length; ci++) {
+            for (const m of sampleMinutes) {
+                const contrib = ivNormalizedEffectAt(iv, ci, m, curvesData);
+                if (contrib > 0) ivTotal += contrib;
+            }
+        }
+        totals.set(iv, ivTotal);
+        grandTotal += ivTotal;
+    }
+
+    const result = new Map<any, number>();
+    if (grandTotal <= 0) return result;
+    for (const [iv, total] of totals) {
+        result.set(iv, Math.round((total / grandTotal) * 100));
+    }
+    return result;
+}
+
+/**
+ * Prune interventions that violate concurrent density rules.
+ *
+ * 1. Classify substances into background (long-acting) and tactical (time-targeted)
+ * 2. Detect temporal clusters among tactical substances via interval merging
+ * 3. For each cluster exceeding CONCURRENT_SUBSTANCE_MAX, remove weakest members
+ *    (unless each contributes >= CONCURRENT_KEEP_THRESHOLD %)
+ * 4. Apply DAILY_SUBSTANCE_MAX cap on total substances
+ * 5. Rescale surviving substances' impacts to absorb freed budget
+ *
+ * Interventions must already be validated (iv.substance resolved).
+ */
+export function pruneConcurrentOverload(
+    interventions: any[],
+    curvesData: any[],
+    opts?: {
+        concurrentMax?: number;
+        keepThreshold?: number;
+        dailyMax?: number;
+        minSubstances?: number;
+    },
+): PruneResult {
+    const concurrentMax = opts?.concurrentMax ?? CONCURRENT_SUBSTANCE_MAX;
+    const keepThreshold = opts?.keepThreshold ?? CONCURRENT_KEEP_THRESHOLD;
+    const dailyMax = opts?.dailyMax ?? DAILY_SUBSTANCE_MAX;
+    const minSubstances = opts?.minSubstances ?? SUBSTANCE_MIN;
+
+    if (!interventions?.length || !curvesData?.length) {
+        return { pruned: [...interventions], removed: [] };
+    }
+
+    const { background, tactical } = classifySubstances(interventions);
+    const removedSet = new Set<any>();
+    const removedInfo: PruneResult['removed'] = [];
+
+    // Log background classification
+    for (const iv of background) {
+        const plateau = Math.round((iv.substance?.pharma?.duration || 0) * 0.6);
+        console.log(
+            `[Density] Background: ${iv.key} (plateau ${plateau}min >= ${BACKGROUND_DURATION_THRESHOLD}min) — excluded from clusters`,
+        );
+    }
+
+    // Detect clusters among tactical substances
+    const clusters = detectClusters(tactical);
+
+    // For each over-dense cluster, prune weakest members
+    for (const cluster of clusters) {
+        if (cluster.members.length <= concurrentMax) {
+            const startH = (cluster.start / 60).toFixed(1);
+            const endH = (cluster.end / 60).toFixed(1);
+            console.log(
+                `[Density] Cluster ${startH}h-${endH}h: ${cluster.members.length} tactical substances — OK`,
+            );
+            continue;
+        }
+
+        const contributions = computeClusterContributions(
+            cluster.members,
+            cluster.start,
+            cluster.end,
+            curvesData,
+        );
+
+        // Sort by contribution ascending (weakest first)
+        const sorted = [...cluster.members]
+            .filter((iv) => !removedSet.has(iv))
+            .sort((a, b) => (contributions.get(a) || 0) - (contributions.get(b) || 0));
+
+        const activeInCluster = sorted.filter((iv) => !removedSet.has(iv));
+        let excess = activeInCluster.length - concurrentMax;
+
+        for (const iv of sorted) {
+            if (excess <= 0) break;
+            if (removedSet.has(iv)) continue;
+
+            const contrib = contributions.get(iv) || 0;
+            if (contrib >= keepThreshold) {
+                // This substance earns its slot — skip
+                continue;
+            }
+
+            // Don't prune below minimum total
+            const totalRemaining = interventions.length - removedSet.size;
+            if (totalRemaining <= minSubstances) break;
+
+            removedSet.add(iv);
+            removedInfo.push({
+                key: iv.key,
+                reason: `cluster density (${contrib}% < ${keepThreshold}% threshold)`,
+                peakContribution: contrib,
+            });
+            excess--;
+        }
+
+        const startH = (cluster.start / 60).toFixed(1);
+        const endH = (cluster.end / 60).toFixed(1);
+        const removedInCluster = cluster.members.filter((iv) => removedSet.has(iv));
+        if (removedInCluster.length > 0) {
+            const removedNames = removedInCluster
+                .map((iv) => `${iv.key} (${contributions.get(iv) || 0}%)`)
+                .join(', ');
+            console.log(
+                `[Density] Cluster ${startH}h-${endH}h: ${cluster.members.length} tactical, cap=${concurrentMax} → removing ${removedNames}`,
+            );
+        } else {
+            console.log(
+                `[Density] Cluster ${startH}h-${endH}h: ${cluster.members.length} tactical, cap=${concurrentMax} → all above ${keepThreshold}% threshold, keeping all`,
+            );
+        }
+    }
+
+    // Combine surviving substances
+    let surviving = interventions.filter((iv) => !removedSet.has(iv));
+
+    // Apply daily max cap (background + tactical combined)
+    if (surviving.length > dailyMax) {
+        const globalContribs = computeSubstanceContributions(surviving, curvesData);
+        const byContrib = [...surviving].sort(
+            (a, b) => (globalContribs.get(a.key) || 0) - (globalContribs.get(b.key) || 0),
+        );
+        while (surviving.length > dailyMax && byContrib.length > 0) {
+            const weakest = byContrib.shift()!;
+            if (surviving.length <= minSubstances) break;
+            removedSet.add(weakest);
+            removedInfo.push({
+                key: weakest.key,
+                reason: `daily cap (${surviving.length} > ${dailyMax})`,
+                peakContribution: globalContribs.get(weakest.key) || 0,
+            });
+            surviving = surviving.filter((iv) => iv !== weakest);
+        }
+    }
+
+    // Rescale surviving substances to absorb freed budget
+    if (removedInfo.length > 0 && surviving.length > 0) {
+        rescaleSurvivors(surviving, interventions, curvesData);
+        console.log(
+            `[Density] Rescaled ${surviving.length} surviving substances to absorb freed budget`,
+        );
+    }
+
+    const totalBg = surviving.filter((iv) => background.includes(iv)).length;
+    const totalTac = surviving.length - totalBg;
+    console.log(
+        `[Density] Total: ${surviving.length} substances (${totalBg} background + ${totalTac} tactical), daily cap=${dailyMax} — ${surviving.length <= dailyMax ? 'OK' : 'OVER'}`,
+    );
+
+    return {
+        pruned: surviving,
+        removed: removedInfo,
+    };
+}
+
+/**
+ * After pruning, rescale surviving substances' impacts proportionally
+ * so the total stacking budget at each crowded hour is preserved.
+ * Uses per-hour rescaling to avoid global overshoot.
+ */
+function rescaleSurvivors(surviving: any[], original: any[], curvesData: any[]): void {
+    // For each sample hour, compute old total and new total, then scale up survivors
+    for (let ci = 0; ci < curvesData.length; ci++) {
+        for (const hour of STACKING_SAMPLE_HOURS) {
+            const sampleMin = hour * 60;
+            let oldSum = 0;
+            let newSum = 0;
+
+            for (const iv of original) {
+                const contrib = ivNormalizedEffectAt(iv, ci, sampleMin, curvesData);
+                if (contrib > 0) oldSum += contrib;
+            }
+            for (const iv of surviving) {
+                const contrib = ivNormalizedEffectAt(iv, ci, sampleMin, curvesData);
+                if (contrib > 0) newSum += contrib;
+            }
+
+            // If we lost meaningful effect at this hour, scale up survivors
+            if (oldSum > 0.01 && newSum > 0.01 && newSum < oldSum * 0.95) {
+                const scaleFactor = oldSum / newSum;
+                const curveName = curvesData[ci].effect || '';
+                for (const iv of surviving) {
+                    if (!iv.impacts || typeof iv.impacts !== 'object') continue;
+                    const impactValue = matchImpactToCurve(iv.impacts, curveName);
+                    if (impactValue <= 0) continue;
+
+                    const normWave = normalizedEffectAt(sampleMin - iv.timeMinutes, iv.substance?.pharma);
+                    if (normWave < 0.1) continue; // Only scale substances active at this hour
+
+                    // Find the matching impact key and scale it, capping at 1.0
+                    for (const effectKey of Object.keys(iv.impacts)) {
+                        if (matchImpactToCurve({ [effectKey]: 1 }, curveName) !== 0) {
+                            iv.impacts[effectKey] = Math.min(
+                                1.0,
+                                iv.impacts[effectKey] * scaleFactor,
+                            );
+                        }
+                    }
+                }
+                // Only apply rescaling once per curve (at the hour with biggest loss)
+                break;
+            }
+        }
+    }
 }

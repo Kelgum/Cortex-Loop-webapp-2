@@ -50,6 +50,7 @@ const STAGE_IDS = [
     'strategistBioDaily',
     'grandmasterDaily',
     'agentMatch',
+    'sherlock7d',
 ];
 
 const STAGE_DEFAULTS_BY_PROVIDER: any = {
@@ -70,6 +71,7 @@ const STAGE_DEFAULTS_BY_PROVIDER: any = {
         strategistBioDaily: 'haiku',
         grandmasterDaily: 'opus',
         agentMatch: 'haiku',
+        sherlock7d: 'haiku',
     },
     openai: {
         fast: '5.3-instant',
@@ -88,6 +90,7 @@ const STAGE_DEFAULTS_BY_PROVIDER: any = {
         strategistBioDaily: '5.3-instant',
         grandmasterDaily: '5.4-thinking',
         agentMatch: '5.3-instant',
+        sherlock7d: '5.3-instant',
     },
     grok: {
         fast: 'fast',
@@ -106,6 +109,7 @@ const STAGE_DEFAULTS_BY_PROVIDER: any = {
         strategistBioDaily: 'fast',
         grandmasterDaily: 'full',
         agentMatch: 'fast',
+        sherlock7d: 'fast',
     },
     gemini: {
         fast: 'flash-lite',
@@ -124,6 +128,7 @@ const STAGE_DEFAULTS_BY_PROVIDER: any = {
         strategistBioDaily: 'flash-lite',
         grandmasterDaily: 'pro-preview',
         agentMatch: 'flash-lite',
+        sherlock7d: 'flash-lite',
     },
 };
 
@@ -192,6 +197,46 @@ export function switchStageProvider(stage: string, newProvider: string) {
 }
 
 /**
+ * Capture a snapshot of the current pipeline model/provider configuration.
+ */
+export function capturePresetSnapshot(): {
+    stageModels: Record<string, string>;
+    stageProviders: Record<string, string>;
+} {
+    return {
+        stageModels: { ...AppState.stageModels },
+        stageProviders: { ...AppState.stageProviders },
+    };
+}
+
+/**
+ * Apply a preset snapshot to AppState and persist to localStorage.
+ * Validates providers/models exist; falls back to defaults for invalid entries.
+ * Caller is responsible for refreshing UI dropdowns afterward.
+ */
+export function applyPresetSnapshot(snapshot: {
+    stageModels: Record<string, string>;
+    stageProviders: Record<string, string>;
+}): void {
+    for (const stage of STAGE_IDS) {
+        const provider = snapshot.stageProviders?.[stage];
+        const validProvider = provider && MODEL_OPTIONS[provider] ? provider : AppState.stageProviders[stage];
+
+        const modelKey = snapshot.stageModels?.[stage];
+        const opts = MODEL_OPTIONS[validProvider] || [];
+        const validModel =
+            modelKey && opts.some((o: any) => o.key === modelKey)
+                ? modelKey
+                : getDefaultStageModelKey(stage, validProvider);
+
+        AppState.stageProviders[stage] = validProvider;
+        AppState.stageModels[stage] = validModel;
+        settingsStore.setString(stageProviderKey(stage), validProvider);
+        settingsStore.setString(stageModelKey(stage), validModel);
+    }
+}
+
+/**
  * Turbo target phase (0 = disabled, 1-4 = auto-advance to that phase).
  * Stored on AppState but initialized from localStorage here so it's ready
  * before any prompt submission.
@@ -235,6 +280,7 @@ export const AppState: IAppState = {
         strategistBioDaily: resolveStoredStageProvider('strategistBioDaily'),
         grandmasterDaily: resolveStoredStageProvider('grandmasterDaily'),
         agentMatch: resolveStoredStageProvider('agentMatch'),
+        sherlock7d: resolveStoredStageProvider('sherlock7d'),
     },
     stageModels: {
         fast: resolveStoredStageModel('fast', resolveStoredStageProvider('fast')),
@@ -256,6 +302,7 @@ export const AppState: IAppState = {
         ),
         grandmasterDaily: resolveStoredStageModel('grandmasterDaily', resolveStoredStageProvider('grandmasterDaily')),
         agentMatch: resolveStoredStageModel('agentMatch', resolveStoredStageProvider('agentMatch')),
+        sherlock7d: resolveStoredStageModel('sherlock7d', resolveStoredStageProvider('sherlock7d')),
     },
     turboTargetPhase: _turboTarget,
 };
@@ -321,6 +368,7 @@ export function resolveStageModelForProvider(stage: any, providerOverride: strin
         modelKey: resolvedKey,
         reasoningEffort: entry.reasoningEffort,
         tier: entry.tier ?? 0,
+        maxOutput: entry.maxOutput as number | undefined,
     };
 }
 
@@ -341,6 +389,8 @@ export const PhaseState: IPhaseState = {
     userGoal: null,
     cycleFilename: null,
     loadedCycleId: null,
+    strategistProtectedEffect: '',
+    badgeCategory: null,
 };
 
 // Biometric Loop state
@@ -396,6 +446,7 @@ export const TimelineState: ITimelineState = {
         prompt: { rafId: null, wallStart: null, timelineStart: null },
         bioScan: { rafId: null, wallStart: null, timelineStart: null },
         bioReveal: { rafId: null, wallStart: null, timelineStart: null },
+        bioCorrection: { rafId: null, wallStart: null, timelineStart: null },
     },
     runTasks: null,
 };
@@ -405,6 +456,7 @@ export const SherlockState: ISherlockState = {
     enabled: settingsStore.getJson(STORAGE_KEYS.sherlockEnabled, true),
     narrationResult: null,
     revisionNarrationResult: null,
+    sherlock7dNarration: null,
     phase: 'idle' as SherlockPhase,
 };
 
@@ -418,6 +470,7 @@ export const DividerState: IDividerState = {
     masks: null,
     dragging: false,
     dragCleanup: null,
+    onUpdate: null,
 };
 
 // Compile/Stream state (dose.player cartridge assembly)
@@ -434,6 +487,7 @@ export const AgentMatchState: IAgentMatchState = {
     matchResults: [],
     selectedAgent: null,
     phase: 'idle' as AgentMatchPhase,
+    categoryTitle: 'Protocol Streamers',
 };
 
 // Multi-day iteration state (Days 0-7 weekly cycle)
@@ -442,10 +496,14 @@ export const MultiDayState: IMultiDayState = {
     days: [],
     currentDay: 0,
     animationRafId: null,
-    speed: 1,
+    speed: 2,
     knightOutput: null,
     startWeekday: null,
     bioCorrectedBaseline: null,
     lockedViewBoxHeight: null,
     maxTimelineLanes: 0,
+    bioBaseTranslateY: 0,
+    sherlock7dReady: false,
+    onDayAdvance: null,
+    onSherlock7DSync: null,
 };

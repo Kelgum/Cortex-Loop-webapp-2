@@ -211,6 +211,8 @@ export function updateDividerPosition(x: number): void {
         leftAxis.style.opacity = String(0.3 + 0.7 * Math.min(1, norm * 2));
         rightAxis.style.opacity = String(0.3 + 0.7 * Math.min(1, (1 - norm) * 2));
     }
+
+    DividerState.onUpdate?.();
 }
 
 /** Attach drag handlers for the divider */
@@ -334,4 +336,5 @@ export function cleanupDivider(): void {
     DividerState.elements = null;
     DividerState.masks = null;
     DividerState.dragging = false;
+    DividerState.onUpdate = null;
 }

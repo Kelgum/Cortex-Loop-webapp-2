@@ -25,6 +25,14 @@ import { lyonAgent } from './lyon';
 import { gottfriedAgent } from './gottfried';
 import { palmerAgent } from './palmer';
 import { breckaAgent } from './brecka';
+import { reddyAgent } from './reddy';
+import { walkerAgent } from './walker';
+import { stametsAgent } from './stamets';
+import { doblinAgent } from './doblin';
+import { carhartHarrisAgent } from './carhartharris';
+import { fadimanAgent } from './fadiman';
+import { morrisAgent } from './morris';
+import { wattsAgent } from './watts';
 
 /** All KOL protocol agents */
 export const AGENT_DATABASE: AgentConfig[] = [
@@ -48,6 +56,14 @@ export const AGENT_DATABASE: AgentConfig[] = [
     gottfriedAgent,
     palmerAgent,
     breckaAgent,
+    reddyAgent,
+    walkerAgent,
+    stametsAgent,
+    doblinAgent,
+    carhartHarrisAgent,
+    fadimanAgent,
+    morrisAgent,
+    wattsAgent,
 ] as AgentConfig[];
 
 /** @deprecated Use AGENT_DATABASE instead */

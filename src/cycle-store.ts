@@ -29,6 +29,10 @@ export interface SavedCycleIndexEntry {
     savedAt: string;
     hookSentence: string | null;
     topEffects: string[];
+    badgeCategory?: string | null;
+    iconSvg?: string | null;
+    recommendedDevices?: string[];
+    substanceClasses?: string[];
 }
 
 export interface SavedCycleRecord extends SavedCycleIndexEntry {
@@ -89,6 +93,52 @@ export async function deleteCycle(id: string): Promise<void> {
         _index = data.index;
     } else {
         _index = _index.filter(e => e.id !== id);
+    }
+}
+
+export async function patchCycle(
+    id: string,
+    patch: { filename?: string; iconSvg?: string | null; recommendedDevices?: string[]; substanceClasses?: string[] },
+): Promise<void> {
+    const res = await fetch(`/__cycles/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(err.error || `Patch failed: ${res.status}`);
+    }
+    const data = await res.json();
+    if (Array.isArray(data.index)) {
+        _index = data.index;
+    } else {
+        const entry = _index.find(e => e.id === id);
+        if (entry) {
+            if (patch.filename) entry.filename = patch.filename;
+            if (typeof patch.iconSvg !== 'undefined') entry.iconSvg = patch.iconSvg;
+            if (patch.recommendedDevices) entry.recommendedDevices = patch.recommendedDevices;
+            if (patch.substanceClasses) entry.substanceClasses = patch.substanceClasses;
+        }
+    }
+}
+
+export async function renameCycle(id: string, filename: string): Promise<void> {
+    const res = await fetch(`/__cycles/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename }),
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(err.error || `Rename failed: ${res.status}`);
+    }
+    const data = await res.json();
+    if (Array.isArray(data.index)) {
+        _index = data.index;
+    } else {
+        const entry = _index.find(e => e.id === id);
+        if (entry) entry.filename = filename;
     }
 }
 

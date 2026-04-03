@@ -247,6 +247,13 @@ function fallbackRank(prompt: string, effects: WordCloudEffect[]): AgentMatchRes
     return scored.sort((a, b) => b.score - a.score).slice(0, 10);
 }
 
+/** Derive a category title from effects when LLM doesn't provide one */
+function deriveCategoryTitle(effects: WordCloudEffect[]): void {
+    if (!effects.length) return;
+    const top = effects[0]?.name ?? '';
+    AgentMatchState.categoryTitle = `${top} Experts`;
+}
+
 /** Rank creator agents via fast LLM call. Falls back to keyword scoring on failure. */
 export async function rankCreatorAgents(prompt: string, effects: WordCloudEffect[]): Promise<AgentMatchResult[]> {
     try {
@@ -256,24 +263,31 @@ export async function rankCreatorAgents(prompt: string, effects: WordCloudEffect
             agentRoster: buildAgentRoster(),
         });
 
-        const result = await runCachedStage<{ ranked: AgentMatchResult[] }>({
+        const result = await runCachedStage<{ categoryTitle?: string; ranked: AgentMatchResult[] }>({
             stage: 'agentMatch',
             stageLabel: 'Agent Match',
             stageClass: 'agent-match-model',
             systemPrompt,
-            userPrompt: 'Rank the top 10 creator agents for this user goal. Respond with JSON only.',
-            maxTokens: 512,
+            userPrompt: 'Rank the top 5 creator agents for this user goal. Respond with JSON only.',
+            maxTokens: 1024,
         });
 
         const ranked = result?.ranked;
         if (!Array.isArray(ranked) || ranked.length === 0) {
+            deriveCategoryTitle(effects);
             return fallbackRank(prompt, effects);
+        }
+
+        if (typeof result?.categoryTitle === 'string' && result.categoryTitle.trim()) {
+            AgentMatchState.categoryTitle = result.categoryTitle.trim();
+        } else {
+            deriveCategoryTitle(effects);
         }
 
         // Validate agent IDs exist
         return ranked
             .filter(r => getAgentById(r.agentId))
-            .slice(0, 10)
+            .slice(0, 5)
             .map(r => ({
                 agentId: r.agentId,
                 score: typeof r.score === 'number' ? Math.max(60, Math.min(97, r.score)) : 80,
@@ -281,6 +295,7 @@ export async function rankCreatorAgents(prompt: string, effects: WordCloudEffect
             }));
     } catch (err) {
         console.warn('[AgentMatcher] LLM ranking failed, using fallback:', (err as Error).message);
+        deriveCategoryTitle(effects);
         return fallbackRank(prompt, effects);
     }
 }
@@ -342,7 +357,7 @@ export function showAgentMatchPanel(): void {
 
     panel.innerHTML =
         `<div class="am-panel-header">
-            <span class="am-panel-label">Protocol Streamers</span>
+            <span class="am-panel-label">${esc(AgentMatchState.categoryTitle)}</span>
             <span class="am-panel-count">${matchedAgents.length}</span>
         </div>` + cards;
     panel.classList.remove('hidden');
@@ -592,6 +607,7 @@ export function resetAgentMatch(): void {
     AgentMatchState.matchResults = [];
     AgentMatchState.selectedAgent = null;
     AgentMatchState.phase = 'idle';
+    AgentMatchState.categoryTitle = 'Protocol Streamers';
     clearDockAnimationArtifacts();
     undockAgent();
     hideAgentMatchPanel();

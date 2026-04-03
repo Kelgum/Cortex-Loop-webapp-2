@@ -975,6 +975,15 @@ export async function animateCompileSequence(svg: SVGSVGElement): Promise<void> 
     const timelineGroupStyle = timelineGroup ? captureVisibility(timelineGroup) : null;
     if (timelineGroup) hideElement(timelineGroup);
 
+    // Hide biometric strips and spotter highlights so they can be restored after compile
+    const bioGroup = svg.querySelector('#phase-biometric-strips') as SVGGElement | null;
+    const bioGroupStyle = bioGroup ? captureVisibility(bioGroup) : null;
+    if (bioGroup) hideElement(bioGroup);
+
+    const spotterGroup = svg.querySelector('#phase-spotter-highlights') as SVGGElement | null;
+    const spotterGroupStyle = spotterGroup ? captureVisibility(spotterGroup) : null;
+    if (spotterGroup) hideElement(spotterGroup);
+
     let ambientCleanup: (() => void) | null = null;
     let spinCleanup: (() => void) | null = null;
 
@@ -1014,6 +1023,8 @@ export async function animateCompileSequence(svg: SVGSVGElement): Promise<void> 
             if (snapshot) restoreVisibility(g, snapshot);
         });
         if (timelineGroup && timelineGroupStyle) restoreVisibility(timelineGroup, timelineGroupStyle);
+        if (bioGroup && bioGroupStyle) restoreVisibility(bioGroup, bioGroupStyle);
+        if (spotterGroup && spotterGroupStyle) restoreVisibility(spotterGroup, spotterGroupStyle);
         applyPageFade(1);
         CompileState.cleanup = null;
         CompileState.phase = 'idle';

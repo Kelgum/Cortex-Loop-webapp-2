@@ -4,6 +4,7 @@ import { cleanupDivider } from './divider';
 import { cleanupBaselineEditor } from './baseline-editor';
 import { stopTimelineScanLine, stopBioScanLine } from './chart-scan-lines';
 import { PhaseState, CompileState } from './state';
+import { removeGamificationOverlay } from './gamification-overlay';
 
 export interface PhaseChartRuntime {
     stopOrbitalRings: () => void;
@@ -51,7 +52,7 @@ export function showPromptError(message: string): void {
 
 export function clearPromptError(): void {
     const { prompt } = getAppDom();
-    prompt.hint.textContent = 'e.g. "4 hours of deep focus, no sleep impact"';
+    prompt.hint.textContent = 'e.g. "4 hours of deep focus, no sleep quality impact"';
     prompt.hint.classList.remove('error');
     prompt.hint.style.opacity = '';
 }
@@ -61,6 +62,7 @@ export function resetPhaseChart(): void {
 
     cleanupBaselineEditor();
     cleanupDivider();
+    removeGamificationOverlay();
 
     Object.values(phaseChart.groups).forEach(clearPhaseChartGroup);
 

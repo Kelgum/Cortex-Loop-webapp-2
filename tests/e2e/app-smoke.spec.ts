@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const CACHE_SCHEMA = 1;
-const PROMPT = '4 hours of deep focus, no sleep impact';
+const PROMPT = '4 hours of deep focus, no sleep quality impact';
 const HOURS = Array.from({ length: 25 }, (_, idx) => 6 + idx);
 
 function buildCurve(effect: string, color: string, baselineBase: number, desiredBase: number) {

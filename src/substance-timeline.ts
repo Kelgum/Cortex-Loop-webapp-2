@@ -4,7 +4,7 @@
 
 import { PHASE_CHART, TIMELINE_ZONE, PHASE_SMOOTH_PASSES } from './constants';
 import { BiometricState, MultiDayState, isTurboActive } from './state';
-import { svgEl, chartTheme, phaseChartX, phaseChartY, sleep, isLightMode, clamp } from './utils';
+import { svgEl, chartTheme, phaseChartX, phaseChartY, sleep, isLightMode, clamp, parseDoseToMg } from './utils';
 import {
     smoothPhaseValues,
     phasePointsToPath,
@@ -14,6 +14,12 @@ import {
     phaseBandPath,
 } from './curve-utils';
 import { placePeakDescriptors } from './phase-chart';
+import {
+    renderGamificationOverlay,
+    updateGamificationCurveData,
+    setStackingBarSweepProgress,
+} from './gamification-overlay';
+import { computeSubstanceContributions } from './lx-compute';
 import {
     showNarrationPanel,
     hideNarrationPanel,
@@ -98,7 +104,7 @@ export function getBioSeparatorEffectiveY(): number {
  *                  When false, strips stay at their old Y (used by revision animation
  *                  so that the slide-down can be animated later).
  */
-export function preserveBiometricStrips(pushDown = true) {
+export function preserveBiometricStrips(pushDown = true, fitToTimeline = false) {
     const channels = BiometricState.channels;
     if (!channels || channels.length === 0) return;
     const bioGroup = document.getElementById('phase-biometric-strips');
@@ -122,7 +128,12 @@ export function preserveBiometricStrips(pushDown = true) {
     const rawSepY = sep ? parseFloat(sep.getAttribute('y1') || '') : NaN;
 
     let anchorSepY: number | undefined;
-    if (pushDown) {
+    if (fitToTimeline) {
+        // Fit directly to the current timeline bottom — used after revision completes
+        // so bio strips sit right below the (possibly reduced) lane count.
+        anchorSepY = getTimelineBottomY();
+        _slideTargetSepY = null;
+    } else if (pushDown) {
         // Use the most reliable anchor: max of attribute Y, effective Y
         // (includes transform), stored slide target, and timeline bottom.
         const candidates = [
@@ -175,7 +186,7 @@ export function slideBiometricZoneDown(targetSepY: number, duration = 280): Prom
 
     const currentEffY = getBioSeparatorEffectiveY();
     const delta = targetSepY - currentEffY;
-    if (delta < 1) return Promise.resolve();
+    if (Math.abs(delta) < 1) return Promise.resolve();
 
     _slideTargetSepY = targetSepY;
 
@@ -329,11 +340,26 @@ export function computeDisplayDose(iv: any): string {
     return `${rounded}${match[2]}`;
 }
 
+/** Compute pill bar width proportional to effective dose vs standard dose. */
+export function computeDoseBarWidth(iv: any): number {
+    // Derive ratio from effective dose vs substance standardDose
+    const displayDose = computeDisplayDose(iv);
+    const sub = iv?.substance;
+    const standardDose = sub?.standardDose || '';
+    const effectiveMg = displayDose ? parseDoseToMg(displayDose) : null;
+    const standardMg = standardDose ? parseDoseToMg(standardDose) : null;
+    let ratio = iv?.doseMultiplier || 1.0;
+    if (effectiveMg != null && standardMg != null && standardMg > 0) {
+        ratio = effectiveMg / standardMg;
+    }
+    return Math.max(TIMELINE_ZONE.minBarW, Math.min(TIMELINE_ZONE.doseBaseW * ratio, TIMELINE_ZONE.doseMaxW));
+}
+
 function getTimelineCollisionLabelText(iv: any): string {
     const sub = iv && iv.substance;
     const name = (sub && sub.name) || (iv && iv.key) || '';
     const dose = computeDisplayDose(iv);
-    const warnIcon = hasTimelineWarningIcon(sub) ? ' \u26A0\uFE0F' : '';
+    const warnIcon = hasTimelineWarningIcon(sub) ? ' 🧪' : '';
     return dose ? `${name} ${dose}${warnIcon}` : `${name}${warnIcon}`;
 }
 
@@ -390,22 +416,15 @@ export function allocateTimelineLanes(interventions: any) {
         const endMin = startMin + dur;
 
         const pxL = phaseChartX(startMin);
-        const x2raw = phaseChartX(Math.min(endMin, PHASE_CHART.endMin));
-        const barPxR = pxL + Math.min(Math.max(TIMELINE_ZONE.minBarW, x2raw - pxL), plotRight - pxL);
+        const doseW = computeDoseBarWidth(iv);
+        const barPxR = pxL + Math.min(doseW, plotRight - pxL);
         const labelPxR = estimateTimelineLabelRightPx(iv, pxL);
         const pxR = Math.max(barPxR, labelPxR);
 
-        // Find first lane with no pixel or time overlap
+        // Find first lane with no pixel overlap (label width handles nearby pills)
         let laneIdx = 0;
         for (; laneIdx < lanes.length; laneIdx++) {
-            const overlaps = lanes[laneIdx].some(
-                (o: any) =>
-                    // Pixel-space overlap (includes label right edge)
-                    (pxL < o.pxR + pxGap && pxR > o.pxL - pxGap) ||
-                    // Time-space overlap (catches edge cases where pixel
-                    // measurement under-estimates rendered extent)
-                    (startMin < o.endMin && endMin > o.startMin),
-            );
+            const overlaps = lanes[laneIdx].some((o: any) => pxL < o.pxR + pxGap && pxR > o.pxL - pxGap);
             if (!overlaps) break;
         }
         if (!lanes[laneIdx]) lanes[laneIdx] = [];
@@ -513,22 +532,22 @@ export function renderSubstanceTimeline(interventions: any, lxCurves: any, curve
     );
 
     const allocated = allocateTimelineLanes(interventions || []);
+    const contributions = computeSubstanceContributions(interventions || [], curvesData || []);
 
     // Compute layout
     const rawLaneCount = allocated.reduce((max: number, a: any) => Math.max(max, a.laneIdx + 1), 0);
-    // During multi-day playback, use the locked max lane count so the envelope never shrinks
+    // During multi-day: use locked max lane count so the envelope never shrinks
     const isMultiDayLocked = MultiDayState.lockedViewBoxHeight != null;
     const laneCount = isMultiDayLocked ? Math.max(rawLaneCount, MultiDayState.maxTimelineLanes) : rawLaneCount;
     const laneStep = TIMELINE_ZONE.laneH + TIMELINE_ZONE.laneGap;
 
-    // During multi-day: freeze the viewBox entirely (it already includes bio strip space)
+    // During multi-day: freeze the viewBox (it already includes bio strip space)
     // Outside multi-day: animate normally
     if (!isMultiDayLocked) {
         const neededH = TIMELINE_ZONE.top + laneCount * laneStep + TIMELINE_ZONE.bottomPad;
         const finalH = Math.max(500, neededH);
         void animatePhaseChartViewBoxHeight(svg as unknown as SVGSVGElement, finalH);
     }
-    // else: don't touch the viewBox at all — it's locked to include bio strips
 
     const plotRight = PHASE_CHART.padL + PHASE_CHART.plotW;
     const plotLeft = PHASE_CHART.padL;
@@ -536,7 +555,7 @@ export function renderSubstanceTimeline(interventions: any, lxCurves: any, curve
     // Alternating track backgrounds (FCP-style lane stripes)
     const tlTheme = chartTheme();
     const laneStripeFill = isLightMode() ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.02)';
-    for (let i = 0; i < laneCount; i++) {
+    for (let i = 0; i < rawLaneCount; i++) {
         const y = TIMELINE_ZONE.top + i * laneStep;
         if (i % 2 === 1) {
             group.appendChild(
@@ -562,8 +581,7 @@ export function renderSubstanceTimeline(interventions: any, lxCurves: any, curve
         const color = sub ? sub.color : 'rgba(245,180,60,0.7)';
 
         const x1 = phaseChartX(startMin);
-        const x2raw = phaseChartX(Math.min(endMin, PHASE_CHART.endMin));
-        const barW = Math.min(Math.max(TIMELINE_ZONE.minBarW, x2raw - x1), plotRight - x1);
+        const barW = Math.min(computeDoseBarWidth(iv), plotRight - x1);
         const y = TIMELINE_ZONE.top + laneIdx * laneStep;
         const h = TIMELINE_ZONE.laneH;
         const rx = TIMELINE_ZONE.pillRx;
@@ -639,10 +657,10 @@ export function renderSubstanceTimeline(interventions: any, lxCurves: any, curve
             );
         }
 
-        // Clip-path to contain label — extends beyond bar so names aren't truncated
+        // Clip-path to contain label — extends beyond bar so dose text isn't truncated
         const clipId = `tl-clip-${idx}`;
         const clip = svgEl('clipPath', { id: clipId });
-        const labelOverflow = Math.min(40, Math.max(0, plotRight - (x1 + barW)));
+        const labelOverflow = Math.max(0, plotRight - (x1 + barW));
         clip.appendChild(
             svgEl('rect', {
                 x: x1.toFixed(1),
@@ -678,7 +696,7 @@ export function renderSubstanceTimeline(interventions: any, lxCurves: any, curve
         const name = sub ? sub.name : iv.key;
         const dose = computeDisplayDose(iv) || (sub ? sub.standardDose : '') || '';
         const conf = sub ? sub.dataConfidence || '' : '';
-        const warnIcon = conf.toLowerCase() === 'estimated' || conf.toLowerCase() === 'medium' ? ' \u26A0\uFE0F' : '';
+        const warnIcon = conf.toLowerCase() === 'estimated' || conf.toLowerCase() === 'medium' ? ' 🧪' : '';
         const label = svgEl('text', {
             x: (x1 + 5).toFixed(1),
             y: (y + h / 2 + 3).toFixed(1),
@@ -696,6 +714,16 @@ export function renderSubstanceTimeline(interventions: any, lxCurves: any, curve
             });
             rxSpan.textContent = ' Rx';
             label.appendChild(rxSpan);
+        }
+        // Contribution % badge
+        const contribPct = contributions.get(iv.key);
+        if (contribPct != null && contribPct > 0) {
+            const pctSpan = svgEl('tspan', {
+                'fill-opacity': '0.5',
+                'font-size': '8',
+            });
+            pctSpan.textContent = `  ${contribPct}%`;
+            label.appendChild(pctSpan);
         }
         contentG.appendChild(label);
         pillG.appendChild(contentG);
@@ -810,9 +838,6 @@ export async function animateSequentialLxReveal(
     const timelineGroup = document.getElementById('phase-substance-timeline')!;
     const lxGroup = document.getElementById('phase-lx-curves')!;
 
-    // Dim desired curves to ghost AUC reference
-    transmuteDesiredCurves(true);
-
     // Pre-build the Waze cards for the full stack.
     // buildSherlockCards sorts cards by timeMinutes to match the chronological
     // order of snapshots (computeIncrementalLxOverlay sorts by timeMinutes).
@@ -827,13 +852,6 @@ export async function animateSequentialLxReveal(
 
     // Show step controls (Play/Next) for substance-by-substance navigation
     showLxStepControls(snapshots.length);
-
-    await sleep(400);
-
-    // Clear any previous Lx curves and AUC bands
-    lxGroup.innerHTML = '';
-    const bandsGroup = document.getElementById('phase-lx-bands')!;
-    bandsGroup.innerHTML = '';
 
     // Prepare the timeline zone (separator only). Lane rows are added progressively per step.
     timelineGroup.innerHTML = '';
@@ -851,8 +869,19 @@ export async function animateSequentialLxReveal(
     );
 
     const allocated = allocateTimelineLanes(interventions);
-    const laneByIntervention = new Map<any, number>();
-    allocated.forEach((a: any) => laneByIntervention.set(a.iv, a.laneIdx));
+    const seqContributions = computeSubstanceContributions(interventions || [], curvesData || []);
+
+    // Build lane lookup by stable key (key + timeMinutes) instead of object identity.
+    // When replaying from cache, snapshot.step contains deserialized intervention objects
+    // that are structurally equal but NOT the same references as `interventions`.
+    const ivStableKey = (iv: any) => `${iv.key}@${iv.timeMinutes}`;
+    const laneByKey = new Map<string, number>();
+    const allocByKey = new Map<string, any>();
+    allocated.forEach((a: any) => {
+        const k = ivStableKey(a.iv);
+        laneByKey.set(k, a.laneIdx);
+        allocByKey.set(k, a);
+    });
     const laneStep = TIMELINE_ZONE.laneH + TIMELINE_ZONE.laneGap;
     const laneStripeFill = isLightMode() ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.02)';
     let visibleLaneCount = 0;
@@ -884,22 +913,20 @@ export async function animateSequentialLxReveal(
         }
     };
 
-    // Fade arrows out
-    Array.from(arrowGroup.children).forEach((a: any) => {
-        if (isTurboActive()) {
-            a.setAttribute('opacity', '0');
-            return;
-        }
-        a.animate([{ opacity: parseFloat(a.getAttribute('opacity') || '0.7') }, { opacity: 0 }], {
-            duration: 600,
-            fill: 'forwards',
-        });
-    });
+    // ── PLAY GATE: wait for user to click Play before any visual changes ──
+    await awaitLxStep(0, snapshots.length);
 
-    // Create NEW Lx stroke + fill paths in the lxGroup, starting at baseline position.
+    // Clear any previous Lx curves and AUC bands
+    lxGroup.innerHTML = '';
+    const bandsGroup = document.getElementById('phase-lx-bands')!;
+    bandsGroup.innerHTML = '';
+
+    // Create NEW Lx stroke + fill paths at BASELINE, initially transparent.
+    // They fade in while the desired curves dim out — a clean crossfade.
     const lxStrokes: any[] = [];
     const lxFills: any[] = [];
     const baselinePts = curvesData.map((c: any) => smoothPhaseValues(c.baseline, PHASE_SMOOTH_PASSES));
+    const LX_FADE_MS = 600;
     for (let ci = 0; ci < curvesData.length; ci++) {
         const curve = curvesData[ci];
         const initD = phasePointsToPath(baselinePts[ci], true);
@@ -917,7 +944,7 @@ export async function animateSequentialLxReveal(
             fill: 'none',
             stroke: curve.color,
             'stroke-width': '2.2',
-            'stroke-opacity': '0.9',
+            'stroke-opacity': '0',
             'stroke-linecap': 'round',
             'stroke-linejoin': 'round',
             class: 'phase-lx-path',
@@ -925,6 +952,29 @@ export async function animateSequentialLxReveal(
         lxGroup.appendChild(lxStroke);
         lxStrokes.push(lxStroke);
     }
+
+    // Crossfade: dim desired curves while fading Lx baseline curves in
+    transmuteDesiredCurves(true);
+
+    if (!isTurboActive()) {
+        for (const s of lxStrokes) {
+            s.animate([{ strokeOpacity: 0 }, { strokeOpacity: 0.9 }], { duration: LX_FADE_MS, fill: 'forwards' });
+        }
+    } else {
+        for (const s of lxStrokes) s.setAttribute('stroke-opacity', '0.9');
+    }
+
+    // Fade arrows out
+    Array.from(arrowGroup.children).forEach((a: any) => {
+        if (isTurboActive()) {
+            a.setAttribute('opacity', '0');
+            return;
+        }
+        a.animate([{ opacity: parseFloat(a.getAttribute('opacity') || '0.7') }, { opacity: 0 }], {
+            duration: 600,
+            fill: 'forwards',
+        });
+    });
 
     // Dim baseline strokes to ghost reference (keep dashed)
     const baselineStrokesAll = baseGroup.querySelectorAll('.phase-baseline-path');
@@ -958,14 +1008,19 @@ export async function animateSequentialLxReveal(
         });
     });
 
-    // Track current smoothed points per curve (Lx strokes start at baseline)
-    let currentPts = baselinePts.map((pts: any) => pts.map((p: any) => ({ ...p })));
-
     // Fade baseline peak descriptors
     baseGroup.querySelectorAll('.peak-descriptor').forEach((el: any) => {
         el.style.transition = 'opacity 300ms ease';
         el.style.opacity = '0';
     });
+
+    // Wait for crossfade to complete before starting substance sweeps
+    if (!isTurboActive()) {
+        await sleep(LX_FADE_MS);
+    }
+
+    // Track current smoothed points per curve (Lx strokes are at baseline)
+    let currentPts = baselinePts.map((pts: any) => pts.map((p: any) => ({ ...p })));
 
     const finalLxCurves = snapshots[snapshots.length - 1].lxCurves;
     const plotBot = PHASE_CHART.padT + PHASE_CHART.plotH;
@@ -973,15 +1028,14 @@ export async function animateSequentialLxReveal(
 
     // Helper: render a single substance's timeline pill
     function renderSinglePill(iv: any) {
-        const alloc = allocated.find((a: any) => a.iv === iv);
+        const alloc = allocByKey.get(ivStableKey(iv));
         if (!alloc) return null;
         const { laneIdx, startMin, endMin } = alloc;
         const sub = iv.substance;
         const color = sub ? sub.color : 'rgba(245,180,60,0.7)';
 
         const x1 = phaseChartX(startMin);
-        const x2raw = phaseChartX(Math.min(endMin, PHASE_CHART.endMin));
-        const barW = Math.min(Math.max(TIMELINE_ZONE.minBarW, x2raw - x1), plotRight - x1);
+        const barW = Math.min(computeDoseBarWidth(iv), plotRight - x1);
         const y = TIMELINE_ZONE.top + laneIdx * laneStep;
         const h = TIMELINE_ZONE.laneH;
         const rx = TIMELINE_ZONE.pillRx;
@@ -1064,7 +1118,7 @@ export async function animateSequentialLxReveal(
         );
 
         const conf = sub ? sub.dataConfidence || '' : '';
-        const warnIcon = conf.toLowerCase() === 'estimated' || conf.toLowerCase() === 'medium' ? ' \u26A0\uFE0F' : '';
+        const warnIcon = conf.toLowerCase() === 'estimated' || conf.toLowerCase() === 'medium' ? ' 🧪' : '';
         const labelText = `${sub?.name || iv.key}  ${computeDisplayDose(iv) || sub?.standardDose || ''}${warnIcon}`;
         const labelEl = svgEl('text', {
             x: (x1 + 6).toFixed(1),
@@ -1086,6 +1140,16 @@ export async function animateSequentialLxReveal(
             rxSpan.textContent = ' Rx';
             labelEl.appendChild(rxSpan);
         }
+        // Contribution % badge
+        const seqContribPct = seqContributions.get(iv.key);
+        if (seqContribPct != null && seqContribPct > 0) {
+            const pctSpan = svgEl('tspan', {
+                'fill-opacity': '0.5',
+                'font-size': '8',
+            });
+            pctSpan.textContent = `  ${seqContribPct}%`;
+            labelEl.appendChild(pctSpan);
+        }
         pillG.appendChild(labelEl);
 
         timelineGroup.appendChild(pillG);
@@ -1102,8 +1166,8 @@ export async function animateSequentialLxReveal(
 
     // Iterate through each step — one substance at a time
     for (let k = 0; k < snapshots.length; k++) {
-        // Wait for user to advance (stepping mode) or proceed (playing mode)
-        await awaitLxStep(k, snapshots.length);
+        // k=0 was already gated before visual setup; subsequent steps wait for user advance
+        if (k > 0) await awaitLxStep(k, snapshots.length);
 
         const snapshot = snapshots[k];
         const step = snapshot.step;
@@ -1143,7 +1207,7 @@ export async function animateSequentialLxReveal(
 
         // Expand timeline zone only as far as this step needs.
         const stepLaneCount = step.reduce((max: number, iv: any) => {
-            const laneIdx = laneByIntervention.get(iv);
+            const laneIdx = laneByKey.get(ivStableKey(iv));
             if (laneIdx == null) return max;
             return Math.max(max, laneIdx + 1);
         }, visibleLaneCount);
@@ -1346,7 +1410,22 @@ export async function animateSequentialLxReveal(
             currentPts = targetPts;
             // Remove label
             labelEl.remove();
+            if (k === 0) renderGamificationOverlay(snapshot.lxCurves, curvesData, 'phase2');
+            else updateGamificationCurveData(snapshot.lxCurves);
+            setStackingBarSweepProgress(1, PHASE_CHART.endHour, k);
             continue;
+        }
+
+        // Trigger gamification overlay when first AUC band starts animating
+        if (k === 0) {
+            renderGamificationOverlay(
+                snapshot.lxCurves.map((lx: any, ci: number) => ({
+                    ...lx,
+                    points: sourcePts[ci],
+                })),
+                curvesData,
+                'phase2',
+            );
         }
 
         await new Promise<void>(resolveSweep => {
@@ -1388,6 +1467,7 @@ export async function animateSequentialLxReveal(
                 bandClipRect.setAttribute('width', (playheadX - PHASE_CHART.padL).toFixed(1));
 
                 // Morph Lx STROKES + FILLS
+                const overlayCurves: any[] = [];
                 for (let ci = 0; ci < curvesData.length; ci++) {
                     const morphed = buildProgressiveMorphPoints(
                         sourcePts[ci],
@@ -1398,7 +1478,13 @@ export async function animateSequentialLxReveal(
                     const strokeD = phasePointsToPath(morphed, true);
                     if (lxStrokes[ci]) lxStrokes[ci].setAttribute('d', strokeD);
                     if (lxFills[ci]) lxFills[ci].setAttribute('d', phasePointsToFillPath(morphed, true));
+                    overlayCurves.push({
+                        ...snapshot.lxCurves[ci],
+                        points: morphed,
+                    });
                 }
+                updateGamificationCurveData(overlayCurves);
+                setStackingBarSweepProgress(rawT, playheadHour, k);
 
                 // --- Push chevron: trace the curve that changes the most ---
                 const ci = bestCurveIdx;
@@ -1492,6 +1578,8 @@ export async function animateSequentialLxReveal(
                         if (lxStrokes[ci]) lxStrokes[ci].setAttribute('d', strokeD);
                         if (lxFills[ci]) lxFills[ci].setAttribute('d', phasePointsToFillPath(targetPts[ci], true));
                     }
+                    updateGamificationCurveData(snapshot.lxCurves);
+                    setStackingBarSweepProgress(1, PHASE_CHART.endHour, k);
                     resolveSweep();
                 }
             })(performance.now());

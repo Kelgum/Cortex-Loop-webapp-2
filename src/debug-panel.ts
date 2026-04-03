@@ -4,10 +4,11 @@
  * Depends on: constants (MODEL_OPTIONS, PROVIDER_LABELS, PROVIDER_IDS), state (AppState, switchStageProvider)
  */
 import { MODEL_OPTIONS, PROVIDER_LABELS, PROVIDER_IDS } from './constants';
-import { AppState, switchStageProvider } from './state';
-import { settingsStore, stageModelKey } from './settings-store';
+import { AppState, switchStageProvider, capturePresetSnapshot, applyPresetSnapshot } from './state';
+import { settingsStore, stageModelKey, STORAGE_KEYS } from './settings-store';
 import { LLMCache } from './llm-cache';
 import { PROMPTS } from './prompts';
+import { initDashboard, openDashboard } from './agent-performance-dashboard';
 import {
     describeStageClasses,
     disableStageCacheChain,
@@ -33,6 +34,9 @@ const STAGES = [
     { id: 'spotterDaily', stageClass: 'spotter-daily-model', label: 'Spotter (7d)' },
     { id: 'strategistBioDaily', stageClass: 'strategist-bio-daily-model', label: 'Strategist Bio (7d)' },
     { id: 'grandmasterDaily', stageClass: 'grandmaster-daily-model', label: 'Grandmaster (7d)' },
+    { id: 'referee', stageClass: 'referee-model', label: 'Referee' },
+    { id: 'sherlock7d', stageClass: 'sherlock7d-model', label: 'Sherlock (7d)' },
+    { id: 'agentMatch', stageClass: 'agent-match-model', label: 'Agent Match' },
 ];
 
 const STAGE_LABEL_BY_CLASS: Record<string, string> = {};
@@ -57,6 +61,9 @@ const STAGE_PROMPT_TEMPLATE_KEY: Record<string, string> = {
     spotterDaily: 'spotterDaily',
     strategistBioDaily: 'strategistBioDaily',
     grandmasterDaily: 'grandmasterDaily',
+    referee: 'grandmasterDaily',
+    sherlock7d: 'sherlock7d',
+    agentMatch: 'agentMatch',
 };
 
 // Some debug cards are sub-passes that reuse an existing runtime stage config.
@@ -493,6 +500,19 @@ export const DebugLog = {
             container.appendChild(card);
         }
 
+        // ── Pipeline Presets section ──
+        this._buildPresetSection(container);
+
+        // Agent Performance Dashboard trigger button
+        const dashBtn = document.createElement('button');
+        dashBtn.className = 'apd-dashboard-btn';
+        dashBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg><span>Agent Performance Dashboard</span>`;
+        dashBtn.addEventListener('click', () => {
+            openDashboard();
+        });
+        container.appendChild(dashBtn);
+        initDashboard();
+
         this._initialized = true;
         this.render();
     },
@@ -517,6 +537,278 @@ export const DebugLog = {
             settingsStore.setString(stageModelKey(configStage), resolved);
         }
         fitSelectWidthToLabel(select);
+    },
+
+    // ── Pipeline Preset helpers ──
+
+    async _loadPresets(): Promise<any[]> {
+        try {
+            const res = await fetch('/__presets');
+            if (!res.ok) return [];
+            const raw: any[] = await res.json();
+            return Array.isArray(raw)
+                ? raw.filter(
+                      (p: any) =>
+                          p &&
+                          typeof p.id === 'string' &&
+                          typeof p.name === 'string' &&
+                          p.stageModels &&
+                          p.stageProviders,
+                  )
+                : [];
+        } catch {
+            return [];
+        }
+    },
+
+    async _savePresets(presets: any[]): Promise<void> {
+        try {
+            await fetch('/__presets', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(presets),
+            });
+        } catch {
+            // Silent fail — disk write failed but in-memory state is still correct
+        }
+    },
+
+    _renderPresetList(listEl: HTMLElement, presets: any[]): void {
+        listEl.innerHTML = '';
+        if (presets.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'preset-empty';
+            empty.textContent = 'No saved presets';
+            listEl.appendChild(empty);
+            return;
+        }
+        for (const preset of presets) {
+            const row = document.createElement('div');
+            row.className = 'preset-row';
+            row.dataset.presetId = preset.id;
+
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'preset-name';
+            nameSpan.textContent = preset.name;
+            nameSpan.contentEditable = 'true';
+            nameSpan.spellcheck = false;
+            const oldName = preset.name;
+
+            nameSpan.addEventListener('focus', () => {
+                const sel = window.getSelection();
+                if (sel) {
+                    const range = document.createRange();
+                    range.selectNodeContents(nameSpan);
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                }
+            });
+
+            nameSpan.addEventListener('keydown', (e: KeyboardEvent) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    nameSpan.blur();
+                } else if (e.key === 'Escape') {
+                    nameSpan.textContent = preset.name;
+                    nameSpan.blur();
+                }
+            });
+
+            nameSpan.addEventListener('blur', async () => {
+                const trimmed = (nameSpan.textContent || '').trim();
+                if (!trimmed) {
+                    nameSpan.textContent = preset.name;
+                    return;
+                }
+                if (trimmed !== preset.name) {
+                    preset.name = trimmed;
+                    const all = await this._loadPresets();
+                    const match = all.find((p: any) => p.id === preset.id);
+                    if (match) match.name = trimmed;
+                    await this._savePresets(all);
+                }
+            });
+
+            const loadBtn = document.createElement('button');
+            loadBtn.className = 'preset-load-btn';
+            loadBtn.textContent = 'Load';
+            loadBtn.addEventListener('click', () => {
+                applyPresetSnapshot(preset);
+                this.refreshSelects();
+                row.classList.add('loaded');
+                setTimeout(() => row.classList.remove('loaded'), 1200);
+            });
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'preset-delete-btn';
+            deleteBtn.textContent = '\u00d7';
+            deleteBtn.title = 'Delete preset';
+            deleteBtn.addEventListener('click', async () => {
+                const all = (await this._loadPresets()).filter((p: any) => p.id !== preset.id);
+                await this._savePresets(all);
+                this._renderPresetList(listEl, all);
+            });
+
+            row.appendChild(nameSpan);
+            row.appendChild(loadBtn);
+            row.appendChild(deleteBtn);
+            listEl.appendChild(row);
+        }
+    },
+
+    _buildPresetSection(container: HTMLElement): void {
+        const section = document.createElement('div');
+        section.className = 'preset-section';
+        const collapsed = settingsStore.getBoolean(STORAGE_KEYS.presetsCollapsed, true);
+        if (collapsed) section.classList.add('collapsed');
+
+        // Header
+        const header = document.createElement('div');
+        header.className = 'preset-section-header';
+
+        const titleSpan = document.createElement('span');
+        titleSpan.className = 'preset-section-title';
+        titleSpan.textContent = 'Pipeline Presets';
+
+        const chevronBtn = document.createElement('button');
+        chevronBtn.className = 'preset-section-chevron';
+        chevronBtn.innerHTML = CHEVRON_SVG;
+
+        header.appendChild(titleSpan);
+        header.appendChild(chevronBtn);
+
+        header.addEventListener('click', () => {
+            section.classList.toggle('collapsed');
+            settingsStore.setString(
+                STORAGE_KEYS.presetsCollapsed,
+                section.classList.contains('collapsed') ? 'true' : 'false',
+            );
+        });
+
+        // Body
+        const body = document.createElement('div');
+        body.className = 'preset-section-body';
+
+        const listEl = document.createElement('div');
+        listEl.className = 'preset-list';
+
+        // Load presets from disk asynchronously, render when ready
+        void this._loadPresets().then((presets: any[]) => this._renderPresetList(listEl, presets));
+
+        // Actions row
+        const actions = document.createElement('div');
+        actions.className = 'preset-actions';
+
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'preset-action-btn';
+        saveBtn.textContent = 'Save Current';
+        saveBtn.addEventListener('click', async () => {
+            const snap = capturePresetSnapshot();
+            const all = await this._loadPresets();
+            const now = new Date();
+            const dateStr = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+            const id =
+                typeof crypto !== 'undefined' && crypto.randomUUID
+                    ? crypto.randomUUID()
+                    : Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+            const preset = {
+                id,
+                name: `Preset ${all.length + 1} (${dateStr}, ${timeStr})`,
+                createdAt: now.toISOString(),
+                stageModels: snap.stageModels,
+                stageProviders: snap.stageProviders,
+            };
+            all.push(preset);
+            await this._savePresets(all);
+            this._renderPresetList(listEl, all);
+        });
+
+        const exportBtn = document.createElement('button');
+        exportBtn.className = 'preset-action-btn';
+        exportBtn.textContent = 'Export';
+        exportBtn.addEventListener('click', async () => {
+            const all = await this._loadPresets();
+            if (all.length === 0) return;
+            const envelope = {
+                version: 1,
+                exportedAt: new Date().toISOString(),
+                presets: all,
+            };
+            const json = JSON.stringify(envelope, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'cortex_pipeline_presets.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '.json,application/json';
+        fileInput.style.display = 'none';
+
+        const importBtn = document.createElement('button');
+        importBtn.className = 'preset-action-btn';
+        importBtn.textContent = 'Import';
+        importBtn.addEventListener('click', () => fileInput.click());
+
+        fileInput.addEventListener('change', () => {
+            const file = fileInput.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = async () => {
+                try {
+                    const parsed = JSON.parse(reader.result as string);
+                    if (!parsed || !Array.isArray(parsed.presets)) {
+                        throw new Error('Invalid preset file');
+                    }
+                    const existing = await this._loadPresets();
+                    const existingIds = new Set(existing.map((p: any) => p.id));
+                    let added = 0;
+                    for (const p of parsed.presets) {
+                        if (
+                            p &&
+                            typeof p.id === 'string' &&
+                            typeof p.name === 'string' &&
+                            p.stageModels &&
+                            p.stageProviders &&
+                            !existingIds.has(p.id)
+                        ) {
+                            existing.push(p);
+                            existingIds.add(p.id);
+                            added++;
+                        }
+                    }
+                    await this._savePresets(existing);
+                    this._renderPresetList(listEl, existing);
+                } catch {
+                    const err = document.createElement('div');
+                    err.className = 'preset-error';
+                    err.textContent = 'Invalid preset file';
+                    listEl.parentElement?.insertBefore(err, listEl);
+                    setTimeout(() => err.remove(), 3000);
+                }
+                fileInput.value = '';
+            };
+            reader.readAsText(file);
+        });
+
+        actions.appendChild(saveBtn);
+        actions.appendChild(exportBtn);
+        actions.appendChild(importBtn);
+        actions.appendChild(fileInput);
+
+        body.appendChild(listEl);
+        body.appendChild(actions);
+
+        section.appendChild(header);
+        section.appendChild(body);
+        container.appendChild(section);
     },
 
     refreshSelects() {

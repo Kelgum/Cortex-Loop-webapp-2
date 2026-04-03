@@ -4,12 +4,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cortex Loop (5)</title>
+    <title>Lx.health</title>
     <link rel="stylesheet" href="/styles.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
-        href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Montserrat:wght@200;300;400;500;600;700&family=Space+Grotesk:wght@300..700&family=IBM+Plex+Mono:wght@400;500&display=swap"
         rel="stylesheet">
 </head>
 
@@ -101,6 +101,13 @@
                     <line x1="9" y1="9" x2="9" y2="21" />
                 </svg>
             </button>
+            <button id="stream-edit-btn" class="top-control-btn stream-edit-btn" aria-label="Edit protocols" title="Edit Protocols">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="12" cy="5" r="2" />
+                    <circle cx="12" cy="12" r="2" />
+                    <circle cx="12" cy="19" r="2" />
+                </svg>
+            </button>
             <button id="agent-designer-btn" class="top-control-btn" aria-label="Agent Designer" title="Agent Designer">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
                     stroke-linecap="round" stroke-linejoin="round">
@@ -116,10 +123,12 @@
             </button>
         </div>
 
-        <div id="runtime-error-banner" class="runtime-error-banner hidden" role="status" aria-live="polite">
+        <div id="runtime-error-banner" class="runtime-error-banner hidden collapsed" role="status" aria-live="polite">
             <div class="runtime-error-banner-header">
+                <div id="runtime-error-collapsed-label" class="runtime-error-collapsed-label">System notice</div>
                 <div id="runtime-error-title" class="runtime-error-title">Agent bug detected</div>
                 <div class="runtime-error-banner-actions">
+                    <button id="runtime-error-toggle-btn" class="runtime-error-toggle-btn" type="button">Details</button>
                     <button id="runtime-error-copy-btn" class="runtime-error-copy-btn" type="button">Copy</button>
                     <button id="runtime-error-hide-btn" class="runtime-error-hide-btn" type="button">Hide</button>
                 </div>
@@ -172,6 +181,7 @@
                 <option value="3">Biometrics (Phase 3)</option>
                 <option value="4">Revision (Phase 4)</option>
                 <option value="5">7D Cycle (Phase 5)</option>
+                <option value="6">Camera Tracking (Phase 6)</option>
             </select>
             <div class="settings-section">
                 <label for="debug-export-run-btn">Debug Bundles</label>
@@ -188,6 +198,19 @@
                 <label>Saved Cycles</label>
                 <div id="saved-cycles-list" class="saved-cycles-list"></div>
                 <p id="saved-cycles-hint" class="settings-hint">No saved cycles yet.</p>
+            </div>
+            <div class="settings-section settings-accordion" id="visual-controls-section">
+                <button
+                    id="visual-controls-toggle"
+                    class="settings-accordion-toggle"
+                    type="button"
+                    aria-expanded="false"
+                    aria-controls="visual-controls-body"
+                >
+                    <span>Visual Controls</span>
+                    <span class="settings-accordion-chevron" aria-hidden="true"></span>
+                </button>
+                <div id="visual-controls-body" class="settings-accordion-body" hidden></div>
             </div>
             <div class="settings-version" id="settings-version"></div>
         </div>
@@ -236,6 +259,7 @@
             <div id="agent-browser-content" class="agent-page-content"></div>
         </div>
 
+        <!-- Cycle Gallery (full-page overlay) -->
         <!-- Agent JSON Panel (slides in from right) -->
         <div id="agent-json-panel" class="ad-json-panel">
             <div class="ad-json-panel-header">
@@ -262,7 +286,7 @@
         <!-- TOP: Prompt (starts vertically centered, slides up on submit) -->
         <header id="prompt-section" class="phase-centered">
             <div class="prompt-container">
-                <h1 class="logo-text">Cortex Loop (5)</h1>
+                <h1 class="logo-text">Lx.health</h1>
                 <form id="prompt-form">
                     <input type="text" id="prompt-input" placeholder="Describe your desired outcome..."
                         autocomplete="off" spellcheck="false" />
@@ -290,13 +314,21 @@
                     </button>
                 </form>
 
-                <p id="prompt-hint" class="hint-text"><a id="hint-example" href="#">e.g. "4 hours of deep focus, no
-                        sleep impact"</a></p>
+                <p id="prompt-hint" class="hint-text"><a id="hint-example" href="#">e.g. "4 hours of deep focus, no sleep
+                        quality impact"</a></p>
             </div>
         </header>
 
         <!-- MAIN: Phase Chart (primary visual after prompt submit) -->
         <main id="main-content">
+            <!-- Stream mode: inline protocol grid (hidden by default) -->
+            <div id="stream-grid-container" class="stream-grid-container">
+                <div class="stream-categories-wrap">
+                    <div id="stream-categories" class="stream-categories"></div>
+                    <button id="stream-categories-toggle" class="stream-categories-toggle hidden">Show more</button>
+                </div>
+                <div id="stream-grid" class="stream-grid"></div>
+            </div>
             <p id="hook-sentence" class="hook-sentence" aria-live="polite"></p>
             <div id="phase-chart-container" class="phase-chart-container">
                 <div class="phase-svg-wrapper">
@@ -338,6 +370,7 @@
                         </defs>
                         <g id="phase-grid"></g>
                         <g id="phase-x-axis"></g>
+                        <g id="phase-week-strip"></g>
                         <g id="phase-y-axis-left"></g>
                         <g id="phase-y-axis-right"></g>
                         <g id="phase-scan-line"></g>
@@ -352,13 +385,13 @@
                         <g id="phase-mission-arrows"></g>
                         <g id="phase-yaxis-indicators"></g>
                         <g id="phase-legend"></g>
-                        <g id="phase-tooltip-overlay"></g>
                         <g id="phase-biometric-strips"></g>
                         <g id="phase-spotter-highlights"></g>
                         <g id="phase-poi-connectors"></g>
                         <g id="phase-sim-scan-line"></g>
+                        <g id="phase-tooltip-overlay"></g>
                     </svg>
-                    <button id="phase-optimize-btn" class="phase-optimize-btn hidden">Optimize</button>
+                    <button id="phase-optimize-btn" class="phase-optimize-btn hidden">Compute</button>
                     <button id="phase-lx-btn" class="phase-lx-btn hidden">Lx</button>
                     <!-- Level explainer panels are body-appended by JS (Sherlock-style) -->
                 </div>
@@ -425,7 +458,7 @@
                 <span class="ribbon-time md-ribbon-time">
                     Day <span id="day-number" class="md-day-number">0</span> / 7
                 </span>
-                <button id="day-speed-btn" class="ribbon-btn md-speed-btn">1x</button>
+                <button id="day-speed-btn" class="ribbon-btn md-speed-btn">2x</button>
                 <div class="md-scrubber-wrap">
                     <input type="range" id="day-scrubber" class="md-scrubber" min="0" max="7" step="1" value="0">
                 </div>
@@ -464,6 +497,9 @@
         </div>
 
     </div>
+
+    <!-- Agent Performance Dashboard (full-screen overlay) -->
+    <div id="agent-perf-dashboard" class="apd-overlay hidden"></div>
 
     <script src="config.js"></script>
     <script type="module" src="/src/main.ts"></script>

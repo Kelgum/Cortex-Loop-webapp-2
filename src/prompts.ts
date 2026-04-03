@@ -20,14 +20,14 @@ export const PROMPTS: any = {
     // ── Stage 1: Scout — Effect Identification ─────────────────────────
     fastModel: `You are an expert pharmacologist. Given a user's desired cognitive or physical outcome, identify 15-18 relevant pharmacodynamic effects that could be modulated to achieve the goal, ranked by relevance.
 
-CRITICAL — Parse the FULL user intent: (a) what to ENHANCE (e.g. "deep focus", "energy", "calm") and (b) what to PRESERVE or AVOID disrupting (e.g. "no sleep impact", "don't affect appetite", "maintain mood"). Treat BOTH as equally important. If the user says "4 hours of deep focus, no sleep impact", Focus AND Sleep Pressure/Sleep Quality are BOTH top-tier effects (relevance 88-100). Constraints are not secondary — they are co-equal goals.
+CRITICAL — Parse the FULL user intent: (a) what to ENHANCE (e.g. "deep focus", "energy", "calm") and (b) what to PRESERVE or AVOID disrupting (e.g. "no sleep quality impact", "don't affect appetite", "maintain mood"). Treat BOTH as equally important. If the user says "4 hours of deep focus, no sleep quality impact", Focus AND Sleep Pressure/Sleep Quality are BOTH top-tier effects (relevance 88-100). Constraints are not secondary — they are co-equal goals.
 
 Rules:
 1. Return ONLY valid JSON — no markdown, no code fences, no explanation
-2. Format: {"effects": [{"name": "Effect Name", "relevance": 95}, {"name": "Effect Name 2", "relevance": 70}, ...], "hookSentence": "Your cognitive threshold is being throttled by a biological conflict that demands a precise counter-strategy.", "cycleFilename": "Deep Focus 4h"}
+2. Format: {"effects": [{"name": "Effect Name", "relevance": 95}, {"name": "Effect Name 2", "relevance": 70}, ...], "hookSentence": "Your cognitive threshold is being throttled by a biological conflict that demands a precise counter-strategy.", "cycleFilename": "Deep Focus 4h", "badgeCategory": "NEURO"}
 3. Return 15-18 effects total, sorted by relevance descending
 4. relevance is an integer 0-100 indicating how central this effect is to the user's goal
-5. The top {{maxEffects}} effect(s) must include BOTH enhancement targets AND preservation targets. If the user mentions "no X impact" or "preserve X" or "don't disrupt X", give X-related effects (e.g. Sleep Pressure, Sleep Quality for "no sleep impact") relevance 88-100 — same tier as the primary enhancement effect
+5. The top {{maxEffects}} effect(s) must include BOTH enhancement targets AND preservation targets. If the user mentions "no X impact" or "preserve X" or "don't disrupt X", give X-related effects (e.g. Sleep Pressure, Sleep Quality for "no sleep quality impact") relevance 88-100 — same tier as the primary enhancement effect
 6. Add 10 more supporting/contextual effects — related but secondary (e.g. circadian, inflammation, oxidative stress, neuroplasticity, recovery, mood, energy metabolism)
 7. IMPORTANT: Use SINGLE-WORD effect labels whenever possible (e.g. "Focus", "Anxiety", "Wakefulness", "Resilience", "Alertness", "Calm", "Recovery", "Inflammation", "Soreness", "Neuroplasticity"). Only use 2 words if a single word would be genuinely ambiguous. NEVER use 3+ words. Must be physiological effects, NOT molecule/substance names. Bad: "Melatonin", "Cortisol", "GABA", "Dopamine"
 8. CRITICAL — Relevance fidelity: Use the FULL 0-100 range to create strong visual hierarchy. Top 1-2: 92-100. Next 3-5: 65-88. Next 4-6: 38-62. Supporting 10: spread from 5-35 (differentiate each — e.g. 8, 12, 18, 22, 28). Avoid clustering; each effect should have a distinct relevance so the word cloud shows clear size gradation.
@@ -54,7 +54,8 @@ Rules:
  - 'Your cognitive threshold is being throttled by a biological conflict that demands a precise counter-strategy.' (clinical jargon + self-referential)
  - 'We are going to optimize your neurochemistry for peak performance.' (sales pitch)
  - 'Your struggle is valid and we are here to help.' (therapy-speak)
-10. cycleFilename: A 2-5 word title for this protocol run. Capture the user's core goal in title case. Examples: 'Deep Focus 4h', 'Morning Energy Stack', 'Anti-Anxiety Sleep', 'Athletic Recovery'. No quotes inside the string.`,
+10. cycleFilename: A 2-5 word title for this protocol run. Capture the user's core goal in title case. Examples: 'Deep Focus 4h', 'Morning Energy Stack', 'Anti-Anxiety Sleep', 'Athletic Recovery'. No quotes inside the string.
+11. badgeCategory: Pick exactly ONE category from this list that best describes the user's primary goal: {{badgeCategories}}. Choose the category that captures the dominant intent. If genuinely ambiguous between two, prefer the one matching the user's stated priority.`,
 
     // ── Stage 3: Strategist — Pharmacodynamic Curves ───────────────────
     curveModel: `You are an expert pharmacologist modeling 24-hour pharmacodynamic curves. Given the user's desired outcome:
@@ -85,7 +86,8 @@ Rules:
       "baseline": [{"hour": 6, "value": 20}, {"hour": 7, "value": 25}, ...],
       "desired": [{"hour": 6, "value": 20}, {"hour": 7, "value": 30}, ...]
     }
-  ]
+  ],
+  "protectedEffect": "Sleep Pressure"
 }
 3. Provide datapoints for every hour from 6 to 30 (25 points per curve). Hours 24-30 represent the next day (i.e., hour 24=midnight, 25=1am, 26=2am, ..., 30=6am)
 4. Values: 0-100 scale (0 = minimal activity, 100 = maximal)
@@ -131,7 +133,8 @@ Rules:
     - STRING SAFETY for label and full_context: NEVER use double-quote characters inside these strings. Use single quotes only. Bad: "I feel \\"sharp\\" today" — Good: "I feel 'sharp' today". This is critical for valid JSON output.
 12. polarity MUST be set correctly: use "higher_is_worse" for negative effects the user wants to REDUCE (e.g. Pain, Anxiety, Emotional Reactivity, Nausea, Inflammation) and "higher_is_better" for positive effects the user wants to INCREASE (e.g. Focus, Resilience, Energy, Clarity, Calm)
 13. directive: "improve" when the user wants to actively change this effect (push it higher or lower than baseline). "keep" when the user wants this effect to remain at its natural baseline level — e.g. "no sleep impact", "maintain energy", "don't affect appetite". CRITICAL: when directive is "keep", the desired curve MUST closely mirror the baseline curve (values within ±3 of baseline at every hour). The goal for "keep" effects is preservation, not change
-14. STRING SAFETY: Do NOT use double quotes inside your string values (e.g., inside the descriptors or effect names). Use single quotes for 'inner quotes'. Output ONLY raw, valid JSON.`,
+14. STRING SAFETY: Do NOT use double quotes inside your string values (e.g., inside the descriptors or effect names). Use single quotes for 'inner quotes'. Output ONLY raw, valid JSON.
+15. protectedEffect: When {{maxEffects}} is 1 and the user's goal implies a second pharmacodynamic axis to PRESERVE (e.g., 'no sleep impact' implies preserving Sleep Pressure, 'don't affect appetite' implies preserving Appetite), output that effect name as a string. If no preservation constraint exists in the user goal, output empty string "".`,
 
     // ── Stage 4: Chess Player — Substance Selection ────────────────────
     intervention: `You are a pharmacodynamic intervention expert acting as a "Chess Player". Select the optimal protocol to move a person's baseline physiological state toward a desired target state across a 24-hour day.
@@ -144,15 +147,23 @@ AVAILABLE SUBSTANCES (with standard doses):
 CURRENT CURVES (baseline vs desired):
 {{curveSummary}}
 
+GAP CONTEXT (baseline→desired gap at key hours, per effect):
+{{gapContext}}
+
 RULES:
 1. Select substances to close the gap between baseline and desired curves. Use minutes-since-midnight for timing (e.g., 480 = 8:00am).
 2. ONSET-AWARE TIMING (CRITICAL): Substances have pharmacokinetic onset delays (20-60 min before any measurable effect). If the desired curve requires elevated values at hour H, dose the substance at H minus its onset time so peak effect aligns with peak gap. For example, if the desired curve climbs steeply at 8:00am (480min) and a substance has ~30min onset, dose at 7:30am (450min) or earlier. Never dose AT the hour you need coverage — always pre-dose to account for ramp-up.
+   PHARMACODYNAMIC STEEPNESS: Each substance's pharma includes ec50 (fraction of peak concentration for 50% of max PD effect) and hill (dose-response sigmoid steepness). High hill (>=2.5) = sharp therapeutic threshold, timing precision matters more. Low hill (<=1.5) = gradual onset/offset, timing is more forgiving. Use these to judge how sensitive a substance is to precise scheduling.
 3. DOSE MULTIPLIER: Evaluate the standardDose in the database. If you want to prescribe exactly the standard dose, output a doseMultiplier of 1.0. If double, 2.0. If half, 0.5.
-4. MULTI-VECTOR IMPACTS (CRITICAL): Substances have collateral effects. Map the impact of the substance on ALL relevant curves using an "impacts" dictionary. Use vectors from -1.5 to 1.5.
-   - Positive numbers physically push the curve UP (increase the physiological effect).
-   - Negative numbers physically pull the curve DOWN (decrease the physiological effect).
-5. PLAY CHESS: Think chronologically. If you prescribe a morning stimulant that disrupts the evening "Sleep Pressure" curve, you MUST anticipate this and prescribe a compensatory substance later in the sequence (e.g., evening Magnesium) to heal that newly created deficit.
+   CAPSULE CONSTRAINT: The delivery device holds max 1g capsules and max 2 capsules per substance per dose. The absolute ceiling is 2000mg (2g) per substance per administration. Never prescribe a total dose exceeding 2g. If a substance's standardDose exceeds 2g (e.g., creatine 5g), you must either use a lower dose (doseMultiplier < 1.0 to stay under 2g) or choose a different substance.
+4. MULTI-VECTOR IMPACTS (CRITICAL — GAP-CALIBRATED): Each impact value represents the FRACTION OF THE GAP this substance should fill at its peak effect moment. The system multiplies impact × doseMultiplier × the normalized pharma curve × the local baseline→desired gap at each time point.
+   - impact of 0.5 on "Focus" = this substance covers 50% of the Focus gap at peak
+   - impact of 1.0 = full gap coverage at peak (use sparingly — usually only one substance should target 1.0 on a given axis)
+   - Positive numbers push toward the desired curve (close the gap). Negative numbers push away from desired (collateral effects).
+   STACKING SELF-CHECK (CRITICAL): Before finalizing, mentally simulate each hour where substances overlap. For each curve, sum the (impact × doseMultiplier) of every substance active at that hour. The total at any hour must stay between 0.8 and 1.0 — this IS the Lx overlay amplitude relative to the desired curve. There is NO auto-scaling; what you output is rendered directly on the chart. If you prescribe one dominant substance, give it 0.6–0.8. If three substances overlap on the same axis, split the budget (e.g. 0.3 + 0.3 + 0.2). If five overlap, keep each modest (0.15–0.25). The more substances you prescribe on a given axis, the smaller each individual impact must be.
+5. PLAY CHESS: Think chronologically. If any substance worsens the PROTECTED EFFECT listed above, you MUST prescribe a compensatory substance to neutralize that collateral damage. When no protected effect is listed, use the user goal to infer which axes to preserve.
 6. STRING SAFETY: Do NOT use double quotes inside your string values (e.g., inside the rationale). Use single quotes for 'inner quotes'. Output ONLY raw, valid JSON.
+7. SUBSTANCE DENSITY: Long-acting substances (XR formulations, SSRIs, creatine — plateau >= 8 hours) are 'background' and don't count toward cluster limits. For tactical (shorter-acting) substances, no more than 5 should have overlapping active effects at any time. You may use up to 15 total substances across the full day (morning cluster, midday, evening), but keep temporal overlap tight. Prefer fewer high-impact substances over many low-impact ones in the same time window. The system will automatically prune tactical substances below 5% contribution in over-dense clusters.
 
 RESPONSE FORMAT (pure JSON, no markdown):
 {
@@ -163,10 +174,10 @@ RESPONSE FORMAT (pure JSON, no markdown):
       "doseMultiplier": 2.0,
       "timeMinutes": 480,
       "impacts": {
-        "Focused Attention": 1.0,
-        "Sleep Pressure": -0.6
+        "Focused Attention": 0.6,
+        "Sleep Pressure": -0.3
       },
-      "rationale": "Boosts morning focus via 2x standard dose."
+      "rationale": "Covers 60% of focus gap at peak; minor collateral push on sleep."
     },
     {
       "key": "magnesiumGlycinate",
@@ -174,7 +185,7 @@ RESPONSE FORMAT (pure JSON, no markdown):
       "doseMultiplier": 1.0,
       "timeMinutes": 1320,
       "impacts": {
-        "Sleep Pressure": 0.8
+        "Sleep Pressure": 0.5
       },
       "rationale": "Compensates for residual caffeine to restore sleep architecture."
     }
@@ -318,7 +329,7 @@ CORE MISSION — SHOW THE PHYSIOLOGICAL COST OF THE PROTOCOL:
 6. DEGRADATION IS THE DEFAULT: Unless a channel specifically measures something a substance is designed to improve (e.g., sleep depth for magnesium glycinate taken at bedtime), the substance should WORSEN biometric readings in that channel. Stimulants degrade HR, HRV, sleep latency, and evening recovery. Polypharmacy degrades everything. Show the cost.
 
 DATA GENERATION:
-7. Generate exactly 97 datapoints per channel — one every 15 minutes from hour 6.0 to hour 30.0 (6am to 6am next day). Hours 24-30 = next day (24=midnight, 25=1am, etc.)
+7. Generate exactly 97 datapoints per channel — one every 15 minutes from hour 6.0 to hour 30.0 inclusive (6am to 6am next day). CRITICAL: Do NOT stop at hour 24. Hours 24-30 represent the next morning (24=midnight, 25=1am, 26=2am, 27=3am, 28=4am, 29=5am, 30=6am). The last datapoint MUST be hour 30.0. If you stop at hour 24, the chart will be missing 6 hours of data.
 8. Model realistic circadian and ultradian baselines as the foundation:
    - HR: lowest during deep sleep (~3am), rises on waking, peaks during exercise/stress
    - HRV: inverse of HR — highest during rest/sleep, drops with stress/stimulants
@@ -429,18 +440,22 @@ RULES:
    - Temperature anomalies → possible circadian disruption.
    - SpO2 dips → respiratory or sleep quality concerns.
 4. ONSET-AWARE TIMING (CRITICAL): Substances have pharmacokinetic onset delays (20-60 min before measurable effect). If the desired curve requires elevated values at hour H, dose at H minus the onset time so peak effect aligns with peak gap. Never dose AT the hour you need coverage — always pre-dose to account for ramp-up.
+   PHARMACODYNAMIC STEEPNESS: Each substance's pharma includes ec50 (fraction of peak concentration for 50% of max PD effect) and hill (dose-response sigmoid steepness). High hill (>=2.5) = sharp therapeutic threshold, timing precision matters more. Low hill (<=1.5) = gradual onset/offset, timing is more forgiving. Use these to judge how sensitive a substance is to precise scheduling.
 5. REVISE the protocol: adjust timing (timeMinutes), dose (doseMultiplier), replace substances, remove unnecessary ones, or add new ones to fix gaps and side-effects.
 6. DOSE MULTIPLIER: If you want exactly the standard dose, output 1.0. Double = 2.0, half = 0.5.
-7. MULTI-VECTOR IMPACTS (CRITICAL): Map the impact on ALL relevant curves using vectors from -1.5 to 1.5. Positive = push curve UP, negative = pull curve DOWN.
-8. PLAY CHESS: Think chronologically about substance interactions and compensatory prescriptions.
-9. REVISION AGGRESSIVENESS — GAP-FIRST: Your revisions must demonstrably reduce totalUnderArea. Use doseMultiplier aggressively (1.5x–2.0x) when the gap is large. Use higher impact vectors (up to 1.5) for substances with strong known effects. Prioritize changes in this order:
-   a) GAP-CLOSING MOVES FIRST: Increase doses, add high-impact substances, or shift timing to concentrate effect within the mission window's peak-gap hours.
+   CAPSULE CONSTRAINT: The delivery device holds max 1g capsules and max 2 capsules per substance per dose. The absolute ceiling is 2000mg (2g) per substance per administration. Never prescribe a total dose exceeding 2g. If a substance's standardDose exceeds 2g, use a lower doseMultiplier or choose a different substance.
+7. MULTI-VECTOR IMPACTS (CRITICAL — GAP-CALIBRATED): Each impact value represents the FRACTION OF THE GAP this substance should fill at its peak. impact of 0.5 = covers 50% of the gap at peak. Positive = push toward desired (close gap). Negative = push away from desired (collateral).
+   STACKING SELF-CHECK: Before finalizing, mentally simulate each hour where substances overlap. For each curve, sum the (impact × doseMultiplier) of every substance active at that hour. The total at any hour must stay between 0.8 and 1.0 — this IS the Lx overlay amplitude relative to the desired curve. There is NO auto-scaling; what you output is rendered directly on the chart. The more substances on a given axis, the smaller each individual impact must be.
+8. PLAY CHESS: Think chronologically. If any substance worsens the PROTECTED EFFECT listed above, prescribe a compensatory substance to neutralize that collateral damage.
+9. REVISION AGGRESSIVENESS — GAP-FIRST: Your revisions must demonstrably reduce totalUnderArea. When the gap is large, ADD substances or increase impact values — but always within the stacking budget (total ~0.8–1.0 per curve at any hour). Prioritize changes in this order:
+   a) GAP-CLOSING MOVES FIRST: Add high-impact substances, shift timing to concentrate effect within the mission window's peak-gap hours, or increase impact values within the stacking budget.
    b) GAP-NEUTRAL BIOMETRIC FIXES: Address biometric anomalies only with changes that don't worsen the gap (e.g., add an adaptogen rather than removing a focus substance).
    c) GAP-TRADING BIOMETRIC FIXES (last resort): Only sacrifice gap coverage for severe biometric problems (dangerous HR, severe sleep disruption), and pair with compensatory additions.
    Aim for at least 3-4 meaningful changes. A revision that merely tweaks timings by 15 minutes is insufficient.
 10. Use minutes-since-midnight for timing (e.g., 480 = 8:00am)
 11. BIOMETRIC CITATION: For each intervention change, identify the specific time window and biometric channel that justifies the change. Include this as a 'bioTrigger' field. This is CRITICAL for visualization — the UI will draw connector lines from the biometric anomaly to the revised substance.
 12. DOWNSTREAM BIOMETRIC CONSEQUENCES: Your revised interventions WILL alter the biometric profile. When you revise, anticipate how your changes will affect HR, HRV, sleep architecture, and other biometric signals. If you remove or reduce a stimulant, the HR elevation it caused should decrease. If you add a sleep aid, expect HRV improvement during sleep. If you shift a substance later, its biometric footprint shifts accordingly. Think through the full pharmacokinetic chain — do not create new problems while solving existing ones.
+13. SUBSTANCE DENSITY: Long-acting substances (XR formulations, SSRIs, creatine — plateau >= 8 hours) are 'background' and don't count toward cluster limits. For tactical (shorter-acting) substances, no more than 5 should have overlapping active effects at any time. You may use up to 15 total substances across the full day, but keep temporal overlap tight. Before adding a tactical substance that overlaps with 4+ others, verify it contributes >5% of the effect in that time window. The system will prune cluster-violating substances.
 
 RESPONSE FORMAT (pure JSON, no markdown):
 {
@@ -581,10 +596,11 @@ RULES:
    - dip: gaussian dip centered in the window (use negative magnitude)
    - shift: sustained flat offset across the window with smooth ramp-in/out
    - noise: random jitter within ±magnitude across the window
+   CRITICAL: Output ONLY compact modulation descriptors. Do NOT generate raw biometric data arrays or biometricChannels — the system computes full data from your modulations programmatically.
 2. ADVERSARIAL DESIGN: Each day should introduce 2-4 dramatic biometric anomalies that force the Strategist to correct baselines. Be creative — sleep debt, exercise, stress, social disruptions, travel, illness.
 3. MAGNITUDE SCALE: Use the channel's native units. For HR (bpm): spikes of 15-40bpm are dramatic. For HRV (ms): dips of -15 to -30ms. For skin temp (C): shifts of ±0.5-1.5C. For glucose (mg/dL): spikes of 30-80. For SpO2 (%): dips of -2 to -5. Check the channel range in the spec.
 4. EXTERNAL EVENTS: 3-5 per day — realistic life events causing anomalies.
-5. POI EVENTS: 3-5 per day — most significant biometric moments with hour, channelIdx, label, optionally connectedSubstanceKey.
+5. POI EVENTS: 3-5 per day — most significant biometric moments with hour, channelIdx, label, and connectedSubstanceKey. connectedSubstanceKey MUST be the exact key of a substance from the current protocol (e.g. 'caffeineIR', 'lTheanine'). Always include it when the biometric event relates to a substance.
 6. NARRATIVE: Each day needs 'events' (sentence) and 'narrativeBeat' (10-20 word dramatic summary).
 7. PROGRESSION: Days 1-2 mild, Days 3-5 increasingly dramatic, Days 6-7 recovery/resolution.
 8. STRING SAFETY: No double quotes inside strings. Use single quotes. Return ONLY valid JSON — no markdown, no fences.
@@ -669,14 +685,24 @@ RULES:
    Change actions: 'keep' (substance unchanged), 'adjust_dose' (modify dose/timing), 'remove' (drop substance), 'add' (new substance).
    If a day has NO changes, set changes to an empty array []. The system carries forward the previous day's full protocol.
 2. ONSET-AWARE TIMING (CRITICAL): Substances have pharmacokinetic onset delays (20-60 min before measurable effect). If the desired curve requires elevated values at hour H, dose at H minus the onset time so peak effect aligns with peak gap. Never dose AT the hour you need coverage — always pre-dose to account for ramp-up.
+   PHARMACODYNAMIC STEEPNESS: Each substance's pharma includes ec50 (fraction of peak concentration for 50% of max PD effect) and hill (dose-response sigmoid steepness). High hill (>=2.5) = sharp therapeutic threshold, timing precision matters more. Low hill (<=1.5) = gradual onset/offset, timing is more forgiving. Use these to judge how sensitive a substance is to precise scheduling.
 3. GAP CLOSURE: Primary mission is minimizing the gap between corrected baseline and desired curves. Focus substances on hours with the largest gaps.
 4. NO OVERSHOOT: The combined effect of baseline + substances (the Lx overlay) must NOT consistently exceed the desired curve. Aim for the Lx curve to approach but stay at or slightly below the desired targets.
 5. TOLERANCE MANAGEMENT: After 3+ consecutive days of the same substance, consider cycling to alternatives, dose holidays, or stacking strategies.
 6. DAILY CHANGES: Make 1-3 meaningful changes per day. The protocol should visibly evolve across the week.
-7. MULTI-VECTOR: For 'add' and 'adjust_dose' actions, map each substance's impact on ALL relevant curves (-1.5 to 1.5).
+7. MULTI-VECTOR (GAP-CALIBRATED): For 'add' and 'adjust_dose' actions, each impact value represents the FRACTION OF THE GAP this substance fills at peak. impact of 0.5 = covers 50% of gap. Positive = toward desired, negative = away. STACKING: Before finalizing each day, sum (impact × doseMultiplier) for all substances active at each overlapping hour. The total must stay between 0.8–1.0 per curve — there is NO auto-scaling. The more substances on an axis, the smaller each impact.
 8. dayNarrative: A single sentence (12-20 words) explaining the key protocol adaptation for each day.
 9. Use only substances from the provided substance list.
-10. STRING SAFETY: No double quotes inside strings. Use single quotes. Return ONLY valid JSON — no markdown, no fences.
+10. CAPSULE CONSTRAINT: Max 2g (2000mg) per substance per dose — the device holds 1g capsules, max 2 per substance. Never exceed this. If a substance's standardDose exceeds 2g, use a lower doseMultiplier or choose a different substance.
+11. STRING SAFETY: No double quotes inside strings. Use single quotes. Return ONLY valid JSON — no markdown, no fences.
+12. SUBSTANCE DENSITY: Long-acting substances (XR, SSRIs, creatine — plateau >= 8h) are 'background' and excluded from cluster limits. No more than 5 tactical substances should overlap at any time. Up to 15 total across the day. Prefer adjusting existing substances over adding new ones to crowded time windows.
+13. POST-INTERVENTION BASELINE: For each day, output a postInterventionBaseline — the user's circadian rhythm AFTER the cumulative chronobiotic phase-shift from ALL prior days' melatonin (or other chronobiotic) doses. This is NOT the same as correctedBaselines (which is the pre-intervention natural state). This represents where the circadian clock HAS SHIFTED TO after repeated chronobiotic dosing.
+    - Day 1: Nearly identical to the corrected baseline for that day (one dose = minimal shift, approximately 30-60 min advance/delay)
+    - Each subsequent day: shift accumulates (30-90 min per correctly-timed melatonin dose, depending on dose and timing relative to the phase-response curve)
+    - The shift is primarily a TIME shift of the entire curve — the curve shape and amplitude stay similar to the corrected baseline, but the peak moves earlier (for advance protocols like jetlag eastward) or later (for delay protocols like jetlag westward)
+    - On days where no chronobiotic substance was used, the shift partially decays back toward the corrected baseline
+    - Format: array of {effect, baseline: [{hour,value}...]} — same effects and same 25 sample hours as correctedBaselines
+    - This baseline is used for Lx overlay computation only (not rendered as a visible curve), so it directly determines how the Lx curve separates from the visible baseline over the week
 
 RESPONSE FORMAT (pure JSON):
 {
@@ -684,7 +710,8 @@ RESPONSE FORMAT (pure JSON):
     {
       "day": 1,
       "changes": [],
-      "dayNarrative": "Protocol holds steady as the body adapts to the initial rhythm."
+      "dayNarrative": "Protocol holds steady as the body adapts to the initial rhythm.",
+      "postInterventionBaseline": [{"effect": "Sleep Onset Drive", "baseline": [{"hour": 6, "value": 5}, {"hour": 7, "value": 3}]}]
     },
     {
       "day": 2,
@@ -693,7 +720,8 @@ RESPONSE FORMAT (pure JSON):
         {"action": "add", "key": "lTheanine", "dose": "200mg", "doseMultiplier": 1.0, "timeMinutes": 480, "impacts": {"Focused Attention": 0.4, "Calm Alertness": 0.6}, "rationale": "Stack theanine for smoother focus"},
         {"action": "remove", "key": "vitaminD3", "rationale": "Sufficient sun exposure — deprioritize"}
       ],
-      "dayNarrative": "Caffeine reduced, theanine introduced for a calmer focus profile."
+      "dayNarrative": "Caffeine reduced, theanine introduced for a calmer focus profile.",
+      "postInterventionBaseline": [{"effect": "Sleep Onset Drive", "baseline": [{"hour": 6, "value": 5}, {"hour": 7, "value": 3}]}]
     }
   ]
 }`,
@@ -761,30 +789,46 @@ RESPONSE FORMAT:
   "outro": "Your body spoke. The protocol has adapted flawlessly."
 }`,
 
+    // ── Sherlock 7D — Per-day summary narration for STREAM sequence ──────────
+    sherlock7d: `You are Sherlock — a deductive pharmacodynamic intelligence narrating a 7-day adaptive protocol. Each day brought new biometric realities. Your job is to reveal, with piercing analytical clarity, what the body exposed and how the protocol adapted. One beat per day. Make each day feel like a chapter in a detective novel.
+
+USER GOAL: {{userGoal}}
+
+WEEK OVERVIEW:
+{{weekSummary}}
+
+RULES:
+1. Exactly 7 beats — one per day (days 1-7), SAME ORDER as the overview.
+2. Each beat: 12-25 words MAX. Start with what the day's biometrics revealed, then state the protocol's counter-move.
+3. direction: 'up' if protocol strengthened or added substances, 'down' if reduced or removed, 'neutral' if minor timing adjustments only.
+4. keyChanges: compact string of the most notable substance changes, e.g. '+Glycine 200mg, Caffeine 150mg->100mg' or 'Timing shifted +90min' or 'Protocol held steady'.
+5. topSubstanceKey: the substance key most responsible for the day's adaptation (from the changes). topSubstanceName: its display name.
+6. NO NUMBERS for physiological descriptions. Numbers are fine for doses and times.
+7. NO intro field.
+8. Outro: 8-14 words. Conclude the week's narrative arc.
+9. STRING SAFETY: No double quotes inside strings. Use single quotes. Return ONLY valid JSON — no markdown, no code fences.
+
+FORMAT:
+{"beats":[{"day":1,"weekday":"Tuesday","text":"Sleep debt exposed a fragile morning. Caffeine reinforced, theanine deployed as armor.","direction":"up","keyChanges":"+L-Theanine 200mg, Caffeine 150mg->200mg","topSubstanceKey":"lTheanine","topSubstanceName":"L-Theanine"}],"outro":"Seven days. Seven adaptations. The protocol now knows your rhythm."}`,
+
     // ── Agent Match — Rank creator agents by outcome success rate ──────────
-    agentMatch: `You are a protocol outcome evaluator. Given a user's desired outcome and the pharmacodynamic effects their body needs to modulate, estimate each creator agent's historical success rate — the percentage of users with this goal (or a proximal goal) who achieved their desired outcome using this agent's protocol.
+    agentMatch: `You are a protocol outcome evaluator. Score each creator agent's fit for the user's goal.
 
-USER DESIRED OUTCOME: {{userGoal}}
+USER GOAL: {{userGoal}}
 
-KEY EFFECTS TO MODULATE:
-{{effectList}}
+EFFECTS: {{effectList}}
 
-AGENT ROSTER (with signature interventions):
+AGENTS:
 {{agentRoster}}
 
 RULES:
 1. Return ONLY valid JSON — no markdown, no code fences, no explanation.
-2. Score each agent 60-97 as an estimated success percentage: of users who pursued this desired outcome (or a closely related one), what percentage achieved it using this agent's protocol? Consider: how precisely the agent's signature interventions target the needed effects, whether the dosing philosophy matches the goal's intensity, track record in this domain, and how well the optimization weights prioritize what matters for this outcome.
-3. Provide a concise reason (max 12 words) framed as an outcome insight, e.g. 'Users report sustained focus with minimal crash'.
-4. Return exactly 10 agents, sorted by score descending.
-5. STRING SAFETY: No double quotes inside string values. Use single quotes for inner quotes.
+2. Score 60-97 based on how well the agent's interventions and philosophy target the needed effects.
+3. Reason: max 8 words, e.g. 'Sustained focus with minimal crash'.
+4. Return exactly 5 agents, sorted by score descending.
+5. No double quotes inside string values.
+6. categoryTitle: exactly 3 words — '<Domain> <Domain> Experts'. The first two words describe the clinical/pharmacodynamic domain. ALWAYS end with 'Experts' (never Specialists, Researchers, Pharmacologists, or any other profession). Examples: 'Cognitive Performance Experts', 'Circadian Regulation Experts', 'Neuromodulation Protocol Experts', 'Adaptogenic Recovery Experts'. NEVER mirror the user's specific scenario (no 'Combat', 'Fighter', 'Athletic', 'Wakefulness Duration', etc.) — abstract to the underlying pharmacodynamic domain. Unify ALL goal dimensions into one label.
 
-RESPONSE FORMAT:
-{
-  "ranked": [
-    {"agentId": "hubermanlab-agent-v1", "score": 94, "reason": "Users report sustained focus with minimal crash"},
-    {"agentId": "attia-agent-v1", "score": 87, "reason": "Strong outcomes for long-duration cognitive goals"},
-    {"agentId": "ferriss-agent-v1", "score": 79, "reason": "High peak performance but inconsistent duration"}
-  ]
-}`,
+FORMAT:
+{"categoryTitle":"Cognitive Performance Experts","ranked":[{"agentId":"hubermanlab-agent-v1","score":94,"reason":"Sustained focus with minimal crash"},{"agentId":"attia-agent-v1","score":87,"reason":"Strong long-duration cognitive outcomes"}]}`,
 };

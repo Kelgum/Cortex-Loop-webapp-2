@@ -4,7 +4,7 @@
 // Assembles all animation segments in correct temporal order
 // and registers them with the TimelineEngine.
 
-import type { TimelineEngine, SegmentContext } from './timeline-engine';
+import type { TimelineEngine } from './timeline-engine';
 import { PHASE_SMOOTH_PASSES } from './constants';
 import { smoothPhaseValues } from './curve-utils';
 import { allocateTimelineLanes } from './lx-system';
@@ -38,13 +38,15 @@ import {
     createYAxisIndicatorsSegment,
 } from './timeline-segments/curves-segments';
 import {
+    createGamificationOverlayPresenceSegment,
     createTransmuteDesiredSegment,
     createLxCurvesInitSegment,
+    createLxBaselineFadeInSegment,
     createSubstanceSweepSegment,
     createSubstancePillSegment,
     createCinematicPlayheadSegment,
 } from './timeline-segments/lx-segments';
-import { createBiometricRevealSegment } from './timeline-segments/biometric-segments';
+import { createBiometricRevealSegment, createBioCorrectionMorphSegment } from './timeline-segments/biometric-segments';
 import { createRevisionEntrySegment, createLxMorphToRevisionSegment } from './timeline-segments/revision-segments';
 import {
     createSherlockBeatSegment,
@@ -222,9 +224,13 @@ export function buildPhase2Segments(
     engine.addSegment(createTransmuteDesiredSegment(t));
     t += 400;
 
-    // Initialize Lx curves at baseline + timeline zone
+    // Initialize Lx curves at desired position + timeline zone
     engine.addSegment(createLxCurvesInitSegment(t));
     t += 50;
+
+    // Fade Lx baseline curves in (600ms crossfade with desired dimming)
+    engine.addSegment(createLxBaselineFadeInSegment(t));
+    t += 600;
 
     // Allocate timeline lanes for pill positioning
     const allocated = allocateTimelineLanes(interventions);
@@ -232,6 +238,7 @@ export function buildPhase2Segments(
     // Per-substance segments: pill reveal + playhead sweep
     const sorted = [...interventions].sort((a: any, b: any) => a.timeMinutes - b.timeMinutes);
     const GAP_BETWEEN_SUBSTANCES = 200; // ms gap between substance sweeps
+    let overlayPresenceSegment: any = null;
 
     // Pre-compute smoothed baseline points as the starting state
     const baselinePts = curvesData.map((c: any) => smoothPhaseValues(c.baseline, PHASE_SMOOTH_PASSES));
@@ -257,6 +264,19 @@ export function buildPhase2Segments(
         engine.addSegment(createSubstancePillSegment(t, k, substance, allocated, curvesData, snapshot.lxCurves));
         t += 350;
 
+        if (k === 0) {
+            overlayPresenceSegment = createGamificationOverlayPresenceSegment(
+                t,
+                snapshot.lxCurves.map((lx: any, curveIdx: number) => ({
+                    ...lx,
+                    points: sourcePts[curveIdx],
+                })),
+                curvesData,
+            );
+            engine.addSegment(overlayPresenceSegment);
+            engine.getContext()._gamificationOverlayPresenceSegment = overlayPresenceSegment;
+        }
+
         // Substance sweep (variable duration based on step index)
         const sweepSeg = createSubstanceSweepSegment(t, k, substance, sourcePts, targetPts, curvesData);
         engine.addSegment(sweepSeg);
@@ -277,6 +297,10 @@ export function buildPhase2Segments(
     // Lx peak labels (via cinematic playhead morph)
     engine.addSegment(createCinematicPlayheadSegment(t));
     t += 4500;
+
+    if (overlayPresenceSegment) {
+        overlayPresenceSegment.duration = Math.max(1, t - overlayPresenceSegment.startTime);
+    }
 
     return t;
 }
@@ -316,6 +340,26 @@ export function buildPhase3Segments(
     const revealDur = 600 + (stripCount - 1) * 80;
     t += revealDur;
 
+    const overlayPresenceSegment = engine.getContext()._gamificationOverlayPresenceSegment;
+    if (overlayPresenceSegment) {
+        overlayPresenceSegment.duration = Math.max(overlayPresenceSegment.duration, t - overlayPresenceSegment.startTime);
+    }
+
+    return t;
+}
+
+export function buildPhase3BioCorrectionSegments(engine: TimelineEngine, startTime: number): number {
+    let t = startTime;
+
+    const bioCorrectionSegment = createBioCorrectionMorphSegment(t);
+    engine.addSegment(bioCorrectionSegment);
+    t += bioCorrectionSegment.duration;
+
+    const overlayPresenceSegment = engine.getContext()._gamificationOverlayPresenceSegment;
+    if (overlayPresenceSegment) {
+        overlayPresenceSegment.duration = Math.max(overlayPresenceSegment.duration, t - overlayPresenceSegment.startTime);
+    }
+
     return t;
 }
 
@@ -330,7 +374,7 @@ export function buildPhase4Segments(engine: TimelineEngine, startTime: number, d
     let t = startTime;
 
     // Gate: revision play
-    engine.addSegment(createGateSegment('revision-gate', 'Revise', t, 3));
+    engine.addSegment(createGateSegment('revision-gate', 'Execute', t, 3));
     engine.addGate('revision-gate');
 
     // Per diff entry: bracket lock-on + action + narration beat
@@ -357,6 +401,11 @@ export function buildPhase4Segments(engine: TimelineEngine, startTime: number, d
     // Lx curves morph to revision
     engine.addSegment(createLxMorphToRevisionSegment(t));
     t += 1200;
+
+    const overlayPresenceSegment = engine.getContext()._gamificationOverlayPresenceSegment;
+    if (overlayPresenceSegment) {
+        overlayPresenceSegment.duration = Math.max(overlayPresenceSegment.duration, t - overlayPresenceSegment.startTime);
+    }
 
     return t;
 }

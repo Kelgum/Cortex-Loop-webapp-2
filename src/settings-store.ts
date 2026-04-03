@@ -10,6 +10,21 @@ export const STORAGE_KEYS = {
     debugBundleAutoSave: 'cortex_debug_bundle_autosave',
     savedCyclesIndex: 'cortex_saved_cycles_index',
     loadedCycleId: 'cortex_loaded_cycle_id',
+    abOverlayPos: 'cortex_ab_overlay_pos',
+    abOverlayCollapsed: 'cortex_ab_overlay_collapsed',
+    llmLog: 'cortex_llm_log',
+    bandBrightness: 'cortex_band_brightness',
+    presetsCollapsed: 'cortex_presets_collapsed',
+    appMode: 'cortex_app_mode',
+    streamCardDensity: 'cortex_stream_card_density',
+    streamCardChrome: 'cortex_stream_card_chrome',
+    streamTitleScale: 'cortex_stream_title_scale',
+    streamTitleColorIntensity: 'cortex_stream_title_color_intensity',
+    streamBadgeIntensity: 'cortex_stream_badge_intensity',
+    customSectionTitles: 'cortex_custom_section_titles',
+    customSectionEffects: 'cortex_custom_section_effects',
+    customSectionNegativeTags: 'cortex_custom_section_negative_tags',
+    sectionOrder: 'cortex_section_order',
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

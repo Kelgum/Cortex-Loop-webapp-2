@@ -22,7 +22,8 @@ export type PipelineStage =
     | 'spotterDaily'
     | 'strategistBioDaily'
     | 'grandmasterDaily'
-    | 'agentMatch';
+    | 'agentMatch'
+    | 'sherlock7d';
 
 export type Provider = 'anthropic' | 'openai' | 'grok' | 'gemini';
 
@@ -263,6 +264,23 @@ export interface SherlockRevisionNarration {
     outro: string;
 }
 
+// -- Narration (Sherlock 7D — per-day summary for STREAM) --
+
+export interface Sherlock7DBeat {
+    day: number;
+    weekday: string;
+    text: string;
+    direction: 'up' | 'down' | 'neutral';
+    keyChanges: string;
+    topSubstanceKey?: string;
+    topSubstanceName?: string;
+}
+
+export interface Sherlock7DNarration {
+    beats: Sherlock7DBeat[];
+    outro: string;
+}
+
 // -- Word cloud effect --
 
 export interface WordCloudEffect {
@@ -276,6 +294,7 @@ export interface ScoutStageResult {
     effects: WordCloudEffect[];
     hookSentence?: string;
     cycleFilename?: string;
+    badgeCategory?: string;
 }
 
 export interface CurveLevel {
@@ -364,7 +383,8 @@ export interface StageResultMap {
     spotterDaily: SpotterDailyOutput;
     strategistBioDaily: StrategistBioDailyOutput;
     grandmasterDaily: GrandmasterDailyOutput;
-    agentMatch: { ranked: AgentMatchResult[] };
+    agentMatch: { categoryTitle?: string; ranked: AgentMatchResult[] };
+    sherlock7d: Sherlock7DNarration;
 }
 
 export type StageRunner<TStage extends keyof StageResultMap> = (...args: unknown[]) => Promise<StageResultMap[TStage]>;
@@ -419,6 +439,8 @@ export interface IPhaseState {
     userGoal: string | null;
     cycleFilename: string | null;
     loadedCycleId: string | null;
+    strategistProtectedEffect: string;
+    badgeCategory: string | null;
 }
 
 export interface IBiometricState {
@@ -471,6 +493,7 @@ export interface ITimelineState {
         prompt: PlayheadTracker;
         bioScan: PlayheadTracker;
         bioReveal: PlayheadTracker;
+        bioCorrection: PlayheadTracker;
     };
     runTasks: TaskGroupController | null;
 }
@@ -479,6 +502,7 @@ export interface ISherlockState {
     enabled: boolean;
     narrationResult: SherlockNarration | null;
     revisionNarrationResult: SherlockRevisionNarration | null;
+    sherlock7dNarration: Sherlock7DNarration | null;
     phase: SherlockPhase;
 }
 
@@ -491,6 +515,7 @@ export interface IDividerState {
     masks: DividerMasks | null;
     dragging: boolean;
     dragCleanup: (() => void) | null;
+    onUpdate: (() => void) | null;
 }
 
 // -- Multi-day iteration types --
@@ -586,6 +611,7 @@ export interface GrandmasterDayEntry {
         rationale: string;
     }[];
     dayNarrative: string;
+    postInterventionBaseline?: { effect: string; baseline: CurvePoint[] }[];
 }
 
 export interface GrandmasterDailyOutput {
@@ -596,6 +622,7 @@ export interface DaySnapshot {
     day: number;
     bioCorrectedBaseline: CurvePoint[][];
     desiredCurves: CurvePoint[][];
+    postInterventionBaseline?: CurvePoint[][];
     interventions: Intervention[];
     lxCurves: LxCurve[];
     biometricChannels: BiometricChannel[];
@@ -611,6 +638,7 @@ export interface IAgentMatchState {
     matchResults: AgentMatchResult[];
     selectedAgent: import('./creator-agent-types').AgentConfig | null;
     phase: AgentMatchPhase;
+    categoryTitle: string;
 }
 
 export interface ICompileState {
@@ -631,4 +659,8 @@ export interface IMultiDayState {
     bioCorrectedBaseline: CurvePoint[][] | null;
     lockedViewBoxHeight: number | null;
     maxTimelineLanes: number;
+    bioBaseTranslateY: number;
+    sherlock7dReady: boolean;
+    onDayAdvance: (() => void) | null;
+    onSherlock7DSync: ((dayNumber: number) => void) | null;
 }

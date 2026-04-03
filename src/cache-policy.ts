@@ -16,6 +16,8 @@ export const CACHE_STAGE_LABELS: Record<string, string> = {
     'spotter-daily-model': 'Spotter (7d)',
     'strategist-bio-daily-model': 'Strategist Bio (7d)',
     'grandmaster-daily-model': 'Grandmaster (7d)',
+    'sherlock7d-model': 'Sherlock (7d)',
+    'agent-match-model': 'Agent Match',
 };
 
 export const CACHE_STAGE_UPSTREAM_DEPS: Record<string, string[]> = {
@@ -32,6 +34,8 @@ export const CACHE_STAGE_UPSTREAM_DEPS: Record<string, string[]> = {
     'spotter-daily-model': ['biometric-model', 'knight-model'],
     'strategist-bio-daily-model': ['spotter-daily-model', 'main-model'],
     'grandmaster-daily-model': ['strategist-bio-daily-model', 'knight-model', 'intervention-model'],
+    'sherlock7d-model': ['grandmaster-daily-model'],
+    'agent-match-model': ['fast-model'],
 };
 
 function reverseDependencyMap(): Record<string, string[]> {
@@ -177,6 +181,7 @@ export function getCompletedStageClassesForPhase(phase: number): string[] {
             'biometric-channel-model',
             'biometric-model',
             'strategist-bio-model',
+            'agent-match-model',
         ],
         4: [
             'fast-model',
@@ -190,6 +195,26 @@ export function getCompletedStageClassesForPhase(phase: number): string[] {
             'strategist-bio-model',
             'revision-model',
             'sherlock-revision-model',
+            'agent-match-model',
+        ],
+        5: [
+            'fast-model',
+            'main-model',
+            'intervention-model',
+            'sherlock-model',
+            'biometric-rec-model',
+            'biometric-profile-model',
+            'biometric-channel-model',
+            'biometric-model',
+            'strategist-bio-model',
+            'revision-model',
+            'sherlock-revision-model',
+            'knight-model',
+            'spotter-daily-model',
+            'strategist-bio-daily-model',
+            'grandmaster-daily-model',
+            'sherlock7d-model',
+            'agent-match-model',
         ],
     };
     return map[phase] || [];

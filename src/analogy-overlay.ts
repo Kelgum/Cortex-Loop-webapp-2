@@ -19,12 +19,9 @@ const GOOGLE_LOGO_SVG = `<svg viewBox="0 0 272 92" xmlns="http://www.w3.org/2000
   <path d="M35.29 41.19V32H67c.31 1.64.47 3.58.47 5.68 0 7.06-1.93 15.79-8.15 22.01-6.05 6.3-13.78 9.66-24.02 9.66C16.32 69.35.36 53.89.36 34.91.36 15.93 16.32.47 35.3.47c10.5 0 17.98 4.12 23.6 9.49l-6.64 6.64c-4.03-3.78-9.49-6.72-16.97-6.72-13.86 0-24.7 11.17-24.7 25.03 0 13.86 10.84 25.03 24.7 25.03 8.99 0 14.11-3.61 17.39-6.89 2.66-2.66 4.41-6.46 5.1-11.65l-22.49-.01z" fill="#4285F4"/>
 </svg>`;
 
-/* ── Waze-style logo (simplified pin icon) ──────────────────────────── */
+/* ── Waze logo (actual PNG image) ─────────────────────────────────────── */
 
-const WAZE_LOGO_SVG = `<svg viewBox="0 0 120 40" xmlns="http://www.w3.org/2000/svg" class="analogy-waze-logo">
-  <rect rx="6" width="120" height="40" fill="#33ccff"/>
-  <text x="60" y="28" text-anchor="middle" font-family="'Space Grotesk',sans-serif" font-weight="700" font-size="22" fill="#fff">Waze</text>
-</svg>`;
+const WAZE_LOGO_SVG = `<img src="/assets/waze-logo.png" alt="Waze" class="analogy-waze-logo"/>`;
 
 /* ── Shopping cart icon ──────────────────────────────────────────────── */
 
@@ -80,7 +77,24 @@ function getTargets(): OverlayTarget[] {
             getRect: () => {
                 const g = document.getElementById('phase-substance-timeline');
                 if (!g || !g.childElementCount) return null;
-                return g.getBoundingClientRect();
+                // Use separator + pill bars only — connector lines / curve dots extend
+                // into the chart area and would inflate the bounding box.
+                const els = g.querySelectorAll('.timeline-separator, .timeline-bar');
+                if (!els.length) return null;
+                let minX = Infinity,
+                    minY = Infinity,
+                    maxX = -Infinity,
+                    maxY = -Infinity;
+                els.forEach(el => {
+                    const r = el.getBoundingClientRect();
+                    if (r.width === 0 && r.height === 0) return;
+                    minX = Math.min(minX, r.left);
+                    minY = Math.min(minY, r.top);
+                    maxX = Math.max(maxX, r.right);
+                    maxY = Math.max(maxY, r.bottom);
+                });
+                if (!isFinite(minX)) return null;
+                return new DOMRect(minX, minY, maxX - minX, maxY - minY);
             },
         },
     ];
@@ -137,6 +151,34 @@ function tickReposition() {
     _rafId = requestAnimationFrame(tickReposition);
 }
 
+/* ── Inline Waze badges injected into actual UI elements ────────────── */
+
+const WAZE_BADGE_CLASS = 'analogy-waze-inline-badge';
+
+function injectWazeBadges(): void {
+    // Narration panel — top-right corner
+    const panel = document.querySelector('.sherlock-narration-panel') as HTMLElement | null;
+    if (panel && !panel.querySelector(`.${WAZE_BADGE_CLASS}`)) {
+        const badge = document.createElement('div');
+        badge.className = WAZE_BADGE_CLASS;
+        badge.innerHTML = `${WAZE_LOGO_SVG}<span class="analogy-waze-inline-label">Route</span>`;
+        panel.appendChild(badge);
+    }
+
+    // Phase chart container — top-left corner
+    const chartContainer = document.getElementById('phase-chart-container');
+    if (chartContainer && !chartContainer.querySelector(`.${WAZE_BADGE_CLASS}`)) {
+        const badge = document.createElement('div');
+        badge.className = `${WAZE_BADGE_CLASS} analogy-waze-inline-badge--chart`;
+        badge.innerHTML = `${WAZE_LOGO_SVG}<span class="analogy-waze-inline-label">Map</span>`;
+        chartContainer.appendChild(badge);
+    }
+}
+
+function removeWazeBadges(): void {
+    document.querySelectorAll(`.${WAZE_BADGE_CLASS}`).forEach(el => el.remove());
+}
+
 export function toggleAnalogyOverlay(): void {
     _active = !_active;
     const btn = document.getElementById('analogy-overlay-btn');
@@ -146,10 +188,12 @@ export function toggleAnalogyOverlay(): void {
         const overlay = ensureOverlay();
         overlay.classList.add('visible');
         positionHighlights();
+        injectWazeBadges();
         _rafId = requestAnimationFrame(tickReposition);
     } else {
         btn?.classList.remove('active');
         if (_overlayEl) _overlayEl.classList.remove('visible');
+        removeWazeBadges();
         if (_rafId !== null) {
             cancelAnimationFrame(_rafId);
             _rafId = null;

@@ -112,7 +112,7 @@ describe('revision-reference', () => {
         });
 
         const summary = buildRevisionCurrentStateSummary(bundle);
-        const prompt = buildRevisionSystemPrompt('4 hours of deep focus, no sleep impact', bundle);
+        const prompt = buildRevisionSystemPrompt('4 hours of deep focus, no sleep quality impact', bundle);
 
         expect(summary[0].baseline).toHaveLength(17);
         expect(summary[0].currentLx).toHaveLength(17);

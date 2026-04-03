@@ -14,7 +14,7 @@ describe('resolveCachedStageHit', () => {
         expect(resolveCachedStageHit('fast-model', 'system', 'user')).toBeNull();
     });
 
-    it('rejects prompt mismatches and skips the stale cache entry', () => {
+    it('returns cached payload with inputMismatch flag when prompts differ', () => {
         vi.spyOn(LLMCache, 'getWithMeta').mockReturnValue({
             payload: { ok: true },
             meta: {
@@ -29,6 +29,10 @@ describe('resolveCachedStageHit', () => {
 
         const hit = resolveCachedStageHit<{ ok: boolean }>('fast-model', 'fresh system', 'fresh user');
 
-        expect(hit).toBeNull();
+        // Session cache is intentionally locked — prompt drift is flagged but not rejected
+        expect(hit).not.toBeNull();
+        expect(hit!.payload).toEqual({ ok: true });
+        expect(hit!.cache.hit).toBe(true);
+        expect(hit!.cache.inputMismatch).toBe(true);
     });
 });

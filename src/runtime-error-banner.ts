@@ -38,24 +38,30 @@ function getEls() {
     if (typeof document === 'undefined') {
         return {
             root: null,
+            collapsedLabel: null,
             title: null,
             body: null,
             retry: null,
+            toggleBtn: null,
             hideBtn: null,
             copyBtn: null,
         };
     }
     const root = document.getElementById('runtime-error-banner');
+    const collapsedLabel = document.getElementById('runtime-error-collapsed-label');
     const title = document.getElementById('runtime-error-title');
     const body = document.getElementById('runtime-error-body');
     const retry = document.getElementById('runtime-error-retry');
+    const toggleBtn = document.getElementById('runtime-error-toggle-btn');
     const hideBtn = document.getElementById('runtime-error-hide-btn');
     const copyBtn = document.getElementById('runtime-error-copy-btn');
     return {
         root: root as HTMLDivElement | null,
+        collapsedLabel: collapsedLabel as HTMLDivElement | null,
         title: title as HTMLDivElement | null,
         body: body as HTMLDivElement | null,
         retry: retry as HTMLDivElement | null,
+        toggleBtn: toggleBtn as HTMLButtonElement | null,
         hideBtn: hideBtn as HTMLButtonElement | null,
         copyBtn: copyBtn as HTMLButtonElement | null,
     };
@@ -83,12 +89,22 @@ function setBannerVariant(variant: 'error' | 'warning'): void {
 }
 
 export function initRuntimeErrorBanner(): void {
-    const { hideBtn, copyBtn } = getEls();
+    const { hideBtn, copyBtn, toggleBtn } = getEls();
     if (!hideBtn || hideBtn.dataset.bound === '1') return;
     hideBtn.dataset.bound = '1';
     hideBtn.addEventListener('click', () => {
         hideRuntimeBug();
     });
+    if (toggleBtn && toggleBtn.dataset.bound !== '1') {
+        toggleBtn.dataset.bound = '1';
+        toggleBtn.addEventListener('click', () => {
+            const { root } = getEls();
+            if (!root) return;
+            const isCollapsed = root.classList.contains('collapsed');
+            root.classList.toggle('collapsed', !isCollapsed);
+            toggleBtn.textContent = isCollapsed ? 'Collapse' : 'Details';
+        });
+    }
     if (copyBtn && copyBtn.dataset.bound !== '1') {
         copyBtn.dataset.bound = '1';
         copyBtn.addEventListener('click', () => {
@@ -109,7 +125,7 @@ export function initRuntimeErrorBanner(): void {
 }
 
 export function reportRuntimeBug(payload: RuntimeBugPayload): void {
-    const { root, title, body, retry } = getEls();
+    const { root, collapsedLabel, title, body, retry, toggleBtn } = getEls();
     if (!root || !title || !body || !retry) return;
     setBannerVariant('error');
 
@@ -120,6 +136,7 @@ export function reportRuntimeBug(payload: RuntimeBugPayload): void {
         .replace(/\s+/g, ' ')
         .trim();
 
+    if (collapsedLabel) collapsedLabel.textContent = 'System notice';
     title.textContent = `${stage} bug detected`;
     body.textContent = failedProvider
         ? `${failedProvider} failed: ${summarizeMessage(payload.message)}`
@@ -137,11 +154,13 @@ export function reportRuntimeBug(payload: RuntimeBugPayload): void {
         retry.style.display = '';
     }
 
+    root.classList.add('collapsed');
+    if (toggleBtn) toggleBtn.textContent = 'Details';
     root.classList.remove('hidden');
 }
 
 export function reportRuntimeFallback(payload: RuntimeFallbackPayload): void {
-    const { root, title, body, retry } = getEls();
+    const { root, collapsedLabel, title, body, retry, toggleBtn } = getEls();
     if (!root || !title || !body || !retry) return;
     setBannerVariant('error');
 
@@ -153,6 +172,7 @@ export function reportRuntimeFallback(payload: RuntimeFallbackPayload): void {
         .trim();
     const message = summarizeMessage(rawMessage);
 
+    if (collapsedLabel) collapsedLabel.textContent = 'Pipeline adapted';
     title.textContent = `${stage} fallback applied`;
     body.textContent = `${failed} failed: ${message}`;
     retry.textContent = `Fell back to ${active}.`;
@@ -161,11 +181,13 @@ export function reportRuntimeFallback(payload: RuntimeFallbackPayload): void {
     // Store full untruncated text for the copy button
     _fullErrorText = `${stage} fallback applied\n${failed} failed: ${rawMessage}\nFell back to ${active}.`;
 
+    root.classList.add('collapsed');
+    if (toggleBtn) toggleBtn.textContent = 'Details';
     root.classList.remove('hidden');
 }
 
 export function reportRuntimeCacheWarning(payload: RuntimeWarningPayload): void {
-    const { root, title, body, retry } = getEls();
+    const { root, collapsedLabel, title, body, retry, toggleBtn } = getEls();
     if (!root || !title || !body || !retry) return;
     setBannerVariant('warning');
 
@@ -175,6 +197,7 @@ export function reportRuntimeCacheWarning(payload: RuntimeWarningPayload): void 
         .trim();
     const detail = String(payload.detail || '').trim();
 
+    if (collapsedLabel) collapsedLabel.textContent = 'System notice';
     title.textContent = titleText;
     body.textContent = summarizeMessage(rawBody);
     retry.textContent = detail;
@@ -183,6 +206,8 @@ export function reportRuntimeCacheWarning(payload: RuntimeWarningPayload): void 
     // Store full untruncated text for the copy button
     _fullErrorText = `${titleText}\n${rawBody}${detail ? `\n${detail}` : ''}`;
 
+    root.classList.add('collapsed');
+    if (toggleBtn) toggleBtn.textContent = 'Details';
     root.classList.remove('hidden');
 }
 
@@ -194,12 +219,13 @@ export function hideRuntimeBug(): void {
 }
 
 export function clearRuntimeBug(): void {
-    const { root, title, body, retry } = getEls();
+    const { root, title, body, retry, toggleBtn } = getEls();
     if (!root || !title || !body || !retry) return;
     title.textContent = 'Agent bug detected';
     body.textContent = '';
     retry.textContent = '';
     retry.style.display = 'none';
-    root.classList.add('hidden');
+    root.classList.add('hidden', 'collapsed');
     root.classList.remove('warning');
+    if (toggleBtn) toggleBtn.textContent = 'Details';
 }

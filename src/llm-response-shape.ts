@@ -8,7 +8,9 @@ import type {
     StrategistCurve,
     StrategistStageResult,
 } from './types';
+import { SUBSTANCE_DB } from './substances';
 import { reportRuntimeBug } from './runtime-error-banner';
+import { parseDoseToMg } from './utils';
 
 export function isCurveLike(item: unknown): item is StrategistCurve {
     if (!item || typeof item !== 'object') return false;
@@ -98,6 +100,9 @@ export function looksInterventionLike(item: unknown): boolean {
     return !!key && parseInterventionTime(timeVal) !== null;
 }
 
+/** Max dose per substance per administration — Lx device holds 1g capsules, max 5 per substance. */
+const MAX_DOSE_MG = 5000;
+
 export function normalizeIntervention(item: unknown): Intervention | null {
     if (!item || typeof item !== 'object') return null;
     const raw = item as Record<string, any>;
@@ -118,6 +123,24 @@ export function normalizeIntervention(item: unknown): Intervention | null {
     }
     if (normalized.rationale == null && typeof raw.reason === 'string') normalized.rationale = raw.reason;
     if (normalized.rationale == null && typeof raw.explanation === 'string') normalized.rationale = raw.explanation;
+
+    // Clamp dose to capsule ceiling (5g / 5000mg per substance per administration)
+    const sub = SUBSTANCE_DB[normalized.key];
+    if (sub && normalized.doseMultiplier) {
+        const baseDoseStr = normalized.dose || sub.standardDose;
+        const baseMg = parseDoseToMg(String(baseDoseStr));
+        if (baseMg !== null) {
+            const totalMg = baseMg * normalized.doseMultiplier;
+            if (totalMg > MAX_DOSE_MG) {
+                const clampedMultiplier = Math.floor((MAX_DOSE_MG / baseMg) * 100) / 100;
+                console.warn(
+                    `[DoseCap] ${sub.name}: ${totalMg}mg exceeds ${MAX_DOSE_MG}mg cap → clamping multiplier from ${normalized.doseMultiplier} to ${clampedMultiplier}`,
+                );
+                normalized.doseMultiplier = Math.max(0.1, clampedMultiplier);
+                normalized.dose = `${Math.round(baseMg * normalized.doseMultiplier)}mg`;
+            }
+        }
+    }
 
     return normalized;
 }
@@ -276,6 +299,12 @@ export function validateStageResponseShape(stage: PipelineStage | string, result
             return ensure(
                 !!result && Array.isArray((result as any).beats) && (result as any).beats.length > 0,
                 'Invalid Sherlock Revision response: expected non-empty beats array.',
+                result,
+            );
+        case 'sherlock7d':
+            return ensure(
+                !!result && Array.isArray((result as any).beats) && (result as any).beats.length > 0,
+                'Invalid Sherlock 7D response: expected non-empty beats array.',
                 result,
             );
         default:

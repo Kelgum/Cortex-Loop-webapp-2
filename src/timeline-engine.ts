@@ -5,6 +5,7 @@
 // Each segment is a pure function of progress (0..1) → visual state.
 
 import { cleanupDivider } from './divider';
+import { removeGamificationOverlay } from './gamification-overlay';
 import { hideNarrationPanel } from './sherlock';
 import { clamp } from './utils';
 
@@ -38,9 +39,12 @@ export interface SegmentContext {
     groups: Record<string, SVGGElement>;
     // Data populated progressively as LLM calls complete
     curvesData: any | null;
+    bioCorrectedCurvesData: any[] | null;
     interventions: any[] | null;
     lxCurves: any[] | null;
+    bioCorrectedLxCurves: any[] | null;
     incrementalSnapshots: any[] | null;
+    bioCorrectedIncrementalSnapshots: any[] | null;
     biometricChannels: any[] | null;
     revisionDiff: any[] | null;
     wordCloudEffects: any[] | null;
@@ -124,8 +128,8 @@ export class TimelineEngine {
             'phase-mission-arrows',
             'phase-yaxis-indicators',
             'phase-legend',
-            'phase-tooltip-overlay',
             'phase-biometric-strips',
+            'phase-tooltip-overlay',
         ];
         const groups: Record<string, SVGGElement> = {};
         for (const id of groupIds) {
@@ -137,9 +141,12 @@ export class TimelineEngine {
             svgRoot,
             groups,
             curvesData: null,
+            bioCorrectedCurvesData: null,
             interventions: null,
             lxCurves: null,
+            bioCorrectedLxCurves: null,
             incrementalSnapshots: null,
+            bioCorrectedIncrementalSnapshots: null,
             biometricChannels: null,
             revisionDiff: null,
             wordCloudEffects: null,
@@ -352,6 +359,7 @@ export class TimelineEngine {
 
         // Clean up the Sherlock narration panel (lives on <body>, outside SVG groups)
         hideNarrationPanel();
+        removeGamificationOverlay();
 
         // Reset SVG viewBox to default — segments will expand as needed in enter().
         // Read viewW from the current viewBox to avoid hardcoding dimensions.

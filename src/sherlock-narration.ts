@@ -1,8 +1,11 @@
 import type {
+    DaySnapshot,
     DiffEntry,
     Intervention,
     NarrationBeat,
     RevisionNarrationBeat,
+    Sherlock7DBeat,
+    Sherlock7DNarration,
     SherlockNarration,
     SherlockRevisionNarration,
 } from './types';
@@ -252,6 +255,80 @@ export function normalizeSherlockRevisionNarration(
             intro: '',
             beats,
             outro: normalizeOutro(base.outro, DEFAULT_SHERLOCK_REVISION_OUTRO),
+        },
+        status,
+        modelBeatCount,
+        fallbackBeatCount,
+    };
+}
+
+// ── Sherlock 7D normalization ──
+
+const DEFAULT_SHERLOCK_7D_OUTRO = 'Seven days of adaptation. The protocol has learned your rhythm.';
+
+export function normalizeSherlock7DNarration(
+    raw: unknown,
+    days: DaySnapshot[],
+    enabled: boolean,
+): SherlockNormalizationResult<Sherlock7DNarration> {
+    if (!enabled || !raw) {
+        return { narration: null, status: 'disabled-or-empty', modelBeatCount: 0, fallbackBeatCount: 0 };
+    }
+
+    const base = raw as any;
+    const rawBeats: unknown[] = Array.isArray(base.beats) ? base.beats : [];
+
+    let modelBeatCount = 0;
+    let fallbackBeatCount = 0;
+
+    // Build beats for days 1-7 (skip day 0)
+    const beats: Sherlock7DBeat[] = [];
+    for (let i = 1; i < days.length; i++) {
+        const day = days[i];
+        const rawBeat = rawBeats.find((b: any) => b && b.day === day.day) || rawBeats[i - 1];
+
+        if (rawBeat && typeof rawBeat === 'object') {
+            const rb = rawBeat as any;
+            const text = extractSherlockBeatText(rb);
+            if (text) {
+                modelBeatCount++;
+                beats.push({
+                    day: day.day,
+                    weekday: rb.weekday || `Day ${day.day}`,
+                    text,
+                    direction: rb.direction === 'up' || rb.direction === 'down' ? rb.direction : 'neutral',
+                    keyChanges: typeof rb.keyChanges === 'string' ? rb.keyChanges : 'Protocol adjusted',
+                    topSubstanceKey: rb.topSubstanceKey || undefined,
+                    topSubstanceName: rb.topSubstanceName || undefined,
+                });
+                continue;
+            }
+        }
+
+        // Fallback: use existing narrative from DaySnapshot
+        fallbackBeatCount++;
+        beats.push({
+            day: day.day,
+            weekday: `Day ${day.day}`,
+            text: day.dayNarrative || day.narrativeBeat || `Day ${day.day} protocol adaptation.`,
+            direction: 'neutral',
+            keyChanges: 'Protocol adjusted',
+            topSubstanceKey: day.interventions[0]?.key,
+            topSubstanceName: day.interventions[0]?.substance?.name,
+        });
+    }
+
+    if (beats.length === 0) {
+        return { narration: null, status: 'disabled-or-empty', modelBeatCount: 0, fallbackBeatCount: 0 };
+    }
+
+    const status: SherlockNormalizationStatus =
+        modelBeatCount === 0 ? 'full-fallback' : fallbackBeatCount === 0 ? 'full-model' : 'partial-fallback';
+
+    return {
+        narration: {
+            beats,
+            outro: normalizeOutro(base.outro, DEFAULT_SHERLOCK_7D_OUTRO),
         },
         status,
         modelBeatCount,

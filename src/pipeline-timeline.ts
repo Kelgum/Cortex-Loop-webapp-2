@@ -18,7 +18,9 @@ export type PipelineLaneId =
     | 'knight'
     | 'spotter-daily'
     | 'strategist-bio-daily'
-    | 'grandmaster-daily';
+    | 'grandmaster-daily'
+    | 'referee'
+    | 'agent-match';
 
 export type PipelineStatus = 'queued' | 'running' | 'done' | 'error';
 
@@ -42,6 +44,7 @@ export interface PipelineEvent {
 
 const LANE_ORDER: PipelineLaneId[] = [
     'scout',
+    'agent-match',
     'strategist',
     'chess-player',
     'sherlock',
@@ -52,10 +55,12 @@ const LANE_ORDER: PipelineLaneId[] = [
     'spotter-daily',
     'strategist-bio-daily',
     'grandmaster-daily',
+    'referee',
 ];
 
 const LANE_LABELS: Record<PipelineLaneId, string> = {
     scout: 'Scout',
+    'agent-match': 'Agent Match',
     strategist: 'Strategist',
     'chess-player': 'Chess Player',
     sherlock: 'Sherlock',
@@ -66,10 +71,12 @@ const LANE_LABELS: Record<PipelineLaneId, string> = {
     'spotter-daily': 'Spotter (7d)',
     'strategist-bio-daily': 'Strategist Bio (7d)',
     'grandmaster-daily': 'Grandmaster (7d)',
+    referee: 'Referee',
 };
 
 const LANE_COLORS: Record<PipelineLaneId, { dark: string; light: string }> = {
     scout: { dark: '#fbbf24', light: '#d97706' },
+    'agent-match': { dark: '#fb923c', light: '#ea580c' },
     strategist: { dark: '#c084fc', light: '#7c3aed' },
     'chess-player': { dark: '#22c55e', light: '#15803d' },
     sherlock: { dark: '#a855f7', light: '#7e22ce' },
@@ -80,6 +87,7 @@ const LANE_COLORS: Record<PipelineLaneId, { dark: string; light: string }> = {
     'spotter-daily': { dark: '#ef4444', light: '#dc2626' },
     'strategist-bio-daily': { dark: '#4ade80', light: '#16a34a' },
     'grandmaster-daily': { dark: '#60a5fa', light: '#2563eb' },
+    referee: { dark: '#fbbf24', light: '#d97706' },
 };
 
 const MAX_LANE_SLOTS = 12;
@@ -198,6 +206,7 @@ function mapLane(stageClass: string): PipelineLaneId | null {
             return 'chess-player';
         case 'sherlock-model':
         case 'sherlock-revision-model':
+        case 'sherlock7d-model':
             return 'sherlock';
         case 'biometric-rec-model':
         case 'biometric-profile-model':
@@ -216,6 +225,10 @@ function mapLane(stageClass: string): PipelineLaneId | null {
             return 'strategist-bio-daily';
         case 'grandmaster-daily-model':
             return 'grandmaster-daily';
+        case 'referee-model':
+            return 'referee';
+        case 'agent-match-model':
+            return 'agent-match';
         default:
             return null;
     }
@@ -229,6 +242,7 @@ function mapSubstep(entry: any): string {
     if (stageClass === 'intervention-model') return 'Protocol';
     if (stageClass === 'sherlock-model') return 'Narration';
     if (stageClass === 'sherlock-revision-model') return 'Revision Narration';
+    if (stageClass === 'sherlock7d-model') return '7D Narration';
     if (stageClass === 'biometric-rec-model') return 'Device Rec';
     if (stageClass === 'biometric-profile-model') return 'Profile Draft';
     if (stageClass === 'biometric-channel-model') return 'Channel Pick';
@@ -239,6 +253,7 @@ function mapSubstep(entry: any): string {
     if (stageClass === 'spotter-daily-model') return 'Bio Perturb';
     if (stageClass === 'strategist-bio-daily-model') return 'Bio Correct';
     if (stageClass === 'grandmaster-daily-model') return 'Protocols';
+    if (stageClass === 'referee-model') return 'Stacking Fix';
     return stage || 'Step';
 }
 

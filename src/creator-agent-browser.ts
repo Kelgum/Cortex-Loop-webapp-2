@@ -157,6 +157,7 @@ function filterAgents(query: string): AgentConfig[] {
     return allAgents.filter(a => {
         const haystack = [
             a.meta.name,
+            a.meta.creatorName,
             a.meta.creatorHandle,
             a.meta.tagline,
             a.meta.targetPopulation,

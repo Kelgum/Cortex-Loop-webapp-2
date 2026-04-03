@@ -5,6 +5,7 @@
 
 import type { AnimationSegment } from '../timeline-engine';
 import { phasePointsToPath, phasePointsToFillPath } from '../curve-utils';
+import { syncGamificationOverlayFrame } from '../gamification-overlay';
 import { placePeakDescriptors } from '../phase-chart';
 
 // --- Per-diff-entry revision timing marker ---
@@ -37,7 +38,7 @@ export function createLxMorphToRevisionSegment(startTime: number): AnimationSegm
 
     return {
         id: 'lx-morph-to-revision',
-        label: 'Lx Revise',
+        label: 'Lx Execute',
         category: 'revision',
         startTime,
         duration: 1200,
@@ -49,7 +50,9 @@ export function createLxMorphToRevisionSegment(startTime: number): AnimationSegm
         },
 
         render(t, ctx) {
-            if (!ctx.lxCurves || !ctx.curvesData) return;
+            const sourceCurvesData = ctx.bioCorrectedCurvesData ?? ctx.curvesData;
+            const sourceLxCurves = ctx.bioCorrectedLxCurves ?? ctx.lxCurves;
+            if (!sourceLxCurves || !sourceCurvesData) return;
             const newLxCurves = ctx._revisedLxCurves;
             if (!newLxCurves) return;
 
@@ -62,9 +65,10 @@ export function createLxMorphToRevisionSegment(startTime: number): AnimationSegm
 
             // ease-in-out quadratic
             const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+            const morphedCurves: any[] = [];
 
-            for (let ci = 0; ci < ctx.curvesData.length; ci++) {
-                const oldPts = ctx.lxCurves[ci]?.points || [];
+            for (let ci = 0; ci < sourceCurvesData.length; ci++) {
+                const oldPts = sourceLxCurves[ci]?.points || [];
                 const newPts = newLxCurves[ci]?.points || [];
                 const len = Math.min(oldPts.length, newPts.length);
                 if (len === 0) continue;
@@ -79,18 +83,29 @@ export function createLxMorphToRevisionSegment(startTime: number): AnimationSegm
 
                 if (lxStrokes[ci]) lxStrokes[ci].setAttribute('d', phasePointsToPath(morphed, true));
                 if (lxFills[ci]) lxFills[ci].setAttribute('d', phasePointsToFillPath(morphed, true));
+                morphedCurves.push({
+                    ...newLxCurves[ci],
+                    baseline: newLxCurves[ci]?.baseline ?? ctx.lxCurves[ci]?.baseline,
+                    points: morphed,
+                });
             }
+
+            syncGamificationOverlayFrame(morphedCurves, sourceCurvesData, 'phase4', {
+                immediate: true,
+                entranceProgress: 1,
+            });
         },
 
         exit(ctx) {
             // On forward exit: curves are at revision position. Update peak descriptors.
-            if (ctx._revisedLxCurves && ctx.curvesData) {
+            const sourceCurvesData = ctx.bioCorrectedCurvesData ?? ctx.curvesData;
+            if (ctx._revisedLxCurves && sourceCurvesData) {
                 const baseGroup = ctx.groups['phase-baseline-curves'];
                 const overlay = ctx.groups['phase-tooltip-overlay'];
                 if (baseGroup) baseGroup.querySelectorAll('.peak-descriptor').forEach(el => el.remove());
                 if (overlay) overlay.querySelectorAll('.peak-descriptor').forEach((el: any) => el.remove());
 
-                const lxCurvesForLabels = ctx.curvesData.map((c: any, i: number) => ({
+                const lxCurvesForLabels = sourceCurvesData.map((c: any, i: number) => ({
                     ...c,
                     desired: ctx._revisedLxCurves[i]?.points,
                 }));

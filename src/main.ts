@@ -5,7 +5,7 @@
  */
 import '../styles.css';
 
-import { PHASE_CHART } from './constants';
+import { PHASE_CHART, BADGE_CATEGORIES } from './constants';
 import {
     AppState,
     PhaseState,
@@ -44,9 +44,15 @@ import {
     morphToDesiredCurves,
     startTimelineScanLine,
     stopTimelineScanLine,
+    hideWeekStrip,
+    placePeakDescriptors,
 } from './phase-chart';
 import { callFastModel, callMainModelForCurves, callInterventionModel, callSherlockModel } from './llm-pipeline';
-import { validateInterventions, computeIncrementalLxOverlay, animateSequentialLxReveal } from './lx-system';
+import {
+    validateInterventions, computeIncrementalLxOverlay, animateSequentialLxReveal,
+    renderLxCurves, renderSubstanceTimeline, revealTimelinePillsInstant,
+    renderLxBandsStatic, animatePhaseChartViewBoxHeight,
+} from './lx-system';
 import {
     showBiometricTrigger,
     showInterventionPlayButton,
@@ -56,6 +62,7 @@ import {
     configureBiometricRuntime,
     renderBiometricStrips,
     hideBiometricTrigger,
+    showWeekSequenceButton,
 } from './biometric';
 import { BiometricState, RevisionState, SherlockState } from './state';
 import { clearNarration, hideNarrationPanel, showLxStepControls } from './sherlock';
@@ -85,9 +92,11 @@ import {
     buildPhase2Segments,
     addBioScanLine,
     buildPhase3Segments,
+    buildPhase3BioCorrectionSegments,
     buildPhase4Segments,
 } from './timeline-builder';
 import { BIOMETRIC_DEVICES } from './biometric-devices';
+import { BIO_CORRECTION_MORPH_MS } from './bio-correction';
 import { getAppDom } from './dom';
 import { sessionSettingsStore, settingsStore, STORAGE_KEYS } from './settings-store';
 import { TaskGroup } from './task-group';
@@ -95,8 +104,15 @@ import { initDebugBundleExport } from './debug-bundle';
 import { LLMCache } from './llm-cache';
 import { initCycleUi } from './cycle-ui';
 import { getLoadedCycleId, getLoadedCyclePrompt } from './cycle-store';
+import {
+    getRuntimeReplaySnapshot,
+    isRuntimeReplayActive,
+    recordDesignReplayState,
+    resetRuntimeReplaySnapshotDraft,
+} from './replay-snapshot';
 import { initAgentDesigner } from './creator-agent-designer';
 import { initAgentBrowser } from './creator-agent-browser';
+import { initModeSwitcher, getCurrentMode, refreshStreamCardPresentation } from './mode-switcher';
 import { rankCreatorAgents, showAgentMatchPanel, resetAgentMatch } from './creator-agent-matcher';
 import { getAgentById } from './creator-agents/index';
 import {
@@ -120,7 +136,11 @@ type PendingPromptPayload = {
     prompt: string;
     rxMode?: 'off' | 'rx' | 'rx-only';
     timestamp: number;
+    skipTo7D?: boolean;
+    openAtLxReady?: boolean;
 };
+
+let _landAtLxReadyOnNextSubmit = false;
 
 type StrategistOutcome = { ok: true; result: any; settledAt: number } | { ok: false; error: any; settledAt: number };
 
@@ -690,6 +710,16 @@ function stopBioRevealPlayheadTracker() {
     }
 }
 
+function stopBioCorrectionPlayheadTracker() {
+    const rafId = TimelineState.playheadTrackers.bioCorrection.rafId;
+    if (rafId != null) {
+        cancelAnimationFrame(rafId);
+        TimelineState.playheadTrackers.bioCorrection.rafId = null;
+    }
+}
+
+let _bioCorrectionEndTime: number | null = null;
+
 function startBioRevealPlayheadTracker(
     engine: TimelineEngineHandle,
     revealStartTime: number,
@@ -738,6 +768,37 @@ function startBioScanPlayheadTracker(engine: TimelineEngineHandle, timelineStart
     };
 
     TimelineState.playheadTrackers.bioScan.rafId = requestAnimationFrame(tick);
+}
+
+function startBioCorrectionPlayheadTracker(
+    engine: TimelineEngineHandle,
+    correctionStartTime: number,
+    correctionDurationMs: number,
+    correctionEndTime: number,
+) {
+    stopBioCorrectionPlayheadTracker();
+    TimelineState.playheadTrackers.bioCorrection.wallStart = performance.now();
+    TimelineState.playheadTrackers.bioCorrection.timelineStart = correctionStartTime;
+
+    const tick = () => {
+        if (TimelineState.engine !== engine) {
+            stopBioCorrectionPlayheadTracker();
+            return;
+        }
+
+        const elapsed =
+            performance.now() - (TimelineState.playheadTrackers.bioCorrection.wallStart ?? performance.now());
+        if (elapsed >= correctionDurationMs) {
+            engine.advanceTimeTo(correctionEndTime);
+            stopBioCorrectionPlayheadTracker();
+            return;
+        }
+
+        engine.advanceTimeTo(correctionStartTime + elapsed);
+        TimelineState.playheadTrackers.bioCorrection.rafId = requestAnimationFrame(tick);
+    };
+
+    TimelineState.playheadTrackers.bioCorrection.rafId = requestAnimationFrame(tick);
 }
 
 function estimateBioScanLaneCount(): number {
@@ -792,10 +853,45 @@ configureBiometricRuntime({
         TimelineState.playheadTrackers.bioScan.wallStart = null;
         TimelineState.playheadTrackers.bioScan.timelineStart = null;
     },
+    onBioCorrectionStart: () => {
+        const engine = TimelineState.engine;
+        if (!engine) return;
+        const timelineEngine = engine as TimelineEngine;
+        const correctionStartTime = TimelineState.cursor;
+        TimelineState.cursor = buildPhase3BioCorrectionSegments(timelineEngine, TimelineState.cursor);
+        _bioCorrectionEndTime = TimelineState.cursor;
+        engine.advanceTimeTo(correctionStartTime);
+        startBioCorrectionPlayheadTracker(
+            engine,
+            correctionStartTime,
+            BIO_CORRECTION_MORPH_MS,
+            _bioCorrectionEndTime,
+        );
+    },
+    onBioCorrectionStop: () => {
+        const engine = TimelineState.engine;
+        stopBioCorrectionPlayheadTracker();
+        TimelineState.playheadTrackers.bioCorrection.wallStart = null;
+        TimelineState.playheadTrackers.bioCorrection.timelineStart = null;
+        if (engine && _bioCorrectionEndTime != null) {
+            engine.advanceTimeTo(_bioCorrectionEndTime);
+        }
+        _bioCorrectionEndTime = null;
+    },
+    onBioCorrectionAbort: () => {
+        stopBioCorrectionPlayheadTracker();
+        TimelineState.playheadTrackers.bioCorrection.wallStart = null;
+        TimelineState.playheadTrackers.bioCorrection.timelineStart = null;
+        _bioCorrectionEndTime = null;
+    },
     onRevisionPlay: (diff: any[]) => {
         const engine = TimelineState.engine;
         if (!engine) return;
         const timelineEngine = engine as TimelineEngine;
+        stopBioCorrectionPlayheadTracker();
+        TimelineState.playheadTrackers.bioCorrection.wallStart = null;
+        TimelineState.playheadTrackers.bioCorrection.timelineStart = null;
+        _bioCorrectionEndTime = null;
         engine.resolveGate('biometric-gate');
         TimelineState.cursor = buildPhase4Segments(timelineEngine, TimelineState.cursor, diff);
         engine.resolveGate('revision-gate');
@@ -820,12 +916,17 @@ configureBiometricRuntime({
 export async function handlePromptSubmit(e) {
     e.preventDefault();
 
+    // In Stream mode, the form is used for search — don't launch the pipeline
+    if (getCurrentMode() === 'stream') return;
+
     const { prompt: promptDom, phaseChart } = getAppDom();
     const prompt = promptDom.input.value.trim();
     if (!prompt || PhaseState.isProcessing) return;
 
     PhaseState.userGoal = prompt;
     LLMCache.startLiveFlow();
+    resetRuntimeReplaySnapshotDraft();
+    const replaySnapshot = isRuntimeReplayActive() ? getRuntimeReplaySnapshot() : null;
 
     const shouldHardResetBeforeNewPrompt =
         document.body.classList.contains('phase-engaged') || PhaseState.maxPhaseReached >= 0 || !!TimelineState.engine;
@@ -835,12 +936,19 @@ export async function handlePromptSubmit(e) {
         return;
     }
 
+    const landAtLxReady = _landAtLxReadyOnNextSubmit;
+    _landAtLxReadyOnNextSubmit = false;
+
     // Ensure no stale timeline trackers survive across prompt resubmits.
     stopPromptPlayheadTracker();
     stopBioScanPlayheadTracker();
     stopBioRevealPlayheadTracker();
+    stopBioCorrectionPlayheadTracker();
     TimelineState.playheadTrackers.bioScan.wallStart = null;
     TimelineState.playheadTrackers.bioScan.timelineStart = null;
+    TimelineState.playheadTrackers.bioCorrection.wallStart = null;
+    TimelineState.playheadTrackers.bioCorrection.timelineStart = null;
+    _bioCorrectionEndTime = null;
     TimelineState.onLxStepWait = null;
     TimelineState.onLxStepWaitOwner = null;
     TimelineState.runTasks?.cancelAll();
@@ -965,15 +1073,17 @@ export async function handlePromptSubmit(e) {
     // Log user input to debug panel
     DebugLog.clear();
 
-    // Clean up multi-day state (release viewBox lock, hide ribbon)
+    // Clean up multi-day state (release viewBox lock, hide ribbon, restore day/night bands)
     MultiDayState.lockedViewBoxHeight = null;
     MultiDayState.maxTimelineLanes = 0;
+    MultiDayState.bioBaseTranslateY = 0;
     MultiDayState.phase = 'idle';
     MultiDayState.days = [];
     MultiDayState.currentDay = 0;
     MultiDayState.bioCorrectedBaseline = null;
     MultiDayState.knightOutput = null;
     MultiDayState.startWeekday = null;
+    hideWeekStrip();
     const mdRibbon = document.getElementById('multi-day-ribbon');
     if (mdRibbon) mdRibbon.classList.remove('visible', 'loading');
     document.body.classList.remove('multi-day-active');
@@ -1028,6 +1138,11 @@ export async function handlePromptSubmit(e) {
             typeof fastResult.cycleFilename === 'string' && fastResult.cycleFilename.trim().length > 0
                 ? fastResult.cycleFilename.trim().slice(0, 60)
                 : prompt.slice(0, 40).trim();
+        // Extract badge category from Scout result
+        const rawBadge =
+            typeof fastResult.badgeCategory === 'string' ? fastResult.badgeCategory.trim().toUpperCase() : null;
+        PhaseState.badgeCategory =
+            rawBadge && (BADGE_CATEGORIES as readonly string[]).includes(rawBadge) ? rawBadge : null;
     } catch (err) {
         hideStrategistPlayButton();
         stopScanLine();
@@ -1120,7 +1235,17 @@ export async function handlePromptSubmit(e) {
     const curvesResult = strategistOutcome.result;
 
     // Robust extraction: handle array, wrapped object, or single-curve object responses.
-    const curvesData = extractCurvesData(curvesResult);
+    const extractedCurvesData = extractCurvesData(curvesResult);
+    const curvesData =
+        replaySnapshot?.design?.curvesData && replaySnapshot.design.curvesData.length > 0
+            ? replaySnapshot.design.curvesData
+            : extractedCurvesData;
+
+    // Store the Strategist's protected effect (axis the user wants preserved but isn't shown as a curve)
+    PhaseState.strategistProtectedEffect =
+        curvesResult && typeof curvesResult === 'object' && typeof (curvesResult as any).protectedEffect === 'string'
+            ? (curvesResult as any).protectedEffect
+            : '';
 
     if (curvesData.length === 0) {
         hideStrategistPlayButton();
@@ -1249,10 +1374,9 @@ export async function handlePromptSubmit(e) {
             _strategistVcrState = 'baseline-optimize';
             resolve();
         };
-        if (_strategistQueuedFirstClick || isTurboActive()) {
-            _strategistQueuedFirstClick = false;
-            queueMicrotask(() => _strategistPlayHandler?.());
-        }
+        // Always auto-advance: word cloud → chart transition shows Optimize without requiring a click
+        _strategistQueuedFirstClick = false;
+        queueMicrotask(() => _strategistPlayHandler?.());
     });
 
     // === SECOND CLICK: Baseline fades, Optimize flows left and becomes Optimizing ===
@@ -1306,7 +1430,7 @@ export async function handlePromptSubmit(e) {
     setPlayheadMilestone(tlScanStartTime);
 
     // Wait for intervention model
-    let interventionData = PhaseState.interventionResult;
+    let interventionData = replaySnapshot?.design?.interventionResult || PhaseState.interventionResult;
     if (!interventionData && PhaseState.interventionPromise) {
         interventionData = await PhaseState.interventionPromise;
     }
@@ -1359,9 +1483,22 @@ export async function handlePromptSubmit(e) {
     }
 
     // Compute incremental Lx overlays (one per substance step)
-    const incrementalSnapshots = computeIncrementalLxOverlay(interventions, curvesData);
+    const replayIncrementalSnapshots = replaySnapshot?.design?.incrementalSnapshots;
+    const incrementalSnapshots =
+        replayIncrementalSnapshots && replayIncrementalSnapshots.length > 0
+            ? replayIncrementalSnapshots
+            : computeIncrementalLxOverlay(interventions, curvesData);
     PhaseState.incrementalSnapshots = incrementalSnapshots;
-    PhaseState.lxCurves = incrementalSnapshots[incrementalSnapshots.length - 1].lxCurves;
+    PhaseState.lxCurves =
+        replaySnapshot?.design?.lxCurves && replaySnapshot.design.lxCurves.length > 0
+            ? replaySnapshot.design.lxCurves
+            : incrementalSnapshots[incrementalSnapshots.length - 1].lxCurves;
+    recordDesignReplayState({
+        curvesData,
+        interventionResult: PhaseState.interventionResult,
+        lxCurves: PhaseState.lxCurves,
+        incrementalSnapshots,
+    });
 
     // Populate engine context with intervention data
     engine.getContext().interventions = interventions;
@@ -1414,6 +1551,11 @@ export async function handlePromptSubmit(e) {
 
     // Handoff from strategist to canonical VCR only when first substance is ready.
     await animateStrategistOptimizingCollapseOut();
+    if (landAtLxReady) {
+        // Stream-card loads should arrive at the Lx gate ready to press,
+        // not auto-play through the first substance step.
+        AppState.turboTargetPhase = 0;
+    }
     showInterventionPlayButton();
     showLxStepControls(incrementalSnapshots.length);
     _pendingPlayGateId = 'play-gate';
@@ -1525,6 +1667,185 @@ function initVersionFooter() {
         `v${version}` + ` <span>·</span> ${hash}` + ` <span>·</span> ${branch}` + (timeStr ? `<br>${timeStr}` : '');
 }
 
+function applyBandBrightness(value: number): void {
+    // value 0–100: 0 = dim (fill-opacity 0.18, brightness 1.0), 100 = max (fill-opacity 0.50, brightness 1.5)
+    const t = Math.max(0, Math.min(100, value)) / 100;
+    const fillOpacity = 0.18 + t * (0.5 - 0.18);
+    const brightness = 1.0 + t * (1.5 - 1.0);
+    document.documentElement.style.setProperty('--band-fill-opacity', fillOpacity.toFixed(3));
+    document.documentElement.style.setProperty('--band-brightness', brightness.toFixed(2));
+}
+
+type SettingsVisualMode = 'design' | 'stream';
+
+const STREAM_VISUAL_DEFAULTS = {
+    cardDensity: 50,
+    cardChrome: 50,
+    titleScale: 50,
+    titleColorIntensity: 50,
+    badgeIntensity: 50,
+} as const;
+
+let visualControlsExpanded = false;
+
+function clampVisualValue(value: number): number {
+    return Math.max(0, Math.min(100, value));
+}
+
+function resolveSettingsVisualMode(): SettingsVisualMode {
+    const hash = window.location.hash.replace('#', '').toLowerCase();
+    if (hash === 'stream' || hash === 'design') return hash;
+    const stored = settingsStore.getString(STORAGE_KEYS.appMode);
+    return stored === 'stream' ? 'stream' : 'design';
+}
+
+function applyStreamCardDensity(value: number): void {
+    const t = (clampVisualValue(value) - 50) / 50;
+    const width = 188 + t * 16;
+    const gap = 12 + t * 2;
+    document.documentElement.style.setProperty('--stream-card-width', `${width.toFixed(1)}px`);
+    document.documentElement.style.setProperty('--stream-card-gap', `${gap.toFixed(1)}px`);
+}
+
+function applyStreamCardChrome(value: number): void {
+    const t = (clampVisualValue(value) - 50) / 50;
+    document.documentElement.style.setProperty('--stream-card-bg-top-alpha', (0.885 + t * 0.045).toFixed(3));
+    document.documentElement.style.setProperty('--stream-card-bg-bottom-alpha', (0.94 + t * 0.03).toFixed(3));
+    document.documentElement.style.setProperty('--stream-card-border-opacity', (0.125 + t * 0.05).toFixed(3));
+    document.documentElement.style.setProperty('--stream-card-hover-border-opacity', (0.19 + t * 0.05).toFixed(3));
+    document.documentElement.style.setProperty('--stream-card-shadow-alpha', (0.22 + t * 0.1).toFixed(3));
+    document.documentElement.style.setProperty('--stream-card-shadow-hover-alpha', (0.29 + t * 0.1).toFixed(3));
+    document.documentElement.style.setProperty('--stream-card-name-opacity', (0.9 + t * 0.08).toFixed(3));
+    document.documentElement.style.setProperty('--stream-card-prompt-alpha', (0.77 + t * 0.12).toFixed(3));
+    document.documentElement.style.setProperty('--stream-card-meta-alpha', (0.71 + t * 0.1).toFixed(3));
+    document.documentElement.style.setProperty('--stream-card-device-opacity', (0.36 + t * 0.1).toFixed(3));
+    document.documentElement.style.setProperty('--stream-card-device-hover-opacity', (0.62 + t * 0.12).toFixed(3));
+}
+
+function applyStreamTitleScale(value: number): void {
+    const t = (clampVisualValue(value) - 50) / 50;
+    const scale = 1 + t * 0.08;
+    document.documentElement.style.setProperty('--stream-title-scale', scale.toFixed(3));
+}
+
+function applyStoredStreamVisualControls(): void {
+    applyStreamCardDensity(settingsStore.getNumber(STORAGE_KEYS.streamCardDensity, STREAM_VISUAL_DEFAULTS.cardDensity));
+    applyStreamCardChrome(settingsStore.getNumber(STORAGE_KEYS.streamCardChrome, STREAM_VISUAL_DEFAULTS.cardChrome));
+    applyStreamTitleScale(settingsStore.getNumber(STORAGE_KEYS.streamTitleScale, STREAM_VISUAL_DEFAULTS.titleScale));
+}
+
+function renderVisualControl(label: string, inputId: string, value: number): string {
+    return (
+        `<div class="settings-control">` +
+        `<div class="settings-control-header">` +
+        `<label class="settings-control-label" for="${inputId}">${label}</label>` +
+        `<span class="settings-control-value" id="${inputId}-value">${value}</span>` +
+        `</div>` +
+        `<input id="${inputId}" type="range" min="0" max="100" value="${value}" class="settings-slider" />` +
+        `</div>`
+    );
+}
+
+function buildVisualControlsMarkup(mode: SettingsVisualMode): string {
+    if (mode === 'design') {
+        const bandValue = settingsStore.getNumber(STORAGE_KEYS.bandBrightness, 50);
+        return renderVisualControl('AUC Band Brightness', 'band-brightness-slider', bandValue);
+    }
+
+    return [
+        renderVisualControl(
+            'Card Density',
+            'stream-card-density-slider',
+            settingsStore.getNumber(STORAGE_KEYS.streamCardDensity, STREAM_VISUAL_DEFAULTS.cardDensity),
+        ),
+        renderVisualControl(
+            'Card Chrome',
+            'stream-card-chrome-slider',
+            settingsStore.getNumber(STORAGE_KEYS.streamCardChrome, STREAM_VISUAL_DEFAULTS.cardChrome),
+        ),
+        renderVisualControl(
+            'Title Scale',
+            'stream-title-scale-slider',
+            settingsStore.getNumber(STORAGE_KEYS.streamTitleScale, STREAM_VISUAL_DEFAULTS.titleScale),
+        ),
+        renderVisualControl(
+            'Title Color Intensity',
+            'stream-title-color-intensity-slider',
+            settingsStore.getNumber(STORAGE_KEYS.streamTitleColorIntensity, STREAM_VISUAL_DEFAULTS.titleColorIntensity),
+        ),
+        renderVisualControl(
+            'Badge Intensity',
+            'stream-badge-intensity-slider',
+            settingsStore.getNumber(STORAGE_KEYS.streamBadgeIntensity, STREAM_VISUAL_DEFAULTS.badgeIntensity),
+        ),
+    ].join('');
+}
+
+function bindVisualSlider(
+    sliderId: string,
+    onInput: (value: number) => void,
+    valueId = `${sliderId}-value`,
+): void {
+    const slider = document.getElementById(sliderId) as HTMLInputElement | null;
+    const valueEl = document.getElementById(valueId);
+    if (!slider || !valueEl) return;
+
+    const handleInput = () => {
+        const value = clampVisualValue(parseInt(slider.value, 10) || 0);
+        valueEl.textContent = String(value);
+        onInput(value);
+    };
+
+    slider.addEventListener('input', handleInput);
+}
+
+function renderVisualControlsSection(): void {
+    const toggle = document.getElementById('visual-controls-toggle') as HTMLButtonElement | null;
+    const body = document.getElementById('visual-controls-body') as HTMLElement | null;
+    if (!toggle || !body) return;
+
+    const mode = resolveSettingsVisualMode();
+    toggle.setAttribute('aria-expanded', String(visualControlsExpanded));
+    toggle.classList.toggle('expanded', visualControlsExpanded);
+    body.hidden = !visualControlsExpanded;
+
+    if (!visualControlsExpanded) {
+        body.innerHTML = '';
+        return;
+    }
+
+    body.innerHTML = buildVisualControlsMarkup(mode);
+
+    if (mode === 'design') {
+        bindVisualSlider('band-brightness-slider', value => {
+            applyBandBrightness(value);
+            settingsStore.setString(STORAGE_KEYS.bandBrightness, String(value));
+        });
+        return;
+    }
+
+    bindVisualSlider('stream-card-density-slider', value => {
+        applyStreamCardDensity(value);
+        settingsStore.setString(STORAGE_KEYS.streamCardDensity, String(value));
+    });
+    bindVisualSlider('stream-card-chrome-slider', value => {
+        applyStreamCardChrome(value);
+        settingsStore.setString(STORAGE_KEYS.streamCardChrome, String(value));
+    });
+    bindVisualSlider('stream-title-scale-slider', value => {
+        applyStreamTitleScale(value);
+        settingsStore.setString(STORAGE_KEYS.streamTitleScale, String(value));
+    });
+    bindVisualSlider('stream-title-color-intensity-slider', value => {
+        settingsStore.setString(STORAGE_KEYS.streamTitleColorIntensity, String(value));
+        refreshStreamCardPresentation();
+    });
+    bindVisualSlider('stream-badge-intensity-slider', value => {
+        settingsStore.setString(STORAGE_KEYS.streamBadgeIntensity, String(value));
+        refreshStreamCardPresentation();
+    });
+}
+
 export function initSettings() {
     const appDom = getAppDom();
     const btn = appDom.settingsButton;
@@ -1556,9 +1877,24 @@ export function initSettings() {
         });
     }
 
+    applyBandBrightness(settingsStore.getNumber(STORAGE_KEYS.bandBrightness, 50));
+    applyStoredStreamVisualControls();
+
     initDebugBundleExport();
     void initCycleUi();
     initVersionFooter();
+
+    const visualControlsToggle = document.getElementById('visual-controls-toggle') as HTMLButtonElement | null;
+    visualControlsToggle?.addEventListener('click', () => {
+        visualControlsExpanded = !visualControlsExpanded;
+        renderVisualControlsSection();
+    });
+
+    window.addEventListener('cortex:app-mode-changed', () => {
+        if (!popover.classList.contains('hidden')) {
+            renderVisualControlsSection();
+        }
+    });
 
     btn.addEventListener('click', e => {
         e.stopPropagation();
@@ -1569,11 +1905,14 @@ export function initSettings() {
         } else {
             popover.classList.remove('hidden');
             btn.classList.add('active');
+            renderVisualControlsSection();
         }
     });
 
     document.addEventListener('click', e => {
-        if (!popover.contains(e.target as Node) && e.target !== btn && !btn.contains(e.target as Node)) {
+        const target = e.target as HTMLElement | null;
+        const clickedModeTabs = !!target?.closest('.mode-tabs');
+        if (!popover.contains(target as Node) && target !== btn && !btn.contains(target as Node) && !clickedModeTabs) {
             popover.classList.add('hidden');
             btn.classList.remove('active');
         }
@@ -1744,12 +2083,147 @@ export function initThemeToggle() {
             const isLight = isLightMode();
             settingsStore.setString(STORAGE_KEYS.theme, isLight ? 'light' : 'dark');
             refreshChartTheme();
-            // Swap biometric device chip icons for the new theme
-            document.querySelectorAll('.bio-device-chip-icon[data-src-dark]').forEach((img: any) => {
-                img.src = isLight ? img.dataset.srcLight : img.dataset.srcDark;
-            });
+            // Swap biometric device icons for the new theme (panel cards + VCR dock)
+            document
+                .querySelectorAll(
+                    '.bio-dp-card-icon[data-src-dark], .vcr-bio-dock-icon[data-src-dark], .bio-morph-icon[data-src-dark]',
+                )
+                .forEach((img: any) => {
+                    img.src = isLight ? img.dataset.srcLight : img.dataset.srcDark;
+                });
         });
     }
+}
+
+// ============================================
+// Direct Cycle Render — skip pipeline entirely for stream-page loads
+// ============================================
+
+/**
+ * Render the final Phase 4 state directly from the cached replay snapshot,
+ * bypassing the entire 16-agent pipeline. Returns true if successful.
+ */
+function renderCycleDirectFromCache(): boolean {
+    if (!isRuntimeReplayActive()) return false;
+    const snapshot = getRuntimeReplaySnapshot();
+    if (!snapshot) return false;
+
+    // Need revision data (Phase 4 output) and design data (base curves)
+    const designCurves = snapshot.bioCorrected?.curvesData || snapshot.design?.curvesData;
+    const revisionResult = snapshot.revision?.interventionResult;
+    const revisionLxCurves = snapshot.revision?.lxCurves;
+    if (!designCurves || !revisionResult || !revisionLxCurves) return false;
+
+    // Extract and validate revised interventions
+    const rawIvs = extractInterventionsData(revisionResult);
+    const interventions = validateInterventions(rawIvs, designCurves);
+    if (interventions.length === 0) return false;
+
+    // Get biometric channels from Day 0 of week snapshot (if available)
+    const day0 = snapshot.week?.days?.[0];
+    const bioChannels = day0?.biometricChannels || [];
+
+    // ── Set global state ──
+    PhaseState.curvesData = designCurves;
+    PhaseState.interventionResult = revisionResult;
+    PhaseState.lxCurves = revisionLxCurves;
+    PhaseState.incrementalSnapshots = snapshot.revision?.incrementalSnapshots || null;
+    PhaseState.effects = designCurves.map((c: any) => c.effect);
+    PhaseState.maxPhaseReached = 4;
+    PhaseState.viewingPhase = 4;
+    PhaseState.phase = 'revision-rendered';
+    PhaseState.isProcessing = false;
+
+    RevisionState.revisionResult = revisionResult;
+    RevisionState.newInterventions = interventions;
+    RevisionState.newLxCurves = revisionLxCurves;
+    RevisionState.phase = 'rendered';
+
+    if (bioChannels.length > 0) {
+        BiometricState.channels = bioChannels;
+        BiometricState.phase = 'rendered';
+    }
+
+    // ── Engage chart UI ──
+    document.body.classList.add('phase-engaged');
+    const { phaseChart } = getAppDom();
+    const svg = phaseChart.svg as unknown as SVGSVGElement;
+
+    // ── Render chart structure ──
+    buildPhaseXAxis();
+    buildPhaseGrid();
+    buildPhaseYAxes(
+        designCurves.map((c: any) => c.effect),
+        designCurves.map((c: any) => c.color),
+        designCurves,
+    );
+
+    // ── Render baseline + desired curves ──
+    // morphToDesiredCurves handles both baseline dimming and desired curve creation.
+    // In turbo mode (still active at this point), it's fully synchronous.
+    renderBaselineCurvesInstant(designCurves);
+    void morphToDesiredCurves(designCurves);
+
+    // Dim baselines + desired to final Phase 4 visual state (Lx replaces them)
+    const baseGroup = document.getElementById('phase-baseline-curves');
+    const desiredGroup = document.getElementById('phase-desired-curves');
+    if (baseGroup) {
+        baseGroup.querySelectorAll('.phase-baseline-path').forEach((s: any) => {
+            s.setAttribute('stroke-opacity', '0.25');
+        });
+        baseGroup.querySelectorAll('path:not(.phase-baseline-path):not(.peak-descriptor)').forEach((f: any) => {
+            f.setAttribute('fill-opacity', '0');
+        });
+        baseGroup.querySelectorAll('.peak-descriptor').forEach((el: any) => {
+            el.style.opacity = '0';
+        });
+    }
+    if (desiredGroup) {
+        desiredGroup.querySelectorAll('.phase-desired-fill').forEach((f: any) => {
+            f.setAttribute('fill-opacity', '0');
+        });
+    }
+    // Hide mission arrows (created by morphToDesiredCurves)
+    const arrowGroup = document.getElementById('phase-mission-arrows');
+    if (arrowGroup) arrowGroup.querySelectorAll('*').forEach((a: any) => a.setAttribute('opacity', '0'));
+
+    // ── Render Lx overlay curves ──
+    renderLxCurves(revisionLxCurves, designCurves);
+
+    // ── Render substance timeline ──
+    renderSubstanceTimeline(interventions, revisionLxCurves, designCurves);
+    revealTimelinePillsInstant();
+    renderLxBandsStatic(interventions, designCurves);
+
+    // ── Render biometric strips ──
+    if (bioChannels.length > 0) {
+        renderBiometricStrips(bioChannels, true);
+    }
+
+    // ── Set viewBox to fit all content ──
+    const vbParts = (svg.getAttribute('viewBox') || '').split(/\s+/).map(Number);
+    if (vbParts.length === 4) {
+        animatePhaseChartViewBoxHeight(svg, vbParts[3], 0);
+    }
+
+    // ── Place peak descriptors at Lx positions ──
+    if (baseGroup) {
+        baseGroup.querySelectorAll('.peak-descriptor').forEach(el => el.remove());
+        const lxCurvesForLabels = designCurves.map((c: any, i: number) => ({
+            ...c,
+            desired: revisionLxCurves[i]?.points || [],
+        }));
+        placePeakDescriptors(baseGroup, lxCurvesForLabels, 'desired', 0);
+    }
+
+    // ── Show "Stream" VCR button ──
+    showWeekSequenceButton();
+
+    // Deactivate turbo so animations play normally when user clicks Stream
+    AppState.turboTargetPhase = 0;
+
+    console.log('[DirectRender] Cycle loaded from cache — Phase 4 rendered, Stream button ready');
+    return true;
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -1773,6 +2247,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         AppState.rxMode = pendingPrompt.rxMode;
     }
 
+    _landAtLxReadyOnNextSubmit = false;
+
+    // Stream-page cycle load: either jump directly to the 7D replay,
+    // or turbo through setup and pause at the Lx gate.
+    if (pendingPrompt?.skipTo7D) {
+        AppState.turboTargetPhase = 5;
+    } else if (pendingPrompt?.openAtLxReady) {
+        AppState.turboTargetPhase = 2;
+        _landAtLxReadyOnNextSubmit = true;
+    }
+
     initThemeToggle();
     initRuntimeErrorBanner();
     clearRuntimeBug();
@@ -1789,6 +2274,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initDebugPanel();
     initAgentDesigner();
     initAgentBrowser();
+    initModeSwitcher();
     initDemoButtons();
     initAnalogyOverlay();
     const appDom = getAppDom();
@@ -1798,16 +2284,33 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     appDom.prompt.hintExample?.addEventListener('click', e => {
         e.preventDefault();
-        appDom.prompt.input.value = '4 hours of deep focus, no sleep impact';
+        if (getCurrentMode() === 'stream') return;
+        appDom.prompt.input.value = '4 hours of deep focus, no sleep quality impact';
         appDom.prompt.form.dispatchEvent(new Event('submit', { cancelable: true }));
     });
 
     if (pendingPrompt?.prompt) {
         if (appDom.prompt.input && appDom.prompt.form) {
             appDom.prompt.input.value = pendingPrompt.prompt;
-            requestAnimationFrame(() => {
-                appDom.prompt.form.dispatchEvent(new Event('submit', { cancelable: true }));
-            });
+            PhaseState.userGoal = pendingPrompt.prompt;
+
+            // Direct 7D handoff: render final state directly from cache,
+            // bypassing the entire pipeline. Fall back to turbo if cache is missing.
+            if (pendingPrompt.skipTo7D && renderCycleDirectFromCache()) {
+                // Success — chart is rendered, Stream button is showing.
+                // Don't auto-submit the form.
+            } else {
+                // For saved cycles starting at phase 0: populate the prompt but
+                // wait for the user to press submit rather than auto-running.
+                // Other phases auto-run as intended.
+                const isLoadedCycle = !!getLoadedCycleId();
+                const startsAtPhase0 = AppState.turboTargetPhase === 0;
+                if (!isLoadedCycle || !startsAtPhase0) {
+                    requestAnimationFrame(() => {
+                        appDom.prompt.form.dispatchEvent(new Event('submit', { cancelable: true }));
+                    });
+                }
+            }
         }
     }
 

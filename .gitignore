@@ -5,3 +5,6 @@ node_modules/
 dist/
 .cortex-debug/
 saved-cycles/
+.ab-decisions.json
+pipeline-presets.json
+.cortex-logs/

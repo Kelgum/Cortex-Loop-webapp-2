@@ -5,8 +5,8 @@
 set -e
 
 echo "=== Starting Cam Tracker backend (port 8000) ==="
-cd /Users/perry/Documents/Code/Cam_tracker/backend
-source .venv/bin/activate
+cd /Users/perry/Documents/GitHub/Cam_tracker/backend
+source venv/bin/activate
 python run.py &
 TRACKER_PID=$!
 

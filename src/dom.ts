@@ -15,11 +15,11 @@ const PHASE_CHART_GROUP_IDS = [
     'phase-mission-arrows',
     'phase-yaxis-indicators',
     'phase-legend',
-    'phase-tooltip-overlay',
     'phase-biometric-strips',
     'phase-spotter-highlights',
     'phase-poi-connectors',
     'phase-sim-scan-line',
+    'phase-tooltip-overlay',
 ] as const;
 
 export type PhaseChartGroupId = (typeof PHASE_CHART_GROUP_IDS)[number];

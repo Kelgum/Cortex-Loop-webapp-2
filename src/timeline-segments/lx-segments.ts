@@ -3,10 +3,10 @@
 // ============================================
 // Transmute desired curves, per-substance sweep, cinematic playhead morph.
 
-import type { AnimationSegment, SegmentContext } from '../timeline-engine';
+import type { AnimationSegment } from '../timeline-engine';
 import { easeInOutCubic, easeOutCubic } from '../timeline-engine';
 import { PHASE_CHART, PHASE_SMOOTH_PASSES, TIMELINE_ZONE } from '../constants';
-import { svgEl, chartTheme, phaseChartX, phaseChartY, isLightMode, clamp } from '../utils';
+import { svgEl, phaseChartX, phaseChartY, isLightMode, clamp } from '../utils';
 import {
     smoothPhaseValues,
     phasePointsToPath,
@@ -15,9 +15,16 @@ import {
     buildProgressiveMorphPoints,
     interpolatePointsAtTime,
 } from '../curve-utils';
-import { getEffectSubGroup } from '../divider';
-import { allocateTimelineLanes, transmuteDesiredCurves, animatePhaseChartViewBoxHeight } from '../lx-system';
-import { placePeakDescriptors } from '../phase-chart';
+import {
+    ensureGamificationOverlayPresence,
+    removeGamificationOverlay,
+    syncGamificationOverlayFrame,
+} from '../gamification-overlay';
+import {
+    transmuteDesiredCurves,
+    animatePhaseChartViewBoxHeight,
+    computeDoseBarWidth,
+} from '../lx-system';
 
 function brightenTowardWhite(color: string, intensity: number): string {
     const t = clamp(intensity, 0, 1);
@@ -44,6 +51,31 @@ function brightenTowardWhite(color: string, intensity: number): string {
         return `rgb(${br},${bg},${bb})`;
     }
     return color;
+}
+
+export function createGamificationOverlayPresenceSegment(
+    startTime: number,
+    initialLxCurves: any[],
+    curvesData: any[],
+): AnimationSegment {
+    return {
+        id: 'gamification-overlay-presence',
+        label: 'Gain Overlay',
+        category: 'lx-reveal',
+        startTime,
+        duration: 1,
+        phaseIdx: 2,
+
+        enter() {
+            ensureGamificationOverlayPresence(initialLxCurves, curvesData, 'phase2');
+        },
+
+        render() {},
+
+        exit() {
+            removeGamificationOverlay();
+        },
+    };
 }
 
 // --- Transmute desired curves to ghost/dashed ---
@@ -109,7 +141,7 @@ export function createLxCurvesInitSegment(startTime: number): AnimationSegment {
                         fill: 'none',
                         stroke: curve.color,
                         'stroke-width': '2.2',
-                        'stroke-opacity': '0.9',
+                        'stroke-opacity': '0',
                         'stroke-linecap': 'round',
                         'stroke-linejoin': 'round',
                         class: 'phase-lx-path',
@@ -162,6 +194,101 @@ export function createLxCurvesInitSegment(startTime: number): AnimationSegment {
                     s.setAttribute('stroke-opacity', '0.5');
                 });
             }
+        },
+    };
+}
+
+// --- Fade Lx baseline curves in (crossfade with desired dimming) ---
+export function createLxBaselineFadeInSegment(startTime: number): AnimationSegment {
+    const FADE_DURATION = 600;
+    let cachedStrokes: NodeListOf<Element> | null = null;
+
+    return {
+        id: 'lx-baseline-fade-in',
+        label: 'Lx Fade In',
+        category: 'transition',
+        startTime,
+        duration: FADE_DURATION,
+        phaseIdx: 2,
+
+        enter(ctx) {
+            const lxGroup = ctx.groups['phase-lx-curves'];
+            if (lxGroup) {
+                cachedStrokes = lxGroup.querySelectorAll('.phase-lx-path');
+            }
+
+            // Fade arrows
+            const arrowGroup = ctx.groups['phase-mission-arrows'];
+            if (arrowGroup) {
+                Array.from(arrowGroup.children).forEach((a: any) => {
+                    a.setAttribute('opacity', '0');
+                });
+            }
+
+            // Fade desired fills
+            const desiredGroup = ctx.groups['phase-desired-curves'];
+            if (desiredGroup) {
+                desiredGroup.querySelectorAll('.phase-desired-fill').forEach((f: any) => {
+                    f.setAttribute('fill-opacity', '0');
+                });
+            }
+
+            // Fade baseline fills and peak descriptors
+            const baseGroup = ctx.groups['phase-baseline-curves'];
+            if (baseGroup) {
+                baseGroup.querySelectorAll('path:not(.phase-baseline-path):not(.peak-descriptor)').forEach((f: any) => {
+                    f.setAttribute('fill-opacity', '0');
+                });
+                baseGroup.querySelectorAll('.peak-descriptor').forEach((el: any) => {
+                    el.setAttribute('opacity', '0');
+                });
+            }
+        },
+
+        render(t, ctx) {
+            if (!cachedStrokes) return;
+            const opacity = (0.9 * easeOutCubic(t)).toFixed(2);
+            for (let ci = 0; ci < cachedStrokes.length; ci++) {
+                cachedStrokes[ci].setAttribute('stroke-opacity', opacity);
+            }
+        },
+
+        exit(ctx) {
+            // Backward seek: hide Lx strokes, restore arrows/fills
+            if (cachedStrokes) {
+                for (let ci = 0; ci < cachedStrokes.length; ci++) {
+                    cachedStrokes[ci].setAttribute('stroke-opacity', '0');
+                }
+            }
+
+            // Restore arrow visibility
+            const arrowGroup = ctx.groups['phase-mission-arrows'];
+            if (arrowGroup) {
+                Array.from(arrowGroup.children).forEach((a: any) => {
+                    a.setAttribute('opacity', '0.7');
+                });
+            }
+
+            // Restore desired fills
+            const desiredGroup = ctx.groups['phase-desired-curves'];
+            if (desiredGroup) {
+                desiredGroup.querySelectorAll('.phase-desired-fill').forEach((f: any) => {
+                    f.setAttribute('fill-opacity', '0.08');
+                });
+            }
+
+            // Restore baseline fills and peak descriptors
+            const baseGroup = ctx.groups['phase-baseline-curves'];
+            if (baseGroup) {
+                baseGroup.querySelectorAll('path:not(.phase-baseline-path):not(.peak-descriptor)').forEach((f: any) => {
+                    f.setAttribute('fill-opacity', '0.04');
+                });
+                baseGroup.querySelectorAll('.peak-descriptor').forEach((el: any) => {
+                    el.setAttribute('opacity', '0.85');
+                });
+            }
+
+            cachedStrokes = null;
         },
     };
 }
@@ -257,12 +384,14 @@ export function createSubstanceSweepSegment(
     const bestCurveIdx = curveTotals[0]?.ci ?? 0;
     const secondCurveIdx = curveTotals[1]?.ci ?? null;
 
+    const totalSweepDuration = sweepDuration * (warpTotal / WARP_SAMPLES);
+
     return {
         id: `substance-${stepIdx}-sweep`,
         label: substance.substance?.name || substance.key,
         category: 'lx-reveal',
         startTime,
-        duration: sweepDuration * (warpTotal / WARP_SAMPLES),
+        duration: totalSweepDuration,
         phaseIdx: 2,
 
         enter(ctx) {
@@ -389,6 +518,7 @@ export function createSubstanceSweepSegment(
             }
             const lxStrokes = cachedLxStrokes;
             const lxFills = cachedLxFills;
+            const morphedCurves: any[] = [];
 
             for (let ci = 0; ci < curvesData.length; ci++) {
                 if (!sourcePts[ci] || !targetPts[ci]) continue;
@@ -396,7 +526,17 @@ export function createSubstanceSweepSegment(
                 const strokeD = phasePointsToPath(morphed, true);
                 if (lxStrokes[ci]) lxStrokes[ci].setAttribute('d', strokeD);
                 if (lxFills[ci]) lxFills[ci].setAttribute('d', phasePointsToFillPath(morphed, true));
+                morphedCurves.push({
+                    ...(ctx.incrementalSnapshots?.[stepIdx]?.lxCurves?.[ci] || {}),
+                    baseline: ctx.incrementalSnapshots?.[stepIdx]?.lxCurves?.[ci]?.baseline || ctx.curvesData?.[ci]?.baseline,
+                    points: morphed,
+                });
             }
+
+            syncGamificationOverlayFrame(morphedCurves, curvesData, 'phase2', {
+                immediate: true,
+                entranceProgress: stepIdx === 0 ? Math.min(1, (t * totalSweepDuration) / 500) : 1,
+            });
 
             // Primary chevron tracks the most impacted curve.
             if (chevronGroup && chevFill && sourcePts[bestCurveIdx] && targetPts[bestCurveIdx]) {
@@ -524,7 +664,7 @@ export function createSubstancePillSegment(
 
             const alloc = allocated.find((a: any) => a.iv === substance);
             if (!alloc) return;
-            const { laneIdx, startMin, endMin } = alloc;
+            const { laneIdx, startMin } = alloc;
             const sub = substance.substance;
             const color = sub ? sub.color : 'rgba(245,180,60,0.7)';
             const laneStep = TIMELINE_ZONE.laneH + TIMELINE_ZONE.laneGap;
@@ -560,8 +700,7 @@ export function createSubstancePillSegment(
             }
 
             const x1 = phaseChartX(startMin);
-            const x2raw = phaseChartX(Math.min(endMin, PHASE_CHART.endMin));
-            const barW = Math.min(Math.max(TIMELINE_ZONE.minBarW, x2raw - x1), plotRight - x1);
+            const barW = Math.min(computeDoseBarWidth(substance), plotRight - x1);
             const y = TIMELINE_ZONE.top + laneIdx * laneStep;
             const h = TIMELINE_ZONE.laneH;
             const rx = TIMELINE_ZONE.pillRx;

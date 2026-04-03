@@ -17,7 +17,7 @@ import {
     isTurboActive,
 } from './state';
 import { settingsStore, STORAGE_KEYS } from './settings-store';
-import { svgEl, phaseChartX, sleep, interpolatePrompt, isLightMode, chartTheme, clamp } from './utils';
+import { svgEl, phaseChartX, sleep, interpolatePrompt, isLightMode, chartTheme, clamp, withImageRetry } from './utils';
 import {
     callStageWithFallback,
     callRevisionModel,
@@ -28,7 +28,7 @@ import {
 import { extractInterventionsData } from './llm-response-shape';
 import { reportRuntimeBug } from './runtime-error-banner';
 import { phaseBandPath, phasePointsToPath, phasePointsToFillPath } from './curve-utils';
-import { placePeakDescriptors } from './phase-chart';
+import { placePeakDescriptors, buildWeekStrip, updateWeekStripDay, hideWeekStrip } from './phase-chart';
 import {
     validateInterventions,
     computeLxOverlay,
@@ -38,6 +38,7 @@ import {
     allocateTimelineLanes,
     animatePhaseChartViewBoxHeight,
     attachBandHoverListeners,
+    computeDoseBarWidth,
 } from './lx-system';
 import { DebugLog } from './debug-panel';
 import { PROMPTS } from './prompts';
@@ -49,25 +50,58 @@ import {
     triggerLxPlay,
     triggerLxPrev,
     triggerLxNext,
+    showSherlock7DStack,
+    hideSherlock7D,
+    showNarrationPanel,
+    enableSherlockScrollMode,
 } from './sherlock';
 import { handleBioCorrectionPhase } from './bio-correction';
 import { callStrategistBioModel } from './llm-pipeline';
-import { runWeekPipeline } from './week-orchestrator';
-import { playMultiDaySequence, seekToDay, pauseMultiDay, resumeMultiDay } from './multi-day-animation';
+import { runWeekPipeline, callSherlock7D, buildFallbackSherlock7D } from './week-orchestrator';
+import {
+    getRuntimeReplaySnapshot,
+    isRuntimeReplayActive,
+    recordRevisionReplayState,
+    recordWeekReplayState,
+} from './replay-snapshot';
+import {
+    playMultiDaySequence,
+    seekToDay,
+    renderDayState,
+    pauseMultiDay,
+    resumeMultiDay,
+    cycleMultiDaySpeed,
+    setupWeekStripDrag,
+} from './multi-day-animation';
 import { LLMCache } from './llm-cache';
 import { resolveCachedStageHit } from './stage-cache';
 import { buildRevisionReferenceBundle, computeRevisionFitMetrics } from './revision-reference';
 import type { BiometricChannel, DiffEntry, LxSnapshot, StageResultMap } from './types';
-import { normalizeSherlockRevisionNarration } from './sherlock-narration';
+import { normalizeSherlockRevisionNarration, normalizeSherlock7DNarration } from './sherlock-narration';
 import { animateCompileSequence } from './compile-animation';
+import { runEjectAnimation } from './eject-animation';
+import { updateGamificationCurveData } from './gamification-overlay';
 
 import { BIOMETRIC_DEVICES, BIO_RED_PALETTE, SIGNAL_METADATA } from './biometric-devices';
 import { diffInterventions, animateRevisionScan } from './revision-animation';
+import {
+    animateBioDeviceDock,
+    dockDeviceImmediate,
+    undockBioDevice,
+    undockAllBioDevices,
+    getDockedDeviceKeys,
+    isDocked,
+    setDockChangeCallback,
+    resyncDockedDevices,
+} from './bio-device-dock';
 
 export interface BiometricRuntime {
     onBioScanStart: () => void;
     onBioScanStop: (channelCount: number) => void;
     onBioScanAbort: () => void;
+    onBioCorrectionStart: () => void;
+    onBioCorrectionStop: () => void;
+    onBioCorrectionAbort: () => void;
     onRevisionPlay: (diff: DiffEntry[]) => void;
     onRevisionPlayContext: (narration: unknown) => void;
 }
@@ -76,6 +110,9 @@ const biometricRuntime: BiometricRuntime = {
     onBioScanStart: () => {},
     onBioScanStop: () => {},
     onBioScanAbort: () => {},
+    onBioCorrectionStart: () => {},
+    onBioCorrectionStop: () => {},
+    onBioCorrectionAbort: () => {},
     onRevisionPlay: () => {},
     onRevisionPlayContext: () => {},
 };
@@ -316,6 +353,9 @@ const BIO_SUBMIT_LOADING_MARKUP = `
  * while the user selects devices.
  */
 export async function initBiometricFlow() {
+    // Clear any previously docked devices from a prior biometric session
+    undockAllBioDevices();
+
     // Turbo: skip device selection UI, use last-saved devices, go straight to pipeline
     if (isTurboActive()) {
         const savedDevices = settingsStore.getJson<string[]>(STORAGE_KEYS.lastBioDevices, []);
@@ -413,20 +453,21 @@ export async function initBiometricFlow() {
     // Capture VCR panel reference for closures (handleGo/handleSubmit)
     const panel = ensureVcrPanel();
 
-    // ── Show right-side device panel (opposite Sherlock) ──
+    // ── Show left-side device panel (where Sherlock was) ──
     const devices = BIOMETRIC_DEVICES.devices;
     const isLight = isLightMode();
     const devicePanel = ensureBioDevicePanel();
 
-    // Helper: sync selection from device panel cards
+    // Helper: sync selection from docked devices
     const syncSelection = () => {
-        BiometricState.selectedDevices = Array.from(devicePanel.querySelectorAll('.bio-dp-card.selected')).map(
-            (c: any) => c.dataset.key,
-        );
+        BiometricState.selectedDevices = getDockedDeviceKeys();
         const hasSelection = BiometricState.selectedDevices.length > 0;
         goBtn.disabled = !hasSelection;
         if (_vcrPlayBtn) _vcrPlayBtn.disabled = !hasSelection;
     };
+
+    // Wire dock change callback so VCR updates on dock/un-dock
+    setDockChangeCallback(syncSelection);
 
     // Build device cards
     devicePanel.innerHTML = '';
@@ -435,7 +476,7 @@ export async function initBiometricFlow() {
         card.className = 'bio-dp-card';
         card.dataset.key = dev.key;
 
-        const icon = document.createElement('img');
+        const icon = withImageRetry(document.createElement('img'));
         icon.className = 'bio-dp-card-icon';
         icon.src = isLight ? dev.iconLight : dev.iconDark;
         icon.alt = dev.name;
@@ -451,9 +492,16 @@ export async function initBiometricFlow() {
         card.appendChild(name);
 
         card.addEventListener('click', () => {
-            card.classList.toggle('selected');
-            card.classList.remove('spotter-recommended');
-            syncSelection();
+            if (isDocked(dev.key)) {
+                // Un-dock: reverse animation, deselect card
+                undockBioDevice(dev.key);
+                card.classList.remove('selected');
+            } else {
+                // Dock animation to VCR left side
+                card.classList.add('selected');
+                card.classList.remove('spotter-recommended');
+                animateBioDeviceDock(card, dev);
+            }
         });
 
         devicePanel.appendChild(card);
@@ -462,15 +510,18 @@ export async function initBiometricFlow() {
     // Show the panel
     showBioDevicePanel();
 
-    // When spotter returns, stop spinner and pre-select recommended devices
+    // When spotter returns, stop spinner and show recommended badges (no auto-dock yet).
+    // Auto-dock happens later in handleGo if user hasn't manually chosen any devices.
+    let _spotterRecommended: string[] = [];
     spotterPromise.then((rec: any) => {
         if (_vcrPlayBtn) _vcrPlayBtn.classList.remove('loading');
         if (!rec || !Array.isArray(rec.recommended) || BiometricState.phase !== 'selecting') return;
 
+        _spotterRecommended = rec.recommended;
         const cards = devicePanel.querySelectorAll('.bio-dp-card');
         cards.forEach((card: any) => {
             if (rec.recommended.includes(card.dataset.key)) {
-                card.classList.add('selected', 'spotter-recommended');
+                card.classList.add('spotter-recommended');
                 if (!card.querySelector('.bio-rec-badge')) {
                     const badge = document.createElement('span');
                     badge.className = 'bio-rec-badge';
@@ -480,10 +531,11 @@ export async function initBiometricFlow() {
             }
         });
 
-        BiometricState.selectedDevices = rec.recommended.filter((k: string) => devices.some((d: any) => d.key === k));
-        const hasRec = BiometricState.selectedDevices.length > 0;
-        goBtn.disabled = !hasRec;
-        if (_vcrPlayBtn) _vcrPlayBtn.disabled = !hasRec;
+        // Enable play button if no manual selection yet — user can click to auto-dock recs
+        if (getDockedDeviceKeys().length === 0 && _spotterRecommended.length > 0) {
+            if (_vcrPlayBtn) _vcrPlayBtn.disabled = false;
+            goBtn.disabled = false;
+        }
     });
 
     // --- Submit action: resolve profile context and execute pipeline ---
@@ -523,7 +575,36 @@ export async function initBiometricFlow() {
 
     // --- Go action: show "Run Biometric Loop" with clickable right label ---
     const handleGo = () => {
+        // Auto-dock recommended devices if user hasn't manually selected any.
+        // Animate them as if the user clicked each card, then proceed after a delay.
+        if (getDockedDeviceKeys().length === 0 && _spotterRecommended.length > 0) {
+            let delay = 0;
+            for (const key of _spotterRecommended) {
+                const dev = devices.find((d: any) => d.key === key);
+                const card = devicePanel.querySelector(`.bio-dp-card[data-key="${key}"]`) as HTMLElement | null;
+                if (dev && card && !isDocked(dev.key)) {
+                    setTimeout(() => {
+                        if (!isDocked(dev.key)) {
+                            animateBioDeviceDock(card, dev);
+                        }
+                    }, delay);
+                    delay += 200;
+                }
+            }
+            // Wait for dock animations to finish, then re-enter handleGo to proceed
+            setTimeout(() => {
+                syncSelection();
+                if (BiometricState.selectedDevices.length > 0) {
+                    _proceedAfterDock();
+                }
+            }, delay + 600);
+            return;
+        }
         if (BiometricState.selectedDevices.length === 0) return;
+        _proceedAfterDock();
+    };
+
+    const _proceedAfterDock = () => {
         BiometricState.phase = 'profiling';
         BiometricState.profileDirty = false;
 
@@ -854,7 +935,7 @@ export async function callSpotterDeviceRec(): Promise<StageResultMap['biometricR
         userGoal,
         effectsList: effects,
         interventionSummary,
-        deviceCatalog: JSON.stringify(catalog, null, 2),
+        deviceCatalog: JSON.stringify(catalog),
     });
 
     const userPrompt = 'Recommend the best biometric devices for this protocol. Respond with JSON only.';
@@ -1025,8 +1106,8 @@ export async function callSpotterChannelPick(): Promise<BiometricChannel[]> {
         userGoal,
         interventionSummary,
         profileText: BiometricState.profileText,
-        selectedDeviceSignals: JSON.stringify(selectedSignals, null, 2),
-        signalMetadata: JSON.stringify(metadataSubset, null, 2),
+        selectedDeviceSignals: JSON.stringify(selectedSignals),
+        signalMetadata: JSON.stringify(metadataSubset),
         tensionDirectiveBlock,
     });
 
@@ -1212,7 +1293,7 @@ export async function callBiometricModel(channelSpec: any): Promise<StageResultM
         stageClass: 'biometric-model',
         systemPrompt,
         userPrompt,
-        maxTokens: 16384,
+        maxTokens: 8192,
     });
 
     return result;
@@ -1259,7 +1340,7 @@ export async function executeBiometricPipeline() {
     const fallbackContext = BiometricState.profileDraftStatus === 'failed';
     const initialStatus = fallbackContext
         ? 'Spotter profile draft failed; using fallback context…'
-        : 'Spotter selecting channels…';
+        : 'SELECTING CHANNELS';
     configureVcrCanonAction({ label: initialStatus, icon: '', loading: true });
 
     // Spotter Pass 2: pick the 5 best channels from selected devices
@@ -1342,6 +1423,21 @@ export async function executeBiometricPipeline() {
                 if (!ch.unit) ch.unit = spec.unit;
                 if (spec._compositeGroup) ch._compositeGroup = spec._compositeGroup;
                 if (spec._compositeLabel) ch._compositeLabel = spec._compositeLabel;
+            }
+        }
+
+        // Ensure every channel's data covers the full chart range (hours 6-30).
+        // The LLM sometimes stops at hour 24 (midnight) — pad to hour 30 (6am)
+        // by repeating the last known value so waveforms span the full width.
+        for (const ch of validChannels) {
+            if (!ch.data || ch.data.length === 0) continue;
+            const lastPt = ch.data[ch.data.length - 1];
+            const lastHour = Number(lastPt.hour);
+            if (lastHour < 30) {
+                const step = ch.data.length > 1 ? Number(ch.data[1].hour) - Number(ch.data[0].hour) : 0.25;
+                for (let h = lastHour + step; h <= 30; h += step) {
+                    ch.data.push({ hour: +h.toFixed(2), value: lastPt.value });
+                }
             }
         }
 
@@ -1621,20 +1717,24 @@ export function renderBiometricStrips(channels: BiometricChannel[], instant?: bo
             }
         }
 
-        // Clip path for animation (skipped when instant re-render)
-        if (!instant) {
+        // Clip path — constrains waveforms to the plot area on the left
+        // (prevents bleeding into the label margin) while leaving the right
+        // edge unconstrained.  For animated reveal the clip starts at width 0
+        // and expands; for instant re-renders it starts at full width.
+        {
             const clipId = `bio-clip-${laneIdx}`;
             const clipPath = svgEl('clipPath', { id: clipId });
+            const fullW = PHASE_CHART.viewW - PHASE_CHART.padL;
             const clipRect = svgEl('rect', {
                 x: String(PHASE_CHART.padL),
                 y: String(y - 2),
-                width: '0',
+                width: instant ? String(fullW) : '0',
                 height: String(h + 4),
             });
             clipPath.appendChild(clipRect);
             defs.appendChild(clipPath);
             stripG.setAttribute('clip-path', `url(#${clipId})`);
-            (stripG as any).dataset.clipId = clipId;
+            if (!instant) (stripG as any).dataset.clipId = clipId;
         }
 
         group.appendChild(stripG);
@@ -1643,7 +1743,13 @@ export function renderBiometricStrips(channels: BiometricChannel[], instant?: bo
 
     // Expand viewBox to fit all strips
     const totalH = yOffset + BIOMETRIC_ZONE.bottomPad;
-    svg.setAttribute('viewBox', `0 0 ${PHASE_CHART.viewW} ${Math.max(currentH, totalH)}`);
+    const targetH = Math.max(currentH, totalH);
+    if (instant) {
+        svg.setAttribute('viewBox', `0 0 ${PHASE_CHART.viewW} ${targetH}`);
+    } else {
+        // Smoothly expand so the bio zone doesn't pop
+        void animatePhaseChartViewBoxHeight(svg as unknown as SVGSVGElement, targetH, 500);
+    }
 }
 
 /**
@@ -2624,9 +2730,8 @@ export async function animateBiometricReveal(duration: any) {
                     if (t < 1) {
                         requestAnimationFrame(animate);
                     } else {
-                        // Remove clip after reveal
-                        sg.removeAttribute('clip-path');
-                        clip.remove();
+                        // Keep clip as permanent left-side boundary (extends to SVG edge)
+                        rect.setAttribute('width', String(PHASE_CHART.viewW - PHASE_CHART.padL));
                         resolve();
                     }
                 })();
@@ -2651,6 +2756,8 @@ const ICON_PREV =
     '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><polygon points="14,4 2,12 14,20"/><rect x="18" y="6" width="2" height="12" rx="0.5"/></svg>';
 const ICON_NEXT =
     '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><rect x="4" y="6" width="2" height="12" rx="0.5"/><polygon points="10,4 22,12 10,20"/></svg>';
+const ICON_EJECT =
+    '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><polygon points="4,14 12,4 20,14"/><rect x="4" y="17" width="16" height="3" rx="1"/></svg>';
 const VCR_HIDDEN_CLASS = 'vcr-hidden';
 const VCR_COMPACT_CLASS = 'vcr-compact';
 const VCR_BIO_HIDDEN_CLASS = 'vcr-bio-hidden';
@@ -2697,6 +2804,7 @@ let _pillSyncRAF = 0;
 let _vcrPillResyncTimer: number | null = null;
 let _vcrFontSyncBound = false;
 let _multiDayMode = false;
+let _ejectActivated = false;
 
 type VcrStepperMode = 'idle' | 'ready' | 'playing' | 'stepping' | 'complete';
 
@@ -2904,6 +3012,9 @@ function syncPillWidth(): void {
         _vcrPanel.style.setProperty('--vcr-pill-right', `${pillRight.toFixed(1)}px`);
         _vcrPanel.style.setProperty('--vcr-left-wing-w', `${Math.max(0, leftW + 2)}px`);
         _vcrPanel.style.setProperty('--vcr-right-wing-w', `${Math.max(0, rightW + 2)}px`);
+
+        // Reposition docked bio devices now that pill geometry is committed
+        resyncDockedDevices();
     };
 
     if (_pillSyncRAF) {
@@ -3136,8 +3247,9 @@ function resolveMultiDayLabels(): { left: string; right: string } {
     const { days, currentDay } = MultiDayState;
     if (days.length === 0) return { left: '', right: '' };
 
-    const phase = MultiDayState.phase as string;
-    const leftName = currentDay > 0 ? getMdDayName(currentDay - 1) : '';
+    const phase = MultiDayState.phase;
+    const visibleStartIdx = getVisibleWeekStartIndex(days);
+    const leftName = currentDay > visibleStartIdx ? getMdDayName(currentDay - 1) : '';
     const rightName = currentDay < days.length ? getMdDayName(currentDay) : '';
 
     if (phase === 'complete') {
@@ -3150,7 +3262,7 @@ function updateMultiDayVcrNav(): void {
     if (!_vcrPanel) return;
     const { days, currentDay } = MultiDayState;
     const totalDays = days.length;
-    const phase = MultiDayState.phase as string;
+    const phase = MultiDayState.phase;
     const isPlaying = phase === 'playing';
     const isComplete = phase === 'complete';
 
@@ -3158,25 +3270,34 @@ function updateMultiDayVcrNav(): void {
     _vcrPanel.classList.remove('vcr-preplay');
 
     if (_vcrPrevBtn) {
-        _vcrPrevBtn.classList.remove('vcr-btn-hidden');
-        const atStart = currentDay <= 0;
-        _vcrPrevBtn.disabled = atStart;
-        _vcrPrevBtn.classList.toggle('vcr-btn-faded', atStart);
-        _vcrPrevBtn.classList.toggle('vcr-nav-active', !atStart);
+        _vcrPrevBtn.classList.remove('vcr-btn-hidden', 'vcr-btn-faded');
+        // Left button = pause/resume during multi-day
+        _vcrPrevBtn.disabled = false;
+        _vcrPrevBtn.innerHTML = isPlaying ? ICON_PAUSE : ICON_PLAY;
+        _vcrPrevBtn.title = isPlaying ? 'Pause' : 'Play';
+        _vcrPrevBtn.classList.add('vcr-nav-active');
     }
     if (_vcrPlayBtn) {
         _vcrPlayBtn.classList.remove('loading', ...VCR_PLAY_VARIANTS);
-        _vcrPlayBtn.innerHTML = isPlaying ? ICON_PAUSE : ICON_PLAY;
-        _vcrPlayBtn.title = isPlaying ? 'Pause' : 'Play';
+        // Center button = eject during multi-day (unless eject was already activated → stays as play)
+        if (!_ejectActivated) {
+            _vcrPlayBtn.innerHTML = ICON_EJECT;
+            _vcrPlayBtn.title = 'Eject';
+        }
         _vcrPlayBtn.disabled = false;
     }
     if (_vcrNextBtn) {
-        _vcrNextBtn.classList.remove('vcr-btn-hidden');
-        const atEnd = currentDay >= totalDays - 1;
-        _vcrNextBtn.disabled = atEnd;
-        _vcrNextBtn.classList.remove('vcr-btn-faded');
-        _vcrNextBtn.classList.toggle('vcr-nav-active', !atEnd);
+        _vcrNextBtn.classList.remove('vcr-btn-hidden', 'vcr-btn-faded');
+        // Right button = speed cycle during multi-day
+        _vcrNextBtn.disabled = false;
+        const spd = MultiDayState.speed;
+        const spdLabel = `${spd}x`;
+        _vcrNextBtn.innerHTML = `<span class="vcr-speed-label">${spdLabel}</span>`;
+        _vcrNextBtn.title = `Speed: ${spdLabel}`;
+        _vcrNextBtn.classList.add('vcr-nav-active');
     }
+
+    queueVcrPillResync();
 }
 
 function updateMultiDayLabelsStatic(): void {
@@ -3265,7 +3386,7 @@ function multiDayPrev(): void {
 }
 
 function multiDayPlayPause(): void {
-    const phase = MultiDayState.phase as string;
+    const phase = MultiDayState.phase;
     if (phase === 'playing') {
         pauseMultiDay();
         updateMultiDayVcrNav();
@@ -3273,7 +3394,7 @@ function multiDayPlayPause(): void {
         resumeMultiDay();
         updateMultiDayVcrNav();
     } else if (phase === 'complete') {
-        seekToDay(0);
+        seekToDay(getVisibleWeekStartIndex(MultiDayState.days));
         updateMultiDayLabelsStatic();
         const curvesData = PhaseState.curvesData;
         if (curvesData && MultiDayState.days.length > 0) {
@@ -3293,6 +3414,12 @@ function multiDayPlayPause(): void {
 function onMultiDayAdvance(): void {
     animateMultiDayLabelTransit();
     updateMultiDayVcrNav();
+
+    // Advance Sherlock 7D card to current day
+    if (MultiDayState.sherlock7dReady && SherlockState.sherlock7dNarration) {
+        const dayIdx = Math.max(0, MultiDayState.currentDay - 1);
+        showSherlock7DStack(SherlockState.sherlock7dNarration.beats, dayIdx);
+    }
 }
 
 function teardownVcrPanel(): void {
@@ -3380,7 +3507,11 @@ function activateMultiDayVcrStepper(): void {
 
 function deactivateMultiDayRibbonModule(): void {
     _multiDayMode = false;
-    (MultiDayState as any).onDayAdvance = null;
+    MultiDayState.onDayAdvance = null;
+    MultiDayState.onSherlock7DSync = null;
+    MultiDayState.sherlock7dReady = false;
+    SherlockState.sherlock7dNarration = null;
+    hideSherlock7D();
     const panel = _vcrPanel || document.querySelector('.vcr-control-panel');
     if (panel) panel.classList.remove(VCR_MULTI_DAY_ACTIVE_CLASS);
 }
@@ -3402,7 +3533,8 @@ function clearVcrActionModule(): void {
     clearVcrDeviceSelectMode();
 }
 
-/** Remove all VCR-inline device chips, separators, and bio-context editor from the wings */
+/** Remove all VCR-inline device chips, separators, and bio-context editor from the wings.
+ *  Does NOT clear docked device capsules — those persist across phases. */
 function clearVcrDeviceSelectMode(): void {
     const panel = _vcrPanel;
     if (!panel) return;
@@ -3416,15 +3548,22 @@ function clearVcrDeviceSelectMode(): void {
         _vcrRightLabel.style.pointerEvents = '';
         _vcrRightLabel.style.cursor = '';
     }
-    // Hide the right-side device panel if open
+    // Hide the left-side device panel if open
     hideBioDevicePanel();
+    setDockChangeCallback(null);
+}
+
+/** Full reset: clear docked devices + device select mode. Call only on explicit pipeline restart. */
+export function resetBioDeviceDock(): void {
+    undockAllBioDevices();
+    clearVcrDeviceSelectMode();
 }
 
 /** Stored reference for removable event listener */
 let _bioContextLabelClick: () => void = () => {};
 
 // ============================================
-// Bio Device Panel — Right-side vertical panel (opposite Sherlock)
+// Bio Device Panel — Left-side vertical panel (where Sherlock was)
 // ============================================
 
 let _bioDevicePanel: HTMLElement | null = null;
@@ -3450,13 +3589,13 @@ function repositionBioDevicePanel(): void {
 
     const panelWidth = 110;
     const gap = 16;
-    let rightPos = rect.right + gap;
-    // Clamp so panel doesn't go off right edge of viewport
-    if (rightPos + panelWidth > window.innerWidth - 4) {
-        rightPos = window.innerWidth - panelWidth - 4;
+    let leftPos = rect.left - panelWidth - gap;
+    // Clamp so panel doesn't go off left edge of viewport
+    if (leftPos < 4) {
+        leftPos = 4;
     }
 
-    _bioDevicePanel.style.left = `${rightPos}px`;
+    _bioDevicePanel.style.left = `${leftPos}px`;
 
     // Use the full SVG bounding box height
     const svgTop = rect.top + window.scrollY;
@@ -3711,7 +3850,7 @@ function ensureVcrPanel(): HTMLElement {
     _vcrPrevBtn.addEventListener('click', () => {
         if (_vcrPrevBtn?.disabled) return;
         if (_multiDayMode) {
-            multiDayPrev();
+            multiDayPlayPause();
             return;
         }
         triggerLxPrev();
@@ -3721,7 +3860,8 @@ function ensureVcrPanel(): HTMLElement {
     _vcrNextBtn.addEventListener('click', () => {
         if (_vcrNextBtn?.disabled) return;
         if (_multiDayMode) {
-            multiDayNext();
+            cycleMultiDaySpeed();
+            updateMultiDayVcrNav();
             return;
         }
         animateVcrLabelTransit();
@@ -3729,7 +3869,8 @@ function ensureVcrPanel(): HTMLElement {
     });
     _vcrPlayBtn.addEventListener('click', () => {
         if (_multiDayMode) {
-            multiDayPlayPause();
+            _ejectActivated = true;
+            runEjectAnimation(panel);
             return;
         }
         if (_bioMode) {
@@ -3996,27 +4137,6 @@ function revisionBandId(iv: any): string {
     return [iv?.key || '', iv?.timeMinutes ?? '', iv?.dose || '', iv?.doseMultiplier ?? 1].join('|');
 }
 
-function resolveRevisionScaleFactors(
-    oldInterventions: any[],
-    newInterventions: any[],
-    curvesData: any,
-    referenceLxCurves: any,
-): number[] {
-    const lockedScaleFactors = computeLxScaleFactorsFromReference(oldInterventions, curvesData, referenceLxCurves);
-    const newScaleFactors = computeLxScaleFactors(newInterventions, curvesData);
-
-    // Blend locked (visual continuity) and fresh (responsive to new protocol) scale factors.
-    // This lets the revision visually "grow" the curve when the grandmaster adds more
-    // pharmacokinetic effect, instead of being locked to the old curve's amplitude.
-    const LOCKED_WEIGHT = 0.5;
-    return lockedScaleFactors.map((factor: number, curveIdx: number) => {
-        const fresh = newScaleFactors[curveIdx] ?? 0;
-        if (Math.abs(factor) <= 1e-6) return fresh;
-        if (Math.abs(fresh) <= 1e-6) return factor;
-        return LOCKED_WEIGHT * factor + (1 - LOCKED_WEIGHT) * fresh;
-    });
-}
-
 function buildRevisionBandState(
     incrementalSnapshots: LxSnapshot[] | null | undefined,
     curvesData: any,
@@ -4238,6 +4358,7 @@ function renderLxCurveMorphFrame(oldLxCurves: any, newLxCurves: any, curvesData:
     if (!lxGroup) return;
     const lxStrokes = lxGroup.querySelectorAll('.phase-lx-path');
     const lxFills = lxGroup.querySelectorAll('.phase-lx-fill');
+    const morphedCurves: any[] = [];
 
     for (let ci = 0; ci < curvesData.length; ci++) {
         const oldPts = oldLxCurves[ci]?.points || [];
@@ -4254,8 +4375,21 @@ function renderLxCurveMorphFrame(oldLxCurves: any, newLxCurves: any, curvesData:
         }
 
         if (lxStrokes[ci]) lxStrokes[ci].setAttribute('d', phasePointsToPath(morphed, true));
-        if (lxFills[ci]) lxFills[ci].setAttribute('d', phasePointsToFillPath(morphed, true));
+        if (lxFills[ci]) {
+            lxFills[ci].setAttribute('d', phasePointsToFillPath(morphed, true));
+            if (lxFills[ci].getAttribute('fill-opacity') === '0') {
+                lxFills[ci].setAttribute('fill-opacity', '0.08');
+            }
+        }
+
+        morphedCurves.push({
+            ...newLxCurves[ci],
+            baseline: newLxCurves[ci]?.baseline ?? oldLxCurves[ci]?.baseline,
+            points: morphed,
+        });
     }
+
+    updateGamificationCurveData(morphedCurves);
 }
 
 function updateRevisionPeakDescriptors(newLxCurves: any, curvesData: any): void {
@@ -4940,8 +5074,7 @@ export async function handleRevisionPhase(curvesData: any): Promise<boolean> {
 
     const rawNew = extractInterventionsData(revisionResult);
     const newIvs = validateInterventions(rawNew, curvesData);
-    const oldDisplayedLxCurves = PhaseState.lxCurves || null;
-    const revisionScaleFactors = resolveRevisionScaleFactors(oldIvs, newIvs, curvesData, oldDisplayedLxCurves);
+    const revisionScaleFactors = null;
 
     RevisionState.oldInterventions = oldIvs;
     RevisionState.newInterventions = newIvs;
@@ -5062,7 +5195,7 @@ async function applyPreparedRevisionPhase(curvesData: any): Promise<boolean> {
     const newLxCurves = RevisionState.newLxCurves;
     const oldIvs = RevisionState.oldInterventions || [];
     const oldLxCurves = PhaseState.lxCurves || newLxCurves;
-    const revisionScaleFactors = resolveRevisionScaleFactors(oldIvs, newIvs, curvesData, oldLxCurves);
+    const revisionScaleFactors = null;
     const oldIncrementalSnapshots =
         (PhaseState.incrementalSnapshots as LxSnapshot[] | null) ||
         computeIncrementalLxOverlay(oldIvs, curvesData, revisionScaleFactors);
@@ -5159,6 +5292,11 @@ async function applyPreparedRevisionPhase(curvesData: any): Promise<boolean> {
         PhaseState.lxCurves = newLxCurves;
         PhaseState.interventionResult = RevisionState.revisionResult;
         PhaseState.incrementalSnapshots = newIncrementalSnapshots;
+        recordRevisionReplayState({
+            interventionResult: PhaseState.interventionResult,
+            lxCurves: PhaseState.lxCurves,
+            incrementalSnapshots: PhaseState.incrementalSnapshots,
+        });
 
         RevisionState.phase = 'rendered';
         PhaseState.phase = 'revision-rendered';
@@ -5167,6 +5305,7 @@ async function applyPreparedRevisionPhase(curvesData: any): Promise<boolean> {
         LLMCache.markFlowComplete();
 
         showWeekSequenceButton();
+        showNarrationPanel(); // Keep revision narration visible until user clicks Stream
 
         return true;
     } finally {
@@ -5184,6 +5323,11 @@ async function applyPreparedRevisionPhase(curvesData: any): Promise<boolean> {
 // ============================================
 
 const SIM_DURATION_BASE = 12000; // 12 seconds at 1x speed
+const MULTI_DAY_DAY0_PREVIEW_MS = 900;
+
+function getVisibleWeekStartIndex(days: { day: number }[]): number {
+    return days.length > 1 ? 1 : 0;
+}
 
 /**
  * Show the "Apply Biometrics" button using canon VCR layout.
@@ -5217,7 +5361,7 @@ export function showSimulationButton() {
 
                 // Bio-correction morphs baseline + Lx curves
                 await sleep(400);
-                await handleBioCorrectionPhase(curvesData, userGoal, strategistBioPromise);
+                await handleBioCorrectionPhase(curvesData, userGoal, strategistBioPromise, biometricRuntime);
             } catch (err: any) {
                 console.error('[ApplyBiometrics] Pipeline error:', err.message, err.stack);
                 reportRuntimeBug({ stage: 'Strategist Bio', provider: '', message: err.message });
@@ -5235,13 +5379,13 @@ export function showSimulationButton() {
  */
 function showOptimizeButton() {
     configureVcrCanonAction({
-        label: 'Optimize',
+        label: 'Compute',
         icon: ICON_OPTIMIZE,
         playClass: 'vcr-play-optimize',
         onClick: async () => {
             // Switch to loading state
             configureVcrCanonAction({
-                label: 'Optimizing intervention…',
+                label: 'Computing interventions…',
                 icon: '',
                 loading: true,
             });
@@ -5267,13 +5411,13 @@ function showOptimizeButton() {
 
 function showReviseButton() {
     configureVcrCanonAction({
-        label: 'Revise',
+        label: 'Execute',
         icon: ICON_PLAY,
         playClass: 'vcr-play-revise',
         completesPhase: 4,
         onClick: async () => {
             configureVcrCanonAction({
-                label: 'Applying revision…',
+                label: 'Executing…',
                 icon: '',
                 loading: true,
             });
@@ -5309,33 +5453,46 @@ function showReviseButton() {
  * Uses VCR canon layout (centered play circle + right wing label)
  * to stay consistent with every other VCR phase gate.
  */
-function showWeekSequenceButton() {
+export function showWeekSequenceButton() {
     configureVcrCanonAction({
         label: 'Stream',
         icon: ICON_LX,
         playClass: 'vcr-play-stream',
+        completesPhase: 5,
         onClick: async () => {
+            hideNarrationPanel(); // Clean up revision narration before multi-day
             configureVcrCanonAction({
                 label: 'Preparing Days',
                 icon: '',
                 loading: true,
             });
             await launchMultiDayPipeline();
+            // Only show debug-ends / continue to Phase 6 if the multi-day pipeline
+            // actually completed. When the user scrubs and restarts playback,
+            // playMultiDaySequence gets cancelled and returns early — in that case
+            // phase will be 'playing' (the new sequence is running), not 'complete'.
+            const phase = MultiDayState.phase;
+            if (phase === 'playing' || phase === 'paused') return;
             showDebugEndsHere();
+            // Turbo: auto-fire eject → delivery → camera if target is phase 6
+            // (configureVcrCanonAction handles the auto-fire of THIS onClick;
+            //  we just need to chain Phase 6 here when it completes)
+            if (isTurboActive()) {
+                const panel = _vcrPanel ?? (document.querySelector('.vcr-control-panel') as HTMLElement | null);
+                if (panel) {
+                    _ejectActivated = true;
+                    // 1st press: radial wrap
+                    await runEjectAnimation(panel);
+                    // 2nd press: delivery sequence
+                    await runEjectAnimation(panel);
+                    // 3rd press: camera + tracker
+                    await runEjectAnimation(panel);
+                    AppState.turboTargetPhase = 0;
+                }
+            }
         },
     });
-    // Turbo: auto-fire if turbo target includes Phase 5
-    if (isTurboActive()) {
-        queueMicrotask(async () => {
-            configureVcrCanonAction({
-                label: 'Preparing Days',
-                icon: '',
-                loading: true,
-            });
-            await launchMultiDayPipeline();
-            showDebugEndsHere();
-        });
-    }
+    // Turbo auto-fire is handled by configureVcrCanonAction
 }
 
 /**
@@ -5380,6 +5537,14 @@ function hideMultiDayButton() {
  * Launch the multi-day pipeline: loading → week orchestrator → daily sims → animation.
  */
 async function launchMultiDayPipeline() {
+    // Preload both 3D device model variants in background (needed for eject animation)
+    import('./lx-player-3d')
+        .then(m => {
+            m.preloadLxPlayerModel('v1');
+            m.preloadLxPlayerModel('v2');
+        })
+        .catch(() => {});
+
     const curvesData = PhaseState.curvesData;
     if (!curvesData) {
         console.error('[MultiDay] No curvesData available');
@@ -5400,14 +5565,26 @@ async function launchMultiDayPipeline() {
     PhaseState.phase = 'week-loading';
 
     try {
-        // Run the full week pipeline (orchestrator + 7 daily sub-agents)
-        const days = await runWeekPipeline(curvesData, interventions, msg => {
-            console.log('[MultiDay]', msg);
-        });
+        const replaySnapshot = isRuntimeReplayActive() ? getRuntimeReplaySnapshot() : null;
+        const replayDays = replaySnapshot?.week?.days;
+
+        // Run the full week pipeline unless we have an exact saved snapshot to replay.
+        const allDays =
+            replayDays && replayDays.length > 0
+                ? replayDays
+                : await runWeekPipeline(curvesData, interventions, msg => {
+                      console.log('[MultiDay]', msg);
+                  });
+
+        // Trim to 7 days (Mon-Sun). The pipeline produces Day 0 (baseline Monday)
+        // + Days 1-7 from the LLM = 8 total, but Day 7 wraps back to Monday.
+        // Keep only days 0-6 for a clean Mon→Sun week.
+        const days = allDays.length > 7 ? allDays.slice(0, 7) : allDays;
 
         if (days.length < 2) {
             console.warn('[MultiDay] Not enough day snapshots:', days.length);
             MultiDayState.phase = 'idle';
+            hideWeekStrip();
             deactivateMultiDayRibbonModule();
             showSimulationButton();
             return;
@@ -5415,10 +5592,21 @@ async function launchMultiDayPipeline() {
 
         // Store days
         MultiDayState.days = days;
-        MultiDayState.currentDay = 0;
+        const initialDayIdx = getVisibleWeekStartIndex(days);
+        const initialDay = days[initialDayIdx];
+        MultiDayState.currentDay = initialDay.day;
+        recordWeekReplayState(days);
 
-        // Pre-compute max envelope: find the maximum lane count across all days
-        // so the viewBox height stays constant during animation
+        // Fire Sherlock 7D narration in background (non-blocking)
+        const sherlock7dPromise = SherlockState.enabled
+            ? callSherlock7D(days, PhaseState.userGoal || '').catch(err => {
+                  console.warn('[Sherlock7D] Narration failed, using fallback:', err.message);
+                  return null;
+              })
+            : Promise.resolve(null);
+
+        // Lock viewBox height to the max envelope so the chart never rescales.
+        // Bio strip translation is handled per-frame by animateDayTransition.
         let maxLanes = 0;
         for (const day of days) {
             if (day.interventions && day.interventions.length > 0) {
@@ -5429,15 +5617,58 @@ async function launchMultiDayPipeline() {
         }
         MultiDayState.maxTimelineLanes = maxLanes;
 
-        // Lock the viewBox height to the CURRENT SVG height (which includes biometric
-        // strips below the timeline). This prevents the envelope from shrinking when
-        // days have fewer substances — the bio strips would get clipped otherwise.
         const svg = document.getElementById('phase-chart-svg');
-        const currentVB = svg?.getAttribute('viewBox')?.split(/\s+/).map(Number);
-        const currentSvgH = currentVB && currentVB.length === 4 ? currentVB[3] : 500;
         const laneStep = TIMELINE_ZONE.laneH + TIMELINE_ZONE.laneGap;
-        const timelineOnlyH = TIMELINE_ZONE.top + maxLanes * laneStep + TIMELINE_ZONE.bottomPad;
-        MultiDayState.lockedViewBoxHeight = Math.max(currentSvgH, timelineOnlyH, 500);
+        const initialDayAlloc = allocateTimelineLanes(initialDay.interventions || []);
+        const initialDayLanes = initialDayAlloc.reduce((mx: number, a: any) => Math.max(mx, (a.laneIdx || 0) + 1), 0);
+
+        // Compute day 0's lane count
+        const day0Alloc = allocateTimelineLanes(days[0].interventions || []);
+        const day0Lanes = day0Alloc.reduce((mx: number, a: any) => Math.max(mx, (a.laneIdx || 0) + 1), 0);
+
+        // Reposition bio strips to sit right below day 0's actual lanes,
+        // eliminating dead space from Phase 4's (possibly larger) lane count.
+        const bioGroup = document.getElementById('phase-biometric-strips');
+        const spotterGroup = document.getElementById('phase-spotter-highlights');
+
+        // Ensure bio strips are visible — previous animations (compile, revision)
+        // may have left them hidden via inline styles
+        if (bioGroup) {
+            bioGroup.style.opacity = '';
+            bioGroup.style.visibility = '';
+            (bioGroup.style as any).pointerEvents = '';
+            bioGroup.removeAttribute('opacity');
+        }
+        if (spotterGroup) {
+            spotterGroup.style.opacity = '';
+            spotterGroup.style.visibility = '';
+            (spotterGroup.style as any).pointerEvents = '';
+            spotterGroup.removeAttribute('opacity');
+        }
+
+        // If bio strips were cleared (e.g. by timeline engine exit), re-render them
+        if (bioGroup && bioGroup.children.length === 0 && BiometricState.channels && BiometricState.channels.length > 0) {
+            renderBiometricStrips(BiometricState.channels, true);
+        }
+
+        const bioSep = bioGroup?.querySelector('.biometric-separator');
+        let bioZoneH = 0;
+        let baseBioTY = 0;
+        if (bioGroup && bioSep) {
+            const bb = (bioGroup as unknown as SVGGraphicsElement).getBBox();
+            bioZoneH = bb.height;
+            const currentBioSepY = parseFloat(bioSep.getAttribute('y1') || '0');
+            const contentAboveSep = Math.max(0, currentBioSepY - bb.y);
+            const targetBioSepY = TIMELINE_ZONE.top + day0Lanes * laneStep + TIMELINE_ZONE.bottomPad + contentAboveSep;
+            baseBioTY = targetBioSepY - currentBioSepY;
+            MultiDayState.bioBaseTranslateY = baseBioTY;
+        }
+
+        // Lock viewBox based on day 0's lane count (not maxLanes).
+        // The viewBox will dynamically adjust per-day during transitions via _interpolateFrame,
+        // so we don't need the max envelope — this eliminates dead space on days with fewer lanes.
+        const day0LanesBottom = TIMELINE_ZONE.top + day0Lanes * laneStep + TIMELINE_ZONE.bottomPad;
+        MultiDayState.lockedViewBoxHeight = Math.max(day0LanesBottom + bioZoneH + BIOMETRIC_ZONE.bottomPad, 500);
 
         // Pipeline complete — mark Phase 5 reached and reveal save checkmark immediately
         PhaseState.maxPhaseReached = 5;
@@ -5447,18 +5678,130 @@ async function launchMultiDayPipeline() {
             saveBtn.style.display = '';
         }
 
-        // Activate VCR stepper with day labels (removes loading spinner)
-        seekToDay(0);
+        // Render the first visible computed day and build the week strip BEFORE
+        // the viewBox animation.
+        // This way the substance pills, curves, and week strip change once, and the
+        // viewBox resize smoothly adapts around the already-changed content instead of
+        // popping everything in a single frame after the resize completes.
+        renderDayState(initialDay, curvesData);
+        buildWeekStrip(days.length);
+        updateWeekStripDay(initialDay.day, days.length);
+        setupWeekStripDrag();
         activateMultiDayVcrStepper();
 
+        const initialLaneDelta = (initialDayLanes - day0Lanes) * laneStep;
+        const targetBioTY = baseBioTY + initialLaneDelta;
+        const targetViewBoxHeight = MultiDayState.lockedViewBoxHeight + initialLaneDelta;
+
+        // Smoothly animate viewBox height and bio group repositioning
+        if (svg) {
+            const currentVB = svg.getAttribute('viewBox')!.split(' ').map(Number);
+            const fromH = currentVB[3];
+            const toH = targetViewBoxHeight;
+
+            // Read current bio group translate
+            let fromBioTY = 0;
+            if (bioGroup) {
+                const m = (bioGroup.getAttribute('transform') || '').match(
+                    /translate\(\s*[\d.eE+-]+\s*,\s*([\d.eE+-]+)\s*\)/,
+                );
+                fromBioTY = m ? parseFloat(m[1]) || 0 : 0;
+            }
+
+            const transitionMs = isTurboActive() ? 0 : 500;
+            await new Promise<void>(resolve => {
+                if (transitionMs <= 0) {
+                    // Turbo: skip animation — set final values immediately
+                    svg.setAttribute('viewBox', `0 0 ${PHASE_CHART.viewW} ${toH}`);
+                    if (bioGroup) {
+                        bioGroup.setAttribute('transform', `translate(0,${targetBioTY.toFixed(2)})`);
+                        if (spotterGroup) {
+                            spotterGroup.setAttribute('transform', `translate(0,${targetBioTY.toFixed(2)})`);
+                        }
+                    }
+                    resolve();
+                    return;
+                }
+                const startT = performance.now();
+                (function tick(now: number) {
+                    const elapsed = now - startT;
+                    const rawT = Math.min(1, elapsed / transitionMs);
+                    // Ease-out cubic for a smooth deceleration
+                    const t = 1 - Math.pow(1 - rawT, 3);
+
+                    const h = fromH + (toH - fromH) * t;
+                    svg.setAttribute('viewBox', `0 0 ${PHASE_CHART.viewW} ${h.toFixed(1)}`);
+
+                    if (bioGroup) {
+                        const bioY = fromBioTY + (targetBioTY - fromBioTY) * t;
+                        bioGroup.setAttribute('transform', `translate(0,${bioY.toFixed(2)})`);
+                        if (spotterGroup) {
+                            spotterGroup.setAttribute('transform', `translate(0,${bioY.toFixed(2)})`);
+                        }
+                    }
+
+                    if (rawT < 1) {
+                        requestAnimationFrame(tick);
+                    } else {
+                        // Ensure final values are exact
+                        svg.setAttribute('viewBox', `0 0 ${PHASE_CHART.viewW} ${toH}`);
+                        if (bioGroup) {
+                            bioGroup.setAttribute('transform', `translate(0,${targetBioTY.toFixed(2)})`);
+                            if (spotterGroup) {
+                                spotterGroup.setAttribute('transform', `translate(0,${targetBioTY.toFixed(2)})`);
+                            }
+                        }
+                        resolve();
+                    }
+                })(performance.now());
+            });
+        }
+
+        // Resolve Sherlock 7D narration (should be done by now — ran in parallel with viewBox animation)
+        const sherlock7dResult = await sherlock7dPromise;
+        if (sherlock7dResult) {
+            const normalized = normalizeSherlock7DNarration(sherlock7dResult, days, SherlockState.enabled);
+            SherlockState.sherlock7dNarration = normalized.narration;
+        } else if (SherlockState.enabled) {
+            SherlockState.sherlock7dNarration = buildFallbackSherlock7D(days);
+        }
+        MultiDayState.sherlock7dReady = true;
+
+        // Show Sherlock 7D panel with Day 0 card before playback begins
+        if (SherlockState.sherlock7dNarration && SherlockState.sherlock7dNarration.beats.length > 0) {
+            showSherlock7DStack(SherlockState.sherlock7dNarration.beats, 0);
+            showNarrationPanel();
+        }
+
+        // Set scrub sync callback for Sherlock 7D
+        MultiDayState.onSherlock7DSync = (dayNumber: number) => {
+            if (SherlockState.sherlock7dNarration && SherlockState.sherlock7dNarration.beats.length > 0) {
+                // Map day number to beat index (beats are for days 1-7, index 0-6)
+                const beatIdx = Math.max(0, dayNumber - 1);
+                showSherlock7DStack(SherlockState.sherlock7dNarration.beats, beatIdx);
+                // Enable scrolling only when animation is paused/idle (not during playback)
+                if (MultiDayState.phase !== 'playing') {
+                    enableSherlockScrollMode();
+                }
+            }
+        };
+
         // Set the day-advance callback so playback animates VCR labels
-        (MultiDayState as any).onDayAdvance = onMultiDayAdvance;
+        MultiDayState.onDayAdvance = onMultiDayAdvance;
+
+        // Hold on the initial visible day briefly before auto-play. Without this preview beat,
+        // the initial week render and the first transition visually
+        // collapse into a single "pop" when Stream is clicked.
+        if (!isTurboActive()) {
+            await sleep(MULTI_DAY_DAY0_PREVIEW_MS);
+        }
 
         // Begin auto-play (loops until paused)
         await playMultiDaySequence(days, curvesData);
 
-        // Playback paused — update VCR state
+        // Playback paused/complete — update VCR state and enable Sherlock scrolling
         updateMultiDayVcrNav();
+        enableSherlockScrollMode();
         updateMultiDayLabelsStatic();
     } catch (err: any) {
         console.error('[MultiDay] Pipeline error:', err.message);
@@ -5466,6 +5809,8 @@ async function launchMultiDayPipeline() {
         MultiDayState.phase = 'idle';
         MultiDayState.lockedViewBoxHeight = null;
         MultiDayState.maxTimelineLanes = 0;
+        MultiDayState.bioBaseTranslateY = 0;
+        hideWeekStrip();
         deactivateMultiDayRibbonModule();
         // Restore buttons (multi-day disabled)
         showSimulationButton();
@@ -5769,10 +6114,8 @@ function prepareSimulationPills(diff: any[]): () => void {
             const revisedLabelX = label?.getAttribute('x') || '0';
             // Compute old position
             const oldX = phaseChartX(d.oldIv.timeMinutes);
-            const sub = d.oldIv.substance || null;
-            const dur = sub?.pharma?.duration || 240;
-            const oldEndX = phaseChartX(Math.min(d.oldIv.timeMinutes + dur, PHASE_CHART.endMin));
-            const oldW = Math.max(TIMELINE_ZONE.minBarW, oldEndX - oldX);
+            const plotRight = PHASE_CHART.padL + PHASE_CHART.plotW;
+            const oldW = Math.min(computeDoseBarWidth(d.oldIv), plotRight - oldX);
             rect.setAttribute('x', oldX.toFixed(1));
             rect.setAttribute('width', oldW.toFixed(1));
             if (label) label.setAttribute('x', (oldX + 5).toFixed(1));
@@ -5799,11 +6142,9 @@ function prepareSimulationPills(diff: any[]): () => void {
             const rect = pill.querySelector('rect');
             if (!rect) continue;
             const revisedW = rect.getAttribute('width') || '0';
-            const sub = d.oldIv.substance || null;
-            const dur = sub?.pharma?.duration || 240;
             const oldX = phaseChartX(d.oldIv.timeMinutes);
-            const oldEndX = phaseChartX(Math.min(d.oldIv.timeMinutes + dur, PHASE_CHART.endMin));
-            const oldW = Math.max(TIMELINE_ZONE.minBarW, oldEndX - oldX);
+            const plotRight = PHASE_CHART.padL + PHASE_CHART.plotW;
+            const oldW = Math.min(computeDoseBarWidth(d.oldIv), plotRight - oldX);
             const curX = parseFloat(rect.getAttribute('x') || '0');
             rect.setAttribute('width', oldW.toFixed(1));
 

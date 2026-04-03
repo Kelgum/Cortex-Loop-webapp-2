@@ -7,13 +7,16 @@
  */
 
 import { LLMCache } from './llm-cache';
-import { PhaseState, AppState, TimelineState } from './state';
+import { PhaseState, AppState, TimelineState, MultiDayState } from './state';
 import { settingsStore, sessionSettingsStore, STORAGE_KEYS } from './settings-store';
+import { generateCycleIconSvg, generateCycleIconFromBundle } from './cycle-icon';
 import {
     getCycleIndex,
     saveCycle,
     loadCycleBundle,
     deleteCycle,
+    renameCycle,
+    patchCycle,
     setLoadedCycleId,
     setLoadedCyclePrompt,
     getLoadedCycleId,
@@ -22,6 +25,9 @@ import {
 } from './cycle-store';
 import type { SavedCycleRecord } from './cycle-store';
 import { getCompletedStageClassesForPhase } from './cache-policy';
+import { SUBSTANCE_DB } from './substances';
+import { initCustomSectionsStore } from './custom-sections-store';
+import { initSectionOrder } from './mode-switcher';
 
 let _saveBtn: HTMLButtonElement | null = null;
 let _breakBtn: HTMLButtonElement | null = null;
@@ -64,6 +70,27 @@ async function handleSave(): Promise<void> {
         .slice(0, 3)
         .map((e: any) => (typeof e === 'string' ? e : e.name || ''));
 
+    const iconSvg = generateCycleIconSvg(MultiDayState.days, PhaseState.curvesData || []);
+
+    // Extract recommended biometric devices from the Spotter stage
+    const bioRecPayload = bundle.stages?.['biometric-rec-model']?.payload;
+    const recommendedDevices: string[] =
+        bioRecPayload && Array.isArray(bioRecPayload.recommended) ? bioRecPayload.recommended : [];
+
+    // Extract unique substance classes from the intervention protocol
+    const ivPayload = bundle.stages?.['intervention-model']?.payload;
+    const ivList: any[] = ivPayload?.interventions || [];
+    const substanceClasses = [
+        ...new Set(
+            ivList
+                .map((iv: any) => {
+                    const sub = SUBSTANCE_DB[iv.key];
+                    return sub?.class || null;
+                })
+                .filter(Boolean) as string[],
+        ),
+    ];
+
     const record: SavedCycleRecord = {
         id,
         filename,
@@ -74,6 +101,10 @@ async function handleSave(): Promise<void> {
         savedAt: new Date().toISOString(),
         hookSentence: PhaseState.hookSentence || null,
         topEffects,
+        badgeCategory: PhaseState.badgeCategory || null,
+        iconSvg,
+        recommendedDevices,
+        substanceClasses,
         bundle,
     };
 
@@ -134,6 +165,8 @@ function renderCycleList(): void {
     const activeId = getLoadedCycleId();
     _cycleList.innerHTML = '';
 
+    const regenQueue: { entry: (typeof index)[0]; iconWrap: HTMLElement }[] = [];
+
     for (const entry of index) {
         const isActive = entry.id === activeId;
         const row = document.createElement('div');
@@ -148,6 +181,51 @@ function renderCycleList(): void {
         const name = document.createElement('span');
         name.className = 'saved-cycle-name';
         name.textContent = entry.filename;
+        name.contentEditable = 'true';
+        name.spellcheck = false;
+
+        // Rename: inline edit on the name span
+        name.addEventListener('focus', e => {
+            e.stopPropagation();
+            const sel = window.getSelection();
+            if (sel) {
+                const range = document.createRange();
+                range.selectNodeContents(name);
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        });
+
+        name.addEventListener('keydown', (e: KeyboardEvent) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                name.blur();
+            } else if (e.key === 'Escape') {
+                name.textContent = entry.filename;
+                name.blur();
+            }
+            // Stop Space/Enter from triggering the info click handler
+            e.stopPropagation();
+        });
+
+        name.addEventListener('blur', async () => {
+            const trimmed = (name.textContent || '').trim();
+            if (!trimmed) {
+                name.textContent = entry.filename;
+                return;
+            }
+            if (trimmed !== entry.filename) {
+                try {
+                    await renameCycle(entry.id, trimmed);
+                    entry.filename = trimmed;
+                } catch {
+                    name.textContent = entry.filename;
+                }
+            }
+        });
+
+        // Prevent clicks on the name from triggering load/unload
+        name.addEventListener('click', e => e.stopPropagation());
 
         const meta = document.createElement('span');
         meta.className = 'saved-cycle-meta';
@@ -197,9 +275,50 @@ function renderCycleList(): void {
             }
         });
 
+        const iconWrap = document.createElement('div');
+        iconWrap.className = 'saved-cycle-icon';
+        if (entry.iconSvg && entry.iconSvg.includes('data-v="10"')) {
+            iconWrap.innerHTML = entry.iconSvg;
+        } else {
+            // Fallback — queued for sequential lazy regen below
+            iconWrap.innerHTML =
+                `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120">` +
+                `<rect class="ci-bg" width="200" height="120" rx="8"/>` +
+                `<text class="ci-day" x="100" y="65" text-anchor="middle" font-size="20" fill="rgba(255,255,255,0.12)">${entry.maxEffects}</text>` +
+                `</svg>`;
+            regenQueue.push({ entry, iconWrap });
+        }
+
+        row.appendChild(iconWrap);
         row.appendChild(info);
         row.appendChild(delBtn);
         _cycleList.appendChild(row);
+    }
+
+    // Kick off sequential lazy icon regeneration for entries without icons
+    if (regenQueue.length > 0) {
+        void regenIconsSequentially(regenQueue);
+    }
+}
+
+// ── Lazy Icon Regeneration (sequential to avoid index race conditions) ──
+
+async function regenIconsSequentially(
+    queue: { entry: { id: string; iconSvg?: string | null }; iconWrap: HTMLElement }[],
+): Promise<void> {
+    for (const { entry, iconWrap } of queue) {
+        try {
+            const bundle = await loadCycleBundle(entry.id);
+            if (!bundle) continue;
+            const svg = generateCycleIconFromBundle(bundle);
+            if (!svg) continue;
+            iconWrap.innerHTML = svg;
+            entry.iconSvg = svg;
+            // Persist sequentially — each PATCH completes before the next starts
+            await patchCycle(entry.id, { iconSvg: svg });
+        } catch {
+            // Silent — fallback icon remains for this entry
+        }
     }
 }
 
@@ -282,6 +401,8 @@ function applyLoadedCycleState(): void {
 
 export async function initCycleUi(): Promise<void> {
     await initCycleStore();
+    await initCustomSectionsStore();
+    await initSectionOrder();
 
     _saveBtn = document.getElementById('cycle-save-btn') as HTMLButtonElement | null;
     _breakBtn = document.getElementById('cycle-break-btn') as HTMLButtonElement | null;

@@ -6,6 +6,7 @@
 import type { AnimationSegment } from '../timeline-engine';
 import { PHASE_CHART, TIMELINE_ZONE, BIOMETRIC_ZONE } from '../constants';
 import { svgEl } from '../utils';
+import { animatePhaseChartViewBoxHeight } from '../substance-timeline';
 import {
     MAIN_SCAN_LOOP_PERIOD,
     createMainScanLineElements,
@@ -188,7 +189,8 @@ export function createBioScanLineSegment(startTime: number, duration: number, ch
             const vb = svg.getAttribute('viewBox')!.split(' ').map(Number);
             savedViewBoxH = vb[3];
             const newH = savedViewBoxH + zoneH;
-            svg.setAttribute('viewBox', `0 0 ${PHASE_CHART.viewW} ${newH}`);
+            // Smoothly expand viewBox instead of popping
+            void animatePhaseChartViewBoxHeight(svg as unknown as SVGSVGElement, newH, 400);
 
             const zoneTop = savedViewBoxH + BIOMETRIC_ZONE.separatorPad;
             const zoneHeight = zoneH - BIOMETRIC_ZONE.separatorPad - BIOMETRIC_ZONE.bottomPad;

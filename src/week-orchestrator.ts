@@ -10,7 +10,7 @@ import { interpolatePrompt, clamp } from './utils';
 import { PROMPTS } from './prompts';
 import { DebugLog } from './debug-panel';
 import { getActiveSubstances } from './substances';
-import { validateInterventions, computeLxOverlay } from './lx-system';
+import { validateInterventions, computeLxOverlay, computeStackingPeaks, pruneConcurrentOverload } from './lx-system';
 import { extractInterventionsData } from './llm-response-shape';
 import { LLMCache } from './llm-cache';
 import type {
@@ -25,8 +25,10 @@ import type {
     SpotterDailyOutput,
     StrategistBioDailyOutput,
     GrandmasterDailyOutput,
+    Sherlock7DNarration,
+    Sherlock7DBeat,
 } from './types';
-import { callStageWithFallback } from './llm-pipeline';
+import { callStageWithFallback, buildStackingCorrectionPrompt, STACKING_THRESHOLD } from './llm-pipeline';
 import { reportRuntimeBug } from './runtime-error-banner';
 
 // ── Generic call helper (mirrors llm-pipeline pattern) ──
@@ -102,8 +104,8 @@ async function callKnight(userGoal: string, curvesData: CurveData[]): Promise<Kn
 
     const systemPrompt = interpolatePrompt(PROMPTS.knight, {
         userGoal,
-        day0Desired: JSON.stringify(day0Desired, null, 1),
-        day0Baselines: JSON.stringify(day0Baselines, null, 1),
+        day0Desired: JSON.stringify(day0Desired),
+        day0Baselines: JSON.stringify(day0Baselines),
         profileText: BiometricState.profileText || 'No profile available.',
     });
 
@@ -111,7 +113,7 @@ async function callKnight(userGoal: string, curvesData: CurveData[]): Promise<Kn
         'knight',
         systemPrompt,
         'Design the 7-day desired curve evolution. Respond with JSON only.',
-        16384,
+        4096,
         'Knight',
         'knight-model',
     );
@@ -256,12 +258,12 @@ async function callSpotterDaily(
 
     const systemPrompt = interpolatePrompt(PROMPTS.spotterDaily, {
         userGoal,
-        day0BiometricChannels: JSON.stringify(day0BiometricChannels, null, 1),
-        day0Baselines: JSON.stringify(day0Baselines, null, 1),
-        day0Highlights: JSON.stringify(highlights || [], null, 1),
+        day0BiometricChannels: JSON.stringify(day0BiometricChannels),
+        day0Baselines: JSON.stringify(day0Baselines),
+        day0Highlights: JSON.stringify(highlights || []),
         knightNarrative: knightNarrative || '',
         profileText: BiometricState.profileText || 'No profile available.',
-        channelSpec: JSON.stringify(channelSpec, null, 1),
+        channelSpec: JSON.stringify(channelSpec),
     });
 
     const result = await callGenericForStage(
@@ -294,7 +296,9 @@ async function callSpotterDaily(
         output.days.sort((a: any, b: any) => a.day - b.day);
 
         // Compute full biometric curves from day-0 + modulations
+        // (strip any LLM-generated biometricChannels — we compute these from modulations)
         for (const dayEntry of output.days) {
+            delete (dayEntry as any).biometricChannels;
             const mods: BioModulation[] = (dayEntry.modulations || []).filter(
                 (m: any) => m.channelIdx != null && m.startHour != null && m.endHour != null && m.magnitude != null,
             );
@@ -343,15 +347,15 @@ async function callStrategistBioDaily(
 
     const systemPrompt = interpolatePrompt(PROMPTS.strategistBioDaily, {
         userGoal,
-        day0Baselines: JSON.stringify(day0Baselines, null, 1),
-        spotterBioSummary: JSON.stringify(spotterBioSummary, null, 1),
+        day0Baselines: JSON.stringify(day0Baselines),
+        spotterBioSummary: JSON.stringify(spotterBioSummary),
     });
 
     const result = await callGenericForStage(
         'strategistBioDaily',
         systemPrompt,
         'Correct baselines for all 7 days. Respond with JSON only.',
-        16384,
+        8192,
         'Strategist Bio (7d)',
         'strategist-bio-daily-model',
     );
@@ -387,14 +391,11 @@ async function callGrandmasterDaily(
     stratBioOutput: StrategistBioDailyOutput,
     knightOutput: KnightOutput,
     day0Interventions: Intervention[],
+    prebuiltSystemPrompt?: string,
 ): Promise<GrandmasterDailyOutput> {
-    const active = getActiveSubstances();
-    const substanceList = Object.entries(active).map(([key, s]: [string, any]) => ({
-        key,
-        name: s.name,
-        class: s.class,
-        standardDose: s.standardDose,
-    }));
+    const systemPrompt =
+        prebuiltSystemPrompt ||
+        buildGrandmasterDailySystemPrompt(userGoal, curvesData, stratBioOutput, knightOutput, day0Interventions);
 
     const day0Protocol = day0Interventions.map(iv => ({
         key: iv.key,
@@ -403,25 +404,6 @@ async function callGrandmasterDaily(
         doseMultiplier: iv.doseMultiplier,
         impacts: iv.impacts,
     }));
-
-    const correctedBaselines = (stratBioOutput.days || []).map(d => ({
-        day: d.day,
-        baselines: d.correctedBaseline,
-    }));
-
-    const desiredCurves = (knightOutput.days || []).map(d => ({
-        day: d.day,
-        desired: d.desired,
-    }));
-
-    const systemPrompt = interpolatePrompt(PROMPTS.grandmasterDaily, {
-        userGoal,
-        correctedBaselines: JSON.stringify(correctedBaselines, null, 1),
-        desiredCurves: JSON.stringify(desiredCurves, null, 1),
-        day0Protocol: JSON.stringify(day0Protocol, null, 1),
-        substanceList: JSON.stringify(substanceList, null, 1),
-        profileText: BiometricState.profileText || 'No profile available.',
-    });
 
     const result = await callGenericForStage(
         'grandmasterDaily',
@@ -501,6 +483,260 @@ async function callGrandmasterDaily(
     return output as GrandmasterDailyOutput;
 }
 
+// ── Shared helper: build day-specific curvesData from agent outputs ──
+
+function buildDayCurvesData(
+    dayNumber: number,
+    curvesData: CurveData[],
+    knightOutput: KnightOutput,
+    stratBioOutput: StrategistBioDailyOutput,
+    gmDay: any | undefined,
+): {
+    tempCurvesData: CurveData[];
+    desiredCurves: CurvePoint[][];
+    correctedBaselines: CurvePoint[][];
+    postInterventionBaseline: CurvePoint[][];
+} {
+    // ── Desired curves from Knight ──
+    const knightDay = (knightOutput.days || []).find((d: any) => d.day === dayNumber);
+    const desiredCurves: CurvePoint[][] = [];
+    for (const curve of curvesData) {
+        const match = (knightDay?.desired || []).find(
+            (d: any) =>
+                d.effect &&
+                (d.effect.toLowerCase() === curve.effect.toLowerCase() ||
+                    curve.effect.toLowerCase().includes(d.effect.toLowerCase()) ||
+                    d.effect.toLowerCase().includes(curve.effect.toLowerCase())),
+        );
+        if (match && Array.isArray(match.desired) && match.desired.length >= 10) {
+            desiredCurves.push(
+                match.desired.map((p: any) => ({
+                    hour: Number(p.hour),
+                    value: clamp(Number(p.value), 0, 100),
+                })),
+            );
+        } else {
+            desiredCurves.push([...curve.desired]);
+        }
+    }
+
+    // ── Corrected baselines from Strategist Bio ──
+    const stratDay = (stratBioOutput.days || []).find((d: any) => d.day === dayNumber);
+    const correctedBaselines: CurvePoint[][] = [];
+    for (const curve of curvesData) {
+        const match = (stratDay?.correctedBaseline || []).find(
+            (cb: any) =>
+                cb.effect &&
+                (cb.effect.toLowerCase() === curve.effect.toLowerCase() ||
+                    curve.effect.toLowerCase().includes(cb.effect.toLowerCase()) ||
+                    cb.effect.toLowerCase().includes(curve.effect.toLowerCase())),
+        );
+        if (match && Array.isArray(match.baseline) && match.baseline.length >= 10) {
+            correctedBaselines.push(
+                match.baseline.map((p: any) => ({
+                    hour: Number(p.hour),
+                    value: clamp(Number(p.value), 0, 100),
+                })),
+            );
+        } else {
+            correctedBaselines.push([...curve.baseline]);
+        }
+    }
+
+    // ── Post-intervention baseline from Grandmaster (cumulative chronobiotic shift) ──
+    const postInterventionBaseline: CurvePoint[][] = [];
+    for (let ci = 0; ci < curvesData.length; ci++) {
+        const curve = curvesData[ci];
+        const match = (gmDay?.postInterventionBaseline || []).find(
+            (pb: any) =>
+                pb.effect &&
+                (pb.effect.toLowerCase() === curve.effect.toLowerCase() ||
+                    curve.effect.toLowerCase().includes(pb.effect.toLowerCase()) ||
+                    pb.effect.toLowerCase().includes(curve.effect.toLowerCase())),
+        );
+        if (match && Array.isArray(match.baseline) && match.baseline.length >= 10) {
+            postInterventionBaseline.push(
+                match.baseline.map((p: any) => ({
+                    hour: Number(p.hour),
+                    value: clamp(Number(p.value), 0, 100),
+                })),
+            );
+        } else {
+            postInterventionBaseline.push(correctedBaselines[ci]);
+        }
+    }
+
+    const tempCurvesData = curvesData.map((c, i) => ({
+        ...c,
+        baseline: postInterventionBaseline[i] || correctedBaselines[i],
+        desired: desiredCurves[i] || c.desired,
+    }));
+
+    return { tempCurvesData, desiredCurves, correctedBaselines, postInterventionBaseline };
+}
+
+// ── Referee: validate Grandmaster 7D stacking and correct overshoots ──
+
+async function refereeCorrectDay(
+    dayNumber: number,
+    interventions: any[],
+    curvesData: CurveData[],
+    systemPrompt: string,
+): Promise<any[]> {
+    if (interventions.length < 2) return interventions;
+
+    const validated = validateInterventions(JSON.parse(JSON.stringify(interventions)), curvesData);
+    if (validated.length === 0) return interventions;
+
+    // Concurrent density pruning — always runs, even if stacking is OK
+    const { pruned: densityPruned, removed: densityRemoved } = pruneConcurrentOverload(validated, curvesData);
+    const postDensityIvs = densityRemoved.length > 0 ? densityPruned : interventions;
+
+    const correctionPrompt = buildStackingCorrectionPrompt(
+        densityRemoved.length > 0 ? validateInterventions(JSON.parse(JSON.stringify(densityPruned)), curvesData) : validated,
+        curvesData,
+    );
+    if (!correctionPrompt) {
+        console.log(`[Referee] Day ${dayNumber} — stacking OK`);
+        return postDensityIvs;
+    }
+
+    console.warn(`[Referee] Day ${dayNumber} — stacking overshoot detected, calling LLM for correction`);
+
+    const originalJson = JSON.stringify(
+        interventions.map((iv: any) => ({
+            key: iv.key,
+            dose: iv.dose,
+            doseMultiplier: iv.doseMultiplier,
+            timeMinutes: iv.timeMinutes,
+            impacts: iv.impacts,
+            rationale: iv.rationale,
+        })),
+        null,
+        1,
+    );
+
+    const correctionUserPrompt =
+        `Day ${dayNumber} protocol:\n\`\`\`json\n${originalJson}\n\`\`\`\n\n` +
+        correctionPrompt +
+        '\n\nReturn ONLY the corrected interventions array as JSON: {"interventions": [...]}';
+
+    try {
+        const corrected = await callStageWithFallback<any>({
+            stage: 'grandmasterDaily',
+            stageLabel: `Referee (day ${dayNumber} stacking correction)`,
+            stageClass: 'referee-model',
+            systemPrompt,
+            userPrompt: correctionUserPrompt,
+            maxTokens: 8192,
+            validateResult: (result: unknown) => {
+                const ivs = extractInterventionsData(result);
+                if (ivs.length < 2) throw new Error('Referee correction must return at least 2 interventions.');
+                return result;
+            },
+        });
+
+        const correctedIvs = extractInterventionsData(corrected);
+        if (correctedIvs.length >= 2) {
+            const revalidated = validateInterventions(JSON.parse(JSON.stringify(correctedIvs)), curvesData);
+
+            // Apply density pruning to the corrected result too
+            const { pruned: postPruned, removed: postRemoved } = pruneConcurrentOverload(revalidated, curvesData);
+            const finalIvs = postRemoved.length > 0 ? postPruned : correctedIvs;
+
+            const finalValidated = validateInterventions(JSON.parse(JSON.stringify(finalIvs)), curvesData);
+            const newReports = computeStackingPeaks(finalValidated, curvesData);
+            for (const r of newReports) {
+                const status = Math.abs(r.peakNormSum) > STACKING_THRESHOLD ? 'STILL HIGH' : 'OK';
+                console.log(
+                    `[Referee] Day ${dayNumber} corrected "${r.curve}" peakNormSum=${r.peakNormSum} at ${r.peakHour}:00 — ${status}`,
+                );
+            }
+            return finalIvs;
+        }
+
+        console.warn(`[Referee] Day ${dayNumber} correction produced < 2 interventions — keeping original`);
+        return postDensityIvs;
+    } catch (err: any) {
+        console.warn(`[Referee] Day ${dayNumber} correction call failed — keeping original:`, err.message);
+        return postDensityIvs;
+    }
+}
+
+async function runRefereePass(
+    grandmasterOutput: GrandmasterDailyOutput,
+    curvesData: CurveData[],
+    knightOutput: KnightOutput,
+    stratBioOutput: StrategistBioDailyOutput,
+    systemPrompt: string,
+    onProgress?: (msg: string) => void,
+): Promise<void> {
+    let correctedCount = 0;
+
+    for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
+        const dayNumber = dayIdx + 1;
+        const gmDay = (grandmasterOutput.days || []).find((d: any) => d.day === dayNumber);
+        if (!gmDay || !gmDay.interventions || gmDay.interventions.length < 2) continue;
+
+        const { tempCurvesData } = buildDayCurvesData(dayNumber, curvesData, knightOutput, stratBioOutput, gmDay);
+
+        onProgress?.(`Referee: validating day ${dayNumber}…`);
+        const corrected = await refereeCorrectDay(dayNumber, gmDay.interventions, tempCurvesData, systemPrompt);
+
+        if (corrected !== gmDay.interventions) {
+            gmDay.interventions = corrected;
+            correctedCount++;
+        }
+    }
+
+    console.log(`[Referee] Pass complete — ${correctedCount} of 7 days required correction`);
+}
+
+// ── Build Grandmaster Daily system prompt (shared by Grandmaster + Referee) ──
+
+function buildGrandmasterDailySystemPrompt(
+    userGoal: string,
+    curvesData: CurveData[],
+    stratBioOutput: StrategistBioDailyOutput,
+    knightOutput: KnightOutput,
+    day0Interventions: Intervention[],
+): string {
+    const active = getActiveSubstances();
+    const substanceList = Object.entries(active).map(([key, s]: [string, any]) => ({
+        key,
+        name: s.name,
+        class: s.class,
+        standardDose: s.standardDose,
+    }));
+
+    const day0Protocol = day0Interventions.map(iv => ({
+        key: iv.key,
+        dose: iv.dose,
+        timeMinutes: iv.timeMinutes,
+        doseMultiplier: iv.doseMultiplier,
+        impacts: iv.impacts,
+    }));
+
+    const correctedBaselines = (stratBioOutput.days || []).map(d => ({
+        day: d.day,
+        baselines: d.correctedBaseline,
+    }));
+
+    const desiredCurves = (knightOutput.days || []).map(d => ({
+        day: d.day,
+        desired: d.desired,
+    }));
+
+    return interpolatePrompt(PROMPTS.grandmasterDaily, {
+        userGoal,
+        correctedBaselines: JSON.stringify(correctedBaselines),
+        desiredCurves: JSON.stringify(desiredCurves),
+        day0Protocol: JSON.stringify(day0Protocol),
+        substanceList: JSON.stringify(substanceList),
+        profileText: BiometricState.profileText || 'No profile available.',
+    });
+}
+
 // ── Assemble DaySnapshots from all 4 agent outputs ──
 
 function assembleDaySnapshots(
@@ -516,62 +752,19 @@ function assembleDaySnapshots(
     for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
         const dayNumber = dayIdx + 1;
 
-        // ── Desired curves from Knight ──
-        const knightDay = (knightOutput.days || []).find((d: any) => d.day === dayNumber);
-        const desiredCurves: CurvePoint[][] = [];
-        for (const curve of curvesData) {
-            const match = (knightDay?.desired || []).find(
-                (d: any) =>
-                    d.effect &&
-                    (d.effect.toLowerCase() === curve.effect.toLowerCase() ||
-                        curve.effect.toLowerCase().includes(d.effect.toLowerCase()) ||
-                        d.effect.toLowerCase().includes(curve.effect.toLowerCase())),
-            );
-            if (match && Array.isArray(match.desired) && match.desired.length >= 10) {
-                desiredCurves.push(
-                    match.desired.map((p: any) => ({
-                        hour: Number(p.hour),
-                        value: clamp(Number(p.value), 0, 100),
-                    })),
-                );
-            } else {
-                desiredCurves.push([...curve.desired]);
-            }
-        }
-
-        // ── Corrected baselines from Strategist Bio ──
-        const stratDay = (stratBioOutput.days || []).find((d: any) => d.day === dayNumber);
-        const correctedBaselines: CurvePoint[][] = [];
-        for (const curve of curvesData) {
-            const match = (stratDay?.correctedBaseline || []).find(
-                (cb: any) =>
-                    cb.effect &&
-                    (cb.effect.toLowerCase() === curve.effect.toLowerCase() ||
-                        curve.effect.toLowerCase().includes(cb.effect.toLowerCase()) ||
-                        cb.effect.toLowerCase().includes(curve.effect.toLowerCase())),
-            );
-            if (match && Array.isArray(match.baseline) && match.baseline.length >= 10) {
-                correctedBaselines.push(
-                    match.baseline.map((p: any) => ({
-                        hour: Number(p.hour),
-                        value: clamp(Number(p.value), 0, 100),
-                    })),
-                );
-            } else {
-                correctedBaselines.push([...curve.baseline]);
-            }
-        }
-
-        // ── Interventions from Grandmaster ──
         const gmDay = (grandmasterOutput.days || []).find((d: any) => d.day === dayNumber);
+        const { tempCurvesData, desiredCurves, correctedBaselines, postInterventionBaseline } = buildDayCurvesData(
+            dayNumber,
+            curvesData,
+            knightOutput,
+            stratBioOutput,
+            gmDay,
+        );
+
         const rawIvs = extractInterventionsData(gmDay || { interventions: [] });
-        const tempCurvesData = curvesData.map((c, i) => ({
-            ...c,
-            baseline: correctedBaselines[i],
-        }));
         const validatedIvs = validateInterventions(JSON.parse(JSON.stringify(rawIvs)), tempCurvesData);
 
-        // ── Lx overlay ──
+        // ── Lx overlay (computed against post-intervention baseline) ──
         const lxCurves = computeLxOverlay(validatedIvs, tempCurvesData);
 
         // ── Biometric channels from Spotter (merged with day-0 specs for display metadata) ──
@@ -608,6 +801,7 @@ function assembleDaySnapshots(
             day: dayNumber,
             bioCorrectedBaseline: correctedBaselines,
             desiredCurves,
+            postInterventionBaseline,
             interventions: validatedIvs,
             lxCurves,
             biometricChannels,
@@ -638,6 +832,7 @@ export async function runWeekPipeline(
         day: 0,
         bioCorrectedBaseline: curvesData.map(c => [...c.baseline]),
         desiredCurves: curvesData.map(c => [...c.desired]),
+        postInterventionBaseline: curvesData.map(c => [...c.baseline]),
         interventions: [...interventions],
         lxCurves: PhaseState.lxCurves ? [...PhaseState.lxCurves] : computeLxOverlay(interventions, curvesData),
         biometricChannels: [...biometricChannels],
@@ -701,6 +896,18 @@ export async function runWeekPipeline(
     onProgress?.('Grandmaster: optimizing protocols…');
     console.log('[WeekPipeline] Calling Grandmaster Daily...');
 
+    // Build system prompt once — shared by Grandmaster + Referee
+    const gmSystemPrompt = buildGrandmasterDailySystemPrompt(
+        userGoal,
+        curvesData,
+        stratBioOutput,
+        knightOutput,
+        interventions,
+    );
+
+    // Check cache before calling — Referee skips correction for cached results
+    const gmIsCached = LLMCache.isEnabled('grandmaster-daily-model') && LLMCache.hasData('grandmaster-daily-model');
+
     let grandmasterOutput: GrandmasterDailyOutput;
     try {
         grandmasterOutput = await callGrandmasterDaily(
@@ -709,11 +916,33 @@ export async function runWeekPipeline(
             stratBioOutput,
             knightOutput,
             interventions,
+            gmSystemPrompt,
         );
         console.log('[WeekPipeline] Grandmaster output received:', grandmasterOutput.days?.length, 'days');
     } catch (err: any) {
         console.error('[WeekPipeline] Grandmaster Daily failed:', err.message);
         throw new Error('Grandmaster Daily agent failed: ' + err.message);
+    }
+
+    // Step 4.5: Referee — validate stacking per day and correct overshoots
+    if (!gmIsCached) {
+        onProgress?.('Referee: validating pharmacodynamic stacking…');
+        console.log('[WeekPipeline] Running Referee pass...');
+        try {
+            await runRefereePass(
+                grandmasterOutput,
+                curvesData,
+                knightOutput,
+                stratBioOutput,
+                gmSystemPrompt,
+                onProgress,
+            );
+            console.log('[WeekPipeline] Referee pass complete');
+        } catch (err: any) {
+            console.warn('[WeekPipeline] Referee pass failed (non-fatal):', err.message);
+        }
+    } else {
+        console.log('[WeekPipeline] Skipping Referee — Grandmaster output is cached');
     }
 
     // Step 5: Assemble DaySnapshots (computeLxOverlay per day)
@@ -727,4 +956,126 @@ export async function runWeekPipeline(
 
     console.log(`[WeekPipeline] Assembled ${days.length} day snapshots`);
     return days;
+}
+
+// ── Sherlock 7D — Per-day summary narration for STREAM ──
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function getWeekdayName(dayNumber: number): string {
+    const startWeekday = MultiDayState.startWeekday || 'Monday';
+    const startIdx = WEEKDAYS.findIndex(d => d.toLowerCase() === startWeekday.toLowerCase());
+    if (startIdx === -1) return `Day ${dayNumber}`;
+    return WEEKDAYS[(startIdx + dayNumber) % 7];
+}
+
+/** Compute a compact diff summary between two intervention arrays. */
+export function buildInterventionDiffSummary(prevIvs: Intervention[], newIvs: Intervention[]): string {
+    const prevMap = new Map<string, Intervention[]>();
+    for (const iv of prevIvs) prevMap.set(iv.key, [...(prevMap.get(iv.key) || []), iv]);
+
+    const newMap = new Map<string, Intervention[]>();
+    for (const iv of newIvs) newMap.set(iv.key, [...(newMap.get(iv.key) || []), iv]);
+
+    const parts: string[] = [];
+
+    // Added substances
+    for (const [key, ivs] of newMap) {
+        if (!prevMap.has(key)) {
+            const iv = ivs[0];
+            parts.push(`+${iv.substance?.name || key} ${iv.dose || ''}`);
+        }
+    }
+
+    // Removed substances
+    for (const [key, ivs] of prevMap) {
+        if (!newMap.has(key)) {
+            const iv = ivs[0];
+            parts.push(`-${iv.substance?.name || key}`);
+        }
+    }
+
+    // Dose changes
+    for (const [key, newList] of newMap) {
+        const prevList = prevMap.get(key);
+        if (!prevList) continue;
+        const prevDose = prevList[0]?.dose || '';
+        const newDose = newList[0]?.dose || '';
+        if (prevDose !== newDose && prevDose && newDose) {
+            parts.push(`${newList[0].substance?.name || key} ${prevDose}->${newDose}`);
+        }
+    }
+
+    return parts.length > 0 ? parts.join(', ') : 'Protocol held steady';
+}
+
+/** Build the compact week summary string for the Sherlock 7D prompt. */
+function buildWeekSummary(days: DaySnapshot[]): string {
+    const lines: string[] = [];
+    for (let i = 1; i < days.length; i++) {
+        const day = days[i];
+        const prev = days[i - 1];
+        const weekday = getWeekdayName(day.day);
+        const diff = buildInterventionDiffSummary(prev.interventions, day.interventions);
+        lines.push(
+            `Day ${day.day} (${weekday}): ${day.events || 'No notable events.'}` +
+                `\n  Narrative: ${day.dayNarrative || day.narrativeBeat || 'Steady state.'}` +
+                `\n  Changes: ${diff}`,
+        );
+    }
+    return lines.join('\n\n');
+}
+
+/** Call the Sherlock 7D LLM agent to produce per-day summary narration. */
+export async function callSherlock7D(days: DaySnapshot[], userGoal: string): Promise<Sherlock7DNarration> {
+    const weekSummary = buildWeekSummary(days);
+    const systemPrompt = interpolatePrompt(PROMPTS.sherlock7d, { userGoal, weekSummary });
+    const userPrompt = 'Narrate each day of the 7-day protocol adaptation in Sherlock style. Respond with JSON only.';
+
+    const result = (await callGenericForStage(
+        'sherlock7d',
+        systemPrompt,
+        userPrompt,
+        2048,
+        'Sherlock 7D',
+        'sherlock7d-model',
+    )) as Sherlock7DNarration;
+
+    return result;
+}
+
+/** Build fallback Sherlock 7D narration from existing DaySnapshot narratives. */
+export function buildFallbackSherlock7D(days: DaySnapshot[]): Sherlock7DNarration {
+    const beats: Sherlock7DBeat[] = [];
+    for (let i = 1; i < days.length; i++) {
+        const day = days[i];
+        const prev = days[i - 1];
+        const weekday = getWeekdayName(day.day);
+        const diff = buildInterventionDiffSummary(prev.interventions, day.interventions);
+
+        // Derive direction from intervention count delta
+        const countDelta = day.interventions.length - prev.interventions.length;
+        const direction: 'up' | 'down' | 'neutral' = countDelta > 0 ? 'up' : countDelta < 0 ? 'down' : 'neutral';
+
+        // Find most-changed substance
+        const prevKeys = new Set(prev.interventions.map(iv => iv.key));
+        const newKeys = new Set(day.interventions.map(iv => iv.key));
+        const addedIv = day.interventions.find(iv => !prevKeys.has(iv.key));
+        const removedIv = prev.interventions.find(iv => !newKeys.has(iv.key));
+        const topIv = addedIv || removedIv || day.interventions[0];
+
+        beats.push({
+            day: day.day,
+            weekday,
+            text: day.dayNarrative || day.narrativeBeat || `Day ${day.day} protocol adaptation.`,
+            direction,
+            keyChanges: diff,
+            topSubstanceKey: topIv?.key,
+            topSubstanceName: topIv?.substance?.name,
+        });
+    }
+    return {
+        beats,
+        outro: 'Seven days of adaptation. The protocol has learned your rhythm.',
+    };
 }
