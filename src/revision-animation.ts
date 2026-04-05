@@ -1047,33 +1047,48 @@ export async function animateRevisionScan(
                 sherlockTriggers.length > 0 ? sherlockTriggers[0].x - 8 : PHASE_CHART.padL;
             await dayScan.moveTo(firstX);
 
-            // ── SINGLE rAF LOOP ──
+            // ── SINGLE rAF LOOP — scan-triggered per-pill animation ──
             const SWEEP_SPEED_PX_PER_MS = 0.036;
             const plotStartX = firstX;
             const plotEndX = PHASE_CHART.padL + PHASE_CHART.plotW;
             const sweepDist = Math.max(1, plotEndX - plotStartX);
             const DURATION = clamp(sweepDist / SWEEP_SPEED_PX_PER_MS, 2000, 18000);
 
+            // Each pill animates over this many pixels of scan travel after the scan reaches it
+            const PILL_ANIM_WINDOW_PX = 70;
+
             let nextCard = 0;
-            let nextMorph = 0;
             const morphPromises: Promise<void>[] = [];
+
+            // Build morph triggers sorted by X position (fire when scan reaches each substance)
+            const morphTriggers = morphEntries
+                .map((e: any) => ({
+                    entry: e,
+                    x: phaseChartX((e.oldIv || e.newIv)?.timeMinutes ?? PHASE_CHART.startMin),
+                    fired: false,
+                }))
+                .sort((a: any, b: any) => a.x - b.x);
 
             await new Promise<void>(resolve => {
                 const startTs = performance.now();
 
                 (function tick(now: number) {
                     const rawT = Math.min(1, (now - startTs) / DURATION);
-                    const ease =
-                        rawT < 0.5
-                            ? 2 * rawT * rawT
-                            : 1 - Math.pow(-2 * rawT + 2, 2) / 2; // easeInOutQuad
 
                     // 1. Advance scan line (linear for constant visual speed)
                     const scanX = plotStartX + sweepDist * rawT;
                     dayScan.setX(scanX);
 
-                    // 2. Tick all pills simultaneously
-                    tickPillMorph(pillPlan, ease, curveCtx, { onRemoveTick: revisionRemoveTick });
+                    // 2. Tick pills with per-pill progress based on scan position
+                    const progressForPill = (pillX: number): number => {
+                        if (scanX < pillX) return 0;
+                        if (scanX >= pillX + PILL_ANIM_WINDOW_PX) return 1;
+                        return (scanX - pillX) / PILL_ANIM_WINDOW_PX;
+                    };
+                    tickPillMorph(pillPlan, rawT, curveCtx, {
+                        onRemoveTick: revisionRemoveTick,
+                        progressForPill,
+                    });
 
                     // 3. Fire Sherlock cards as scan crosses X thresholds
                     while (nextCard < sherlockTriggers.length && scanX >= sherlockTriggers[nextCard].x) {
@@ -1081,28 +1096,34 @@ export async function animateRevisionScan(
                         nextCard++;
                     }
 
-                    // 4. Fire morphLxStep at evenly spaced t intervals
-                    if (morphEntries.length > 0) {
-                        const morphThreshold = (nextMorph + 0.5) / morphEntries.length;
-                        if (ease >= morphThreshold && nextMorph < morphEntries.length) {
-                            const entry = morphEntries[nextMorph];
+                    // 4. Fire morphLxStep when scan reaches each substance's X
+                    for (const trigger of morphTriggers) {
+                        if (!trigger.fired && scanX >= trigger.x) {
+                            trigger.fired = true;
                             morphPromises.push(
                                 Promise.resolve(
-                                    options.morphLxStep?.(entry, entry._origIdx ?? nextMorph, morphDurPerEntry),
+                                    options.morphLxStep?.(
+                                        trigger.entry,
+                                        trigger.entry._origIdx ?? 0,
+                                        morphDurPerEntry,
+                                    ),
                                 ),
                             );
-                            nextMorph++;
                         }
                     }
 
                     // 5. Interpolate bio strip Y + viewBox per-frame
                     if (bioDeltaY !== 0) {
-                        const ty = bioStartTY + bioDeltaY * ease;
+                        const bioEase =
+                            rawT < 0.5
+                                ? 2 * rawT * rawT
+                                : 1 - Math.pow(-2 * rawT + 2, 2) / 2;
+                        const ty = bioStartTY + bioDeltaY * bioEase;
                         if (bioGroupEl)
                             bioGroupEl.setAttribute('transform', `translate(0,${ty.toFixed(2)})`);
                         if (spotterGroupEl)
                             spotterGroupEl.setAttribute('transform', `translate(0,${ty.toFixed(2)})`);
-                        const newH = startViewBoxH + bioDeltaY * ease;
+                        const newH = startViewBoxH + bioDeltaY * bioEase;
                         svgEl_.setAttribute(
                             'viewBox',
                             `0 0 ${PHASE_CHART.viewW} ${newH.toFixed(1)}`,
