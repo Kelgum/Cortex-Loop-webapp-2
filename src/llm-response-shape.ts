@@ -7,10 +7,38 @@ import type {
     SpotterProfileDraftResult,
     StrategistCurve,
     StrategistStageResult,
+    TimeHorizon,
+    TimeHorizonMode,
 } from './types';
 import { SUBSTANCE_DB } from './substances';
 import { reportRuntimeBug } from './runtime-error-banner';
 import { parseDoseToMg } from './utils';
+
+const VALID_TIME_HORIZON_MODES: TimeHorizonMode[] = ['daily', 'weekly', 'cyclical', 'program'];
+const DEFAULT_TIME_HORIZON: TimeHorizon = {
+    mode: 'daily',
+    durationDays: 1,
+    rationale: 'Default — no extended timeline detected',
+    dailyPatternRepeats: false,
+};
+
+export function extractTimeHorizon(raw: unknown): TimeHorizon {
+    if (!raw || typeof raw !== 'object') return DEFAULT_TIME_HORIZON;
+    const obj = raw as Record<string, any>;
+    const mode = obj.mode;
+    if (typeof mode !== 'string' || !VALID_TIME_HORIZON_MODES.includes(mode as TimeHorizonMode)) {
+        return DEFAULT_TIME_HORIZON;
+    }
+    const durationDays = typeof obj.durationDays === 'number' && obj.durationDays >= 1
+        ? Math.min(Math.round(obj.durationDays), 28)
+        : mode === 'daily' ? 1 : mode === 'weekly' ? 7 : 28;
+    return {
+        mode: mode as TimeHorizonMode,
+        durationDays,
+        rationale: typeof obj.rationale === 'string' ? obj.rationale : '',
+        dailyPatternRepeats: typeof obj.dailyPatternRepeats === 'boolean' ? obj.dailyPatternRepeats : false,
+    };
+}
 
 export function isCurveLike(item: unknown): item is StrategistCurve {
     if (!item || typeof item !== 'object') return false;
@@ -32,7 +60,7 @@ export function extractCurvesData(raw: unknown): StrategistCurve[] {
     if (!raw || typeof raw !== 'object') return [];
 
     const rawObject = raw as Record<string, unknown>;
-    const candidates = [rawObject.curves, rawObject.data, rawObject.pharmacodynamic_curves];
+    const candidates = [rawObject.curves, rawObject.data, rawObject.pharmacodynamic_curves, rawObject.effectRoster];
     for (const candidate of candidates) {
         if (Array.isArray(candidate)) {
             const arr = candidate.filter(isCurveLike);

@@ -391,6 +391,7 @@ export const PhaseState: IPhaseState = {
     loadedCycleId: null,
     strategistProtectedEffect: '',
     badgeCategory: null,
+    timeHorizon: null,
 };
 
 // Biometric Loop state

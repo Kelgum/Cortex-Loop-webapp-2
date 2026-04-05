@@ -3240,7 +3240,7 @@ function getMdDayName(dayNum: number): string {
     const startWeekday = MultiDayState.startWeekday || 'Monday';
     const startIdx = MD_WEEKDAYS.findIndex(d => d.toLowerCase() === startWeekday.toLowerCase());
     if (startIdx === -1) return `Day ${dayNum}`;
-    return MD_WEEKDAYS[(startIdx + dayNum) % 7];
+    return MD_WEEKDAYS[(startIdx + dayNum - 1) % 7];
 }
 
 function resolveMultiDayLabels(): { left: string; right: string } {
@@ -5326,7 +5326,7 @@ const SIM_DURATION_BASE = 12000; // 12 seconds at 1x speed
 const MULTI_DAY_DAY0_PREVIEW_MS = 900;
 
 function getVisibleWeekStartIndex(days: { day: number }[]): number {
-    return days.length > 1 ? 1 : 0;
+    return 0;
 }
 
 /**

@@ -210,6 +210,26 @@ PHASE_CHART.startMin = PHASE_CHART.startHour * 60;
 PHASE_CHART.endMin = PHASE_CHART.endHour * 60;
 PHASE_CHART.totalMin = PHASE_CHART.endMin - PHASE_CHART.startMin;
 
+/**
+ * Extended chart config — maps day-indexed data onto the same SVG dimensions as the daily chart.
+ * All N days fit within the existing plotW (~820px). No scrolling.
+ */
+export function getExtendedChartConfig(durationDays: number) {
+    return {
+        startUnit: 1,
+        endUnit: durationDays,
+        unit: 'day' as const,
+        viewW: PHASE_CHART.viewW as number,
+        plotW: PHASE_CHART.plotW as number,
+        plotH: PHASE_CHART.plotH as number,
+        padL: PHASE_CHART.padL as number,
+        padR: PHASE_CHART.padR as number,
+        padT: PHASE_CHART.padT as number,
+        padB: PHASE_CHART.padB as number,
+        maxEffect: PHASE_CHART.maxEffect as number,
+    };
+}
+
 export const PHASE_STEPS = ['baseline-shown', 'curves-drawn', 'lx-rendered', 'biometric-rendered', 'revision-rendered'];
 
 export const PHASE_SMOOTH_PASSES = 3;

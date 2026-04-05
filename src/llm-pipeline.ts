@@ -1326,6 +1326,68 @@ export async function callMainModelForCurves(prompt: string): Promise<StageResul
     return result;
 }
 
+// ============================================
+// 10d. EXTENDED STRATEGIST — Day-Level Curves
+// ============================================
+
+export async function callExtendedStrategist(prompt: string, durationDays: number): Promise<any> {
+    const systemPrompt = interpolatePrompt(PROMPTS.curveModelExtended, {
+        durationDays,
+        userGoal: prompt,
+    });
+    const userPrompt = `Design a ${durationDays}-day pharmacodynamic landscape for: ${prompt}`;
+
+    const result = await runCachedStage<any>({
+        stage: 'curves',
+        stageLabel: 'Extended Strategist',
+        stageClass: 'extended-strategist',
+        systemPrompt,
+        userPrompt,
+        maxTokens: 8192,
+    });
+
+    return result;
+}
+
+// ============================================
+// 10e. EXTENDED CHESS PLAYER — Multi-Day Protocol
+// ============================================
+
+export async function callExtendedIntervention(
+    prompt: string,
+    durationDays: number,
+    effectRoster: any[],
+    phaseSpotlights: any[],
+): Promise<any> {
+    const extendedCurveSummary = JSON.stringify(
+        effectRoster.map((e: any) => ({
+            effect: e.effect,
+            polarity: e.polarity,
+            baselineSample: e.baseline.filter((_: any, i: number) => i % 7 === 0 || i === e.baseline.length - 1),
+            desiredSample: e.desired.filter((_: any, i: number) => i % 7 === 0 || i === e.desired.length - 1),
+        })),
+    );
+    const systemPrompt = interpolatePrompt(PROMPTS.interventionExtended, {
+        durationDays,
+        userGoal: prompt,
+        substanceList: buildSubstanceListSummary(),
+        extendedCurveSummary,
+        phaseSpotlights: JSON.stringify(phaseSpotlights),
+    });
+    const userPrompt = `Design a ${durationDays}-day substance protocol for: ${prompt}`;
+
+    const result = await runCachedStage<any>({
+        stage: 'intervention',
+        stageLabel: 'Extended Chess Player',
+        stageClass: 'extended-intervention',
+        systemPrompt,
+        userPrompt,
+        maxTokens: 8192,
+    });
+
+    return result;
+}
+
 // Prompt formatting helpers ================================
 
 export function buildSubstanceListSummary(): string {

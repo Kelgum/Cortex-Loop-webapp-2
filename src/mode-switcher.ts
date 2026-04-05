@@ -19,6 +19,7 @@ import {
     getLoadedCycleId,
     clearLoadedCycleId,
     patchCycle,
+    deleteCycle,
 } from './cycle-store';
 import type { SavedCycleIndexEntry } from './cycle-store';
 import { generateCycleIconFromBundle } from './cycle-icon';
@@ -1031,9 +1032,13 @@ function buildCardHtml(entry: SavedCycleIndexEntry, activeId: string | null): st
 
     const isRx = entry.rxMode === 'rx' || entry.rxMode === 'rx-only';
     const rxHtml = isRx ? `<span class="cg-card-rx">Rx</span>` : '';
+    const cardDeleteHtml = _editMode
+        ? `<button class="cg-card-delete-btn" data-delete-id="${escHtml(entry.id)}" aria-label="Delete protocol" title="Delete protocol">&times;</button>`
+        : '';
 
     return (
         `<div class="cg-card${isActive ? ' cg-card-active' : ''}" data-cycle-id="${escHtml(entry.id)}">` +
+        cardDeleteHtml +
         `<div class="cg-card-icon">` +
         iconHtml +
         badgesHtml +
@@ -1052,8 +1057,9 @@ function buildCardHtml(entry: SavedCycleIndexEntry, activeId: string | null): st
 
 /** Re-render and immediately reveal all sections/cards (no stagger animation). */
 function rerenderStreamImmediate(): void {
-    const input = document.getElementById('prompt-input') as HTMLInputElement | null;
-    renderStreamContent(input?.value || '');
+    // Always use browse mode (sections) — not search mode from the prompt input,
+    // which may contain a loaded cycle's prompt text.
+    renderStreamContent('');
     const gc = document.querySelector('.stream-grid-container') as HTMLElement | null;
     gc?.querySelectorAll<HTMLElement>('.stream-section').forEach(s => {
         s.style.opacity = '1';
@@ -1386,6 +1392,16 @@ function handleCardClick(e: Event): void {
     // Don't intercept clicks on edit inputs
     if (target.classList.contains('cg-card-edit-input')) return;
 
+    // Card delete button
+    const deleteBtn = target.closest('.cg-card-delete-btn') as HTMLElement | null;
+    if (deleteBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const deleteId = deleteBtn.dataset.deleteId;
+        if (deleteId) handleDeleteCard(deleteId);
+        return;
+    }
+
     const card = target.closest('.cg-card') as HTMLElement | null;
     if (!card) return;
     const id = card.dataset.cycleId;
@@ -1398,6 +1414,14 @@ function handleCardClick(e: Event): void {
     } else {
         void handleStreamLoad(id);
     }
+}
+
+function handleDeleteCard(id: string): void {
+    // If this is the currently loaded cycle, unload it
+    if (getLoadedCycleId() === id) {
+        clearLoadedCycleId();
+    }
+    void deleteCycle(id).then(() => rerenderStreamImmediate());
 }
 
 // ── Search Handler ─────────────────────────────────────────────────────

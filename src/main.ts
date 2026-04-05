@@ -47,7 +47,14 @@ import {
     hideWeekStrip,
     placePeakDescriptors,
 } from './phase-chart';
-import { callFastModel, callMainModelForCurves, callInterventionModel, callSherlockModel } from './llm-pipeline';
+import {
+    callFastModel,
+    callMainModelForCurves,
+    callInterventionModel,
+    callSherlockModel,
+    callExtendedStrategist,
+    callExtendedIntervention,
+} from './llm-pipeline';
 import {
     validateInterventions, computeIncrementalLxOverlay, animateSequentialLxReveal,
     renderLxCurves, renderSubstanceTimeline, revealTimelinePillsInstant,
@@ -74,7 +81,9 @@ import {
     reportRuntimeBug,
     reportRuntimeCacheWarning,
 } from './runtime-error-banner';
-import { extractCurvesData, extractInterventionsData } from './llm-response-shape';
+import { extractCurvesData, extractInterventionsData, extractTimeHorizon } from './llm-response-shape';
+import { renderExtendedChart, clearExtendedChart } from './chart-extended';
+import type { TimeHorizon } from './types';
 import { normalizeSherlockNarration } from './sherlock-narration';
 import { describeStageClasses, reconcileEnabledCacheDependencies } from './cache-policy';
 import { initAnalogyOverlay } from './analogy-overlay';
@@ -912,6 +921,136 @@ configureBiometricRuntime({
 // ============================================
 // 20b. PHASE CHART FLOW — New Prompt Handler
 // ============================================
+// EXTENDED TIMELINE PIPELINE
+// ============================================
+
+async function runExtendedPipeline(
+    prompt: string,
+    timeHorizon: TimeHorizon,
+    _engine: any,
+): Promise<void> {
+    const { durationDays } = timeHorizon;
+    const svg = document.getElementById('phase-chart-svg') as unknown as SVGSVGElement;
+
+    console.log(`[Extended Pipeline] Starting ${durationDays}-day pipeline for: ${prompt}`);
+
+    // Clear ALL daily-specific SVG groups so we start with a clean chart
+    const groupsToClear = [
+        'phase-x-axis', 'phase-y-axis-left', 'phase-y-axis-right',
+        'phase-grid', 'phase-baseline-curves', 'phase-desired-curves',
+        'phase-lx-curves', 'phase-substance-timeline', 'phase-scan-line',
+        'phase-mission-arrows', 'phase-word-cloud', 'phase-biometric-strips',
+        'phase-spotter-highlights', 'phase-legend',
+    ];
+    for (const id of groupsToClear) {
+        const g = svg.getElementById(id) || document.getElementById(id);
+        if (g) g.replaceChildren();
+    }
+    // Also clear divider if it exists
+    const divider = svg.querySelector('.phase-divider');
+    if (divider) divider.remove();
+
+    // Show loading indicator in the chart area
+    const loadingGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    loadingGroup.id = 'extended-loading';
+    const cx = PHASE_CHART.padL + PHASE_CHART.plotW / 2;
+    const cy = PHASE_CHART.padT + PHASE_CHART.plotH / 2;
+    const loadingText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    loadingText.setAttribute('x', String(cx));
+    loadingText.setAttribute('y', String(cy));
+    loadingText.setAttribute('text-anchor', 'middle');
+    loadingText.setAttribute('fill', 'rgba(174,201,237,0.5)');
+    loadingText.setAttribute('font-family', "'IBM Plex Mono', monospace");
+    loadingText.setAttribute('font-size', '12');
+    loadingText.setAttribute('font-weight', '500');
+    loadingText.setAttribute('letter-spacing', '0.1em');
+    loadingText.textContent = `DESIGNING ${durationDays}-DAY PROTOCOL...`;
+    loadingGroup.appendChild(loadingText);
+    svg.appendChild(loadingGroup);
+
+    // ── Step 1: Call Extended Strategist ──
+    PhaseState.phase = 'loading';
+    let extStrategistResult: any;
+    try {
+        extStrategistResult = await callExtendedStrategist(prompt, durationDays);
+    } catch (err) {
+        console.error('[Extended Pipeline] Extended Strategist failed:', err);
+        showPromptError('Extended Strategist failed: ' + (err instanceof Error ? err.message : String(err)));
+        PhaseState.isProcessing = false;
+        return;
+    }
+
+    // Parse result
+    const effectRoster = extStrategistResult?.effectRoster || extStrategistResult?.curves || [];
+    const phaseSpotlights = extStrategistResult?.phaseSpotlights || [];
+
+    if (effectRoster.length === 0) {
+        console.error('[Extended Pipeline] No effect roster returned:', extStrategistResult);
+        showPromptError('Extended Strategist returned no effects. Check debug panel.');
+        PhaseState.isProcessing = false;
+        return;
+    }
+
+    console.log(`[Extended Pipeline] Got ${effectRoster.length} effects, ${phaseSpotlights.length} phase spotlights`);
+
+    // Remove loading indicator
+    const loadingEl = svg.getElementById('extended-loading');
+    if (loadingEl) loadingEl.remove();
+
+    // ── Step 2: Render extended chart with curves ──
+    clearExtendedChart(svg);
+    renderExtendedChart({
+        svg,
+        durationDays,
+        effectRoster,
+        phaseSpotlights,
+    });
+
+    PhaseState.phase = 'curves-drawn';
+    PhaseState.maxPhaseReached = 2;
+    PhaseState.viewingPhase = 2;
+
+    // ── Step 3: Call Extended Chess Player ──
+    let extInterventionResult: any;
+    try {
+        extInterventionResult = await callExtendedIntervention(
+            prompt,
+            durationDays,
+            effectRoster,
+            phaseSpotlights,
+        );
+    } catch (err) {
+        console.error('[Extended Pipeline] Extended Chess Player failed:', err);
+        // Still show curves even if intervention fails
+        PhaseState.isProcessing = false;
+        return;
+    }
+
+    // Parse interventions
+    const interventions = extInterventionResult?.interventions || [];
+    const protocolPhases = extInterventionResult?.protocolPhases || [];
+
+    console.log(`[Extended Pipeline] Got ${interventions.length} interventions, ${protocolPhases.length} phases`);
+
+    // ── Step 4: Re-render chart with interventions ──
+    clearExtendedChart(svg);
+    renderExtendedChart({
+        svg,
+        durationDays,
+        effectRoster,
+        phaseSpotlights,
+        interventions,
+        protocolPhases: protocolPhases.length > 0 ? protocolPhases : undefined,
+    });
+
+    PhaseState.phase = 'lx-rendered';
+    PhaseState.maxPhaseReached = 2;
+    PhaseState.viewingPhase = 2;
+    PhaseState.isProcessing = false;
+    console.log('[Extended Pipeline] Complete');
+}
+
+// ============================================
 
 export async function handlePromptSubmit(e) {
     e.preventDefault();
@@ -1088,6 +1227,14 @@ export async function handlePromptSubmit(e) {
     if (mdRibbon) mdRibbon.classList.remove('visible', 'loading');
     document.body.classList.remove('multi-day-active');
 
+    // Reset time horizon badge
+    PhaseState.timeHorizon = null;
+    const horizonBadge = document.getElementById('time-horizon-badge');
+    if (horizonBadge) {
+        horizonBadge.classList.remove('visible');
+        horizonBadge.classList.add('hidden');
+    }
+
     DebugLog.addEntry({
         stage: 'User Input',
         stageClass: 'user-input',
@@ -1143,6 +1290,26 @@ export async function handlePromptSubmit(e) {
             typeof fastResult.badgeCategory === 'string' ? fastResult.badgeCategory.trim().toUpperCase() : null;
         PhaseState.badgeCategory =
             rawBadge && (BADGE_CATEGORIES as readonly string[]).includes(rawBadge) ? rawBadge : null;
+        // Extract time horizon from Scout result
+        PhaseState.timeHorizon = extractTimeHorizon(fastResult.timeHorizon);
+        if (PhaseState.timeHorizon.mode !== 'daily') {
+            console.log(
+                `[Scout] Extended timeline detected: ${PhaseState.timeHorizon.mode} (${PhaseState.timeHorizon.durationDays} days) — ${PhaseState.timeHorizon.rationale}`,
+            );
+            // Show time horizon badge
+            const badgeEl = document.getElementById('time-horizon-badge');
+            if (badgeEl) {
+                const modeLabels: Record<string, string> = {
+                    weekly: '7-Day Protocol',
+                    cyclical: `${PhaseState.timeHorizon.durationDays}-Day Cycle`,
+                    program: `${PhaseState.timeHorizon.durationDays}-Day Program`,
+                };
+                badgeEl.innerHTML =
+                    `<span class="badge-icon">\u{1F4C5}</span>${modeLabels[PhaseState.timeHorizon.mode] || ''}`;
+                badgeEl.classList.remove('hidden');
+                requestAnimationFrame(() => badgeEl.classList.add('visible'));
+            }
+        }
     } catch (err) {
         hideStrategistPlayButton();
         stopScanLine();
@@ -1207,6 +1374,26 @@ export async function handlePromptSubmit(e) {
         }
     } else {
         hideStrategistPlayButton();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // EXTENDED TIMELINE BRANCH — divert BEFORE processing the
+    // daily Strategist result. The regular Strategist call runs
+    // in the background but its result is ignored.
+    // ═══════════════════════════════════════════════════════════
+    if (PhaseState.timeHorizon && PhaseState.timeHorizon.mode !== 'daily') {
+        stopScanLine();
+        stopOrbitalRings();
+        hideStrategistPlayButton();
+        // Clean up any orbital ring elements that might still exist
+        if (_orbitalRingsState) {
+            _orbitalRingsState.ring1.remove();
+            if (_orbitalRingsState.ring2) _orbitalRingsState.ring2.remove();
+            setOrbitalRingsState(null);
+        }
+        phaseChart.groups['phase-word-cloud'].replaceChildren();
+        await runExtendedPipeline(prompt, PhaseState.timeHorizon, engine);
+        return;
     }
 
     if (!strategistOutcome) {

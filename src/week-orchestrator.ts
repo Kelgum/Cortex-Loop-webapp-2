@@ -966,7 +966,7 @@ function getWeekdayName(dayNumber: number): string {
     const startWeekday = MultiDayState.startWeekday || 'Monday';
     const startIdx = WEEKDAYS.findIndex(d => d.toLowerCase() === startWeekday.toLowerCase());
     if (startIdx === -1) return `Day ${dayNumber}`;
-    return WEEKDAYS[(startIdx + dayNumber) % 7];
+    return WEEKDAYS[(startIdx + dayNumber - 1) % 7];
 }
 
 /** Compute a compact diff summary between two intervention arrays. */

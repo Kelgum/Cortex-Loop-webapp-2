@@ -24,7 +24,7 @@ CRITICAL — Parse the FULL user intent: (a) what to ENHANCE (e.g. "deep focus",
 
 Rules:
 1. Return ONLY valid JSON — no markdown, no code fences, no explanation
-2. Format: {"effects": [{"name": "Effect Name", "relevance": 95}, {"name": "Effect Name 2", "relevance": 70}, ...], "hookSentence": "Your cognitive threshold is being throttled by a biological conflict that demands a precise counter-strategy.", "cycleFilename": "Deep Focus 4h", "badgeCategory": "NEURO"}
+2. Format: {"effects": [{"name": "Effect Name", "relevance": 95}, {"name": "Effect Name 2", "relevance": 70}, ...], "hookSentence": "Your cognitive threshold is being throttled by a biological conflict that demands a precise counter-strategy.", "cycleFilename": "Deep Focus 4h", "badgeCategory": "NEURO", "timeHorizon": {"mode": "daily", "durationDays": 1, "rationale": "Single-day intra-day optimization", "dailyPatternRepeats": false}}
 3. Return 15-18 effects total, sorted by relevance descending
 4. relevance is an integer 0-100 indicating how central this effect is to the user's goal
 5. The top {{maxEffects}} effect(s) must include BOTH enhancement targets AND preservation targets. If the user mentions "no X impact" or "preserve X" or "don't disrupt X", give X-related effects (e.g. Sleep Pressure, Sleep Quality for "no sleep quality impact") relevance 88-100 — same tier as the primary enhancement effect
@@ -55,7 +55,111 @@ Rules:
  - 'We are going to optimize your neurochemistry for peak performance.' (sales pitch)
  - 'Your struggle is valid and we are here to help.' (therapy-speak)
 10. cycleFilename: A 2-5 word title for this protocol run. Capture the user's core goal in title case. Examples: 'Deep Focus 4h', 'Morning Energy Stack', 'Anti-Anxiety Sleep', 'Athletic Recovery'. No quotes inside the string.
-11. badgeCategory: Pick exactly ONE category from this list that best describes the user's primary goal: {{badgeCategories}}. Choose the category that captures the dominant intent. If genuinely ambiguous between two, prefer the one matching the user's stated priority.`,
+11. badgeCategory: Pick exactly ONE category from this list that best describes the user's primary goal: {{badgeCategories}}. Choose the category that captures the dominant intent. If genuinely ambiguous between two, prefer the one matching the user's stated priority.
+12. timeHorizon: Classify the user's goal into a time horizon. This determines whether the protocol spans a single day or multiple days/weeks.
+ - mode: one of 'daily', 'weekly', 'cyclical', 'program'
+ - durationDays: integer (1 for daily, 7 for weekly, 14-28 for cyclical, 28 for program)
+ - rationale: brief explanation of why this time horizon was chosen
+ - dailyPatternRepeats: true if the same daily protocol repeats each day; false if each day differs
+
+ CLASSIFICATION RULES:
+ - 'daily' (durationDays: 1): Goals that resolve within a single day. Intra-day timing matters (morning focus, afternoon energy, tonight's sleep). Examples: '4h deep focus', 'better sleep tonight', 'afternoon meeting energy', 'morning workout performance'.
+ - 'weekly' (durationDays: 7): Goals spanning a specific week or multi-day event. Each day may require different optimization. Examples: 'exam week prep', 'jet lag recovery', 'this week training block', 'marathon on Saturday', 'business trip next week'.
+ - 'cyclical' (durationDays: 14-28): Goals tied to recurring biological or lifestyle cycles. The intervention must align with cycle phases. Examples: 'menstrual cycle support', 'shift work rotation', '2-week sleep reset', 'biphasic sleep transition'.
+ - 'program' (durationDays: 28): Goals requiring sustained multi-week intervention with loading/maintenance/tapering phases. Cap at 28 days. Examples: 'lose 5kg', 'build cold tolerance', 'seasonal mood support', 'gut health reset', 'stress resilience building'.
+
+ DEFAULT TO 'daily' if ambiguous. Only classify as extended when the goal EXPLICITLY or STRONGLY IMPLICITLY requires multi-day planning. 'I want more energy' is daily. 'I want sustainable energy all week' is weekly.`,
+
+    // ── Extended Strategist — Day-Level Curves + Effect Roster + Spotlights ──
+    curveModelExtended: `You are an expert pharmacologist modeling multi-day pharmacodynamic landscapes. Given the user's desired outcome over {{durationDays}} days, produce a comprehensive effect roster with day-level curves and phase spotlight assignments.
+
+USER GOAL: {{userGoal}}
+
+INSTRUCTIONS:
+1. Identify 4-6 pharmacodynamic effects relevant across the FULL {{durationDays}}-day timeline. These should cover ALL phases of the user's goal — different effects may be dominant at different times.
+2. For EACH effect, provide:
+   - A baseline curve (population average without intervention, showing natural cyclical/daily patterns across {{durationDays}} days)
+   - A desired curve (optimal target state with intervention)
+   - Both curves have one datapoint per day (day 1 through day {{durationDays}})
+3. Define 2-4 protocol phases that partition the {{durationDays}}-day timeline. Each phase represents a distinct clinical focus period.
+4. For each phase, assign 2-3 SPOTLIGHT effects — the effects most clinically relevant during that phase. The chart will display these spotlight effects prominently during that phase and crossfade to the next phase's spotlights at boundaries.
+
+Rules:
+1. Return ONLY valid JSON — no markdown, no code fences
+2. Format:
+{
+  "effectRoster": [
+    {
+      "effect": "Energy",
+      "color": "#60a5fa",
+      "polarity": "higher_is_better",
+      "baseline": [{"day": 1, "value": 55}, {"day": 2, "value": 58}, ...],
+      "desired": [{"day": 1, "value": 75}, {"day": 2, "value": 78}, ...]
+    }
+  ],
+  "phaseSpotlights": [
+    {"phase": "Phase Name", "startDay": 1, "endDay": 7, "effects": ["Energy", "Mood"], "color": "#4ade80"}
+  ]
+}
+3. Provide datapoints for every day from 1 to {{durationDays}} (one point per day)
+4. Values: 0-100 scale (0 = minimal, 100 = maximal)
+5. Baselines: reflect realistic biological rhythms over the timeline (e.g., hormonal cycles, tolerance buildup, adaptation curves, weekly patterns)
+6. Desired: show the improvement the user wants across the timeline
+7. Colors: distinct, visible on dark background (#0a0a0f). Use muted but vibrant tones like #60a5fa, #c084fc, #4ade80, #fb7185, #fbbf24, #38bdf8
+8. Effect names MUST be pharmacodynamic effects, not molecule names. Use 1-2 word labels.
+9. polarity: "higher_is_better" for effects the user wants to INCREASE, "higher_is_worse" for effects to REDUCE
+10. Phase spotlights: each phase MUST list 2-3 effect names from the roster. Effects can appear in multiple phase spotlights.
+11. Phase day ranges must cover the full timeline without gaps (startDay of phase N+1 = endDay of phase N + 1)
+12. Each phase needs a color for its visual band
+13. STRING SAFETY: Do NOT use double quotes inside string values. Use single quotes for inner quotes.
+14. Be physiologically realistic — baselines should show genuine biological variation across days, not flat lines`,
+
+    // ── Extended Chess Player — Multi-Day Protocol Design ──
+    interventionExtended: `You are a pharmacodynamic intervention expert designing a multi-day protocol. Select substances to move a person's baseline physiological state toward a desired target across {{durationDays}} days.
+
+USER GOAL: {{userGoal}}
+
+AVAILABLE SUBSTANCES (with standard doses):
+{{substanceList}}
+
+EFFECT ROSTER (baseline vs desired, day-level):
+{{extendedCurveSummary}}
+
+PROTOCOL PHASES:
+{{phaseSpotlights}}
+
+RULES:
+1. Select substances and assign them to specific days and protocol phases. Each intervention specifies WHICH day it starts and how often it repeats.
+2. Think in terms of protocol phases: loading (build up levels), maintenance (sustain), tapering (reduce), washout (clear). Not every protocol needs all phases.
+3. frequency field: 'daily' = every day within the phase, 'alternate' = every other day, 'weekdays' = Mon-Fri only, 'as-needed' = situational
+4. DOSE MULTIPLIER: 1.0 = standard dose. 0.5 = half. 2.0 = double. Max total per substance per administration: 2000mg.
+5. TOLERANCE AWARENESS: For substances taken daily, effectiveness decreases ~8% per consecutive day. Consider cycling (5 on / 2 off) or dose escalation for protocols > 7 days.
+6. Target the SPOTLIGHT effects for each phase. If a substance helps Energy (spotlight in Phase 1) but hurts Sleep (spotlight in Phase 3), schedule it only during Phase 1.
+7. Return ONLY valid JSON:
+{
+  "interventions": [
+    {
+      "key": "substance-key",
+      "day": 1,
+      "dose": "400mg",
+      "doseMultiplier": 1.0,
+      "phase": "loading",
+      "frequency": "daily",
+      "rationale": "Why this substance at this time",
+      "impacts": {"Energy": 0.6, "Mood": 0.3}
+    }
+  ],
+  "protocolPhases": [
+    {"name": "loading", "startDay": 1, "endDay": 3, "color": "#4ade80"},
+    {"name": "maintenance", "startDay": 4, "endDay": 25, "color": "#60a5fa"},
+    {"name": "tapering", "startDay": 26, "endDay": 28, "color": "#94a3b8"}
+  ]
+}
+8. interventions[].day = the FIRST day this intervention is administered. Combined with frequency, this determines all active days.
+9. impacts: fraction of gap this substance fills for each effect at peak. Values 0-1.
+10. protocolPhases must match or refine the phases from the Strategist. Day ranges must cover the full {{durationDays}} days.
+11. STRING SAFETY: No double quotes inside string values.
+12. Select 3-8 substances total. Quality over quantity.`,
 
     // ── Stage 3: Strategist — Pharmacodynamic Curves ───────────────────
     curveModel: `You are an expert pharmacologist modeling 24-hour pharmacodynamic curves. Given the user's desired outcome:

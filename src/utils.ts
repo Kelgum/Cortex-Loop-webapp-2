@@ -164,6 +164,20 @@ export function phaseChartY(effectVal: any) {
     return PHASE_CHART.padT + PHASE_CHART.plotH - (clamped / PHASE_CHART.maxEffect) * PHASE_CHART.plotH;
 }
 
+/** Map a day number (1..N) to pixel X within the existing plot area — for extended timeline charts. */
+export function extendedChartX(day: number, config: { startUnit: number; endUnit: number; padL: number; plotW: number }): number {
+    const range = config.endUnit - config.startUnit;
+    if (range <= 0) return config.padL;
+    const fraction = (day - config.startUnit) / range;
+    return config.padL + fraction * config.plotW;
+}
+
+/** Map an effect value (0-100) to pixel Y — same as phaseChartY but accepting an explicit config. */
+export function extendedChartY(effectVal: number, config: { padT: number; plotH: number; maxEffect: number }): number {
+    const clamped = clamp(effectVal, 0, config.maxEffect);
+    return config.padT + config.plotH - (clamped / config.maxEffect) * config.plotH;
+}
+
 // ── Teleport animation interpolation ──────────────────────────
 
 export interface TeleportFrame {

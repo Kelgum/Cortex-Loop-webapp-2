@@ -288,6 +288,83 @@ export interface WordCloudEffect {
     relevance: number;
 }
 
+// -- Time horizon (extended timeline detection) --
+
+export type TimeHorizonMode = 'daily' | 'weekly' | 'cyclical' | 'program';
+
+export interface TimeHorizon {
+    mode: TimeHorizonMode;
+    durationDays: number;
+    rationale: string;
+    dailyPatternRepeats: boolean;
+}
+
+// -- Extended timeline types (day-level curves, protocol phases, spotlights) --
+
+export interface ExtendedCurvePoint {
+    day: number;
+    value: number;
+}
+
+export interface ExtendedCurveData {
+    effect: string;
+    color: string;
+    polarity: 'higher_is_better' | 'higher_is_worse';
+    levels?: CurveLevel[];
+    baseline: ExtendedCurvePoint[];
+    desired: ExtendedCurvePoint[];
+}
+
+export interface PhaseSpotlight {
+    phase: string;
+    startDay: number;
+    endDay: number;
+    effects: string[];
+    color?: string;
+}
+
+export interface ExtendedStrategistResult {
+    effectRoster: ExtendedCurveData[];
+    phaseSpotlights: PhaseSpotlight[];
+}
+
+export interface ProtocolPhase {
+    name: string;
+    startDay: number;
+    endDay: number;
+    color?: string;
+}
+
+export interface ExtendedInterventionEntry {
+    key: string;
+    day: number;
+    dose: string;
+    doseMultiplier?: number;
+    phase?: string;
+    frequency?: 'daily' | 'alternate' | 'weekdays' | 'as-needed';
+    rationale?: string;
+    impacts?: Record<string, number>;
+}
+
+export interface ExtendedInterventionResult {
+    interventions: ExtendedInterventionEntry[];
+    protocolPhases: ProtocolPhase[];
+}
+
+export interface ExtendedChartConfig {
+    startUnit: number;
+    endUnit: number;
+    unit: 'day';
+    viewW: number;
+    plotW: number;
+    plotH: number;
+    padL: number;
+    padR: number;
+    padT: number;
+    padB: number;
+    maxEffect: number;
+}
+
 // -- Stage results --
 
 export interface ScoutStageResult {
@@ -295,6 +372,7 @@ export interface ScoutStageResult {
     hookSentence?: string;
     cycleFilename?: string;
     badgeCategory?: string;
+    timeHorizon?: TimeHorizon;
 }
 
 export interface CurveLevel {
@@ -441,6 +519,7 @@ export interface IPhaseState {
     loadedCycleId: string | null;
     strategistProtectedEffect: string;
     badgeCategory: string | null;
+    timeHorizon: TimeHorizon | null;
 }
 
 export interface IBiometricState {
