@@ -1047,15 +1047,17 @@ export async function animateRevisionScan(
                 sherlockTriggers.length > 0 ? sherlockTriggers[0].x - 8 : PHASE_CHART.padL;
             await dayScan.moveTo(firstX);
 
-            // ── SINGLE rAF LOOP ──
-            const SWEEP_SPEED_PX_PER_MS = 0.036;
+            // ── SINGLE rAF LOOP — constant speed, 5 seconds ──
             const plotStartX = firstX;
             const plotEndX = PHASE_CHART.padL + PHASE_CHART.plotW;
-            const sweepDist = Math.max(1, plotEndX - plotStartX);
-            const DURATION = clamp(sweepDist / SWEEP_SPEED_PX_PER_MS, 2000, 18000);
+            const visualSweepDist = Math.max(1, plotEndX - plotStartX);
 
             // Each pill's animation completes over this many px after the scan line touches it
-            const PILL_ANIM_WINDOW_PX = Math.max(40, sweepDist * 0.12);
+            const PILL_ANIM_WINDOW_PX = Math.max(55, visualSweepDist * 0.17);
+
+            // Extend effective sweep so rightmost pills have runway to complete animation
+            const sweepDist = visualSweepDist + PILL_ANIM_WINDOW_PX;
+            const DURATION = 5000;
 
             let nextCard = 0;
             let nextMorph = 0;
@@ -1066,19 +1068,24 @@ export async function animateRevisionScan(
                 phaseChartX((e.oldIv || e.newIv)?.timeMinutes ?? PHASE_CHART.startMin),
             );
 
+            // Bio strip: smooth 400ms ease-out animation + POI connector tracking
+            const BIO_ANIM_DUR = 400;
+            const pois: any[] = (BiometricState as any)._pois || [];
+            const poiContainer = document.getElementById('phase-poi-connectors');
+            const poiGroups = poiContainer
+                ? Array.from(poiContainer.querySelectorAll('.poi-connector-group'))
+                : [];
+            const poiBioStartYs = pois.map((p: any) => p.bioSvgY as number);
+
             await new Promise<void>(resolve => {
                 const startTs = performance.now();
 
                 (function tick(now: number) {
                     const rawT = Math.min(1, (now - startTs) / DURATION);
-                    const ease =
-                        rawT < 0.5
-                            ? 2 * rawT * rawT
-                            : 1 - Math.pow(-2 * rawT + 2, 2) / 2; // easeInOutQuad
 
-                    // 1. Advance scan line (linear for constant visual speed)
+                    // 1. Advance scan line at constant speed
                     const scanX = plotStartX + sweepDist * rawT;
-                    dayScan.setX(scanX);
+                    dayScan.setX(Math.min(scanX, plotEndX));
 
                     // 2. Per-pill easing: each pill animates from when scanX reaches it
                     const easeForX = (pillX: number) => {
@@ -1086,7 +1093,7 @@ export async function animateRevisionScan(
                         // Apply easeInOutCubic to the local progress for smooth feel
                         return easeInOutCubic(localT);
                     };
-                    tickPillMorph(pillPlan, ease, curveCtx, {
+                    tickPillMorph(pillPlan, rawT, curveCtx, {
                         onRemoveTick: revisionRemoveTick,
                         easeForX,
                     });
@@ -1113,18 +1120,33 @@ export async function animateRevisionScan(
                         }
                     }
 
-                    // 5. Interpolate bio strip Y + viewBox per-frame
+                    // 5. Smooth bio strip slide (400ms ease-out at start of scan) + POI tracking
                     if (bioDeltaY !== 0) {
-                        const ty = bioStartTY + bioDeltaY * ease;
+                        const bioT = Math.min(1, (now - startTs) / BIO_ANIM_DUR);
+                        const bioEase = 1 - Math.pow(1 - bioT, 3); // ease-out cubic
+                        const bioDelta = bioDeltaY * bioEase;
+                        const ty = bioStartTY + bioDelta;
                         if (bioGroupEl)
                             bioGroupEl.setAttribute('transform', `translate(0,${ty.toFixed(2)})`);
                         if (spotterGroupEl)
                             spotterGroupEl.setAttribute('transform', `translate(0,${ty.toFixed(2)})`);
-                        const newH = startViewBoxH + bioDeltaY * ease;
+                        const newH = startViewBoxH + bioDelta;
                         svgEl_.setAttribute(
                             'viewBox',
                             `0 0 ${PHASE_CHART.viewW} ${newH.toFixed(1)}`,
                         );
+
+                        // Shift POI bio-side dots + connector paths to track bio strip
+                        for (let pi = 0; pi < pois.length; pi++) {
+                            const poi = pois[pi];
+                            poi.bioSvgY = poiBioStartYs[pi] + bioDelta;
+                            if (pi >= poiGroups.length) continue;
+                            const pg = poiGroups[pi] as SVGElement;
+                            const dot = pg.querySelector('.poi-dot') as SVGCircleElement | null;
+                            if (dot) dot.setAttribute('cy', poi.bioSvgY.toFixed(1));
+                            const pulse = pg.querySelector('.poi-pulse-ring') as SVGCircleElement | null;
+                            if (pulse) pulse.setAttribute('cy', poi.bioSvgY.toFixed(1));
+                        }
                     }
 
                     if (rawT < 1) {
@@ -1139,8 +1161,7 @@ export async function animateRevisionScan(
             await Promise.all(morphPromises);
         }
 
-        // Sweep scan to day end
-        await dayScan.sweepToDayEnd();
+        // Scan sweep already covers full plot + pill animation runway; no separate sweepToDayEnd needed
 
         // Cleanup: remove tempGroup, finalize pills
         Array.from(tempGroup.children).forEach((pill: any) => {
@@ -1165,14 +1186,28 @@ export async function animateRevisionScan(
         // Finalize added pills
         for (const { el } of pillPlan.added) {
             el.removeAttribute('transform');
+            (el as SVGElement).style.removeProperty('opacity');
             el.setAttribute('opacity', '1');
             el.classList.remove('revision-prehidden');
             el.removeAttribute('visibility');
         }
 
-        // Final DOM rebuild: render the definitive new timeline so positions are exact
+        // Final DOM rebuild: render the definitive new timeline so positions are exact.
+        // Lock the viewBox height so the re-render doesn't cause a visual jump.
+        const preRenderVB = svgEl_.getAttribute('viewBox');
         renderSubstanceTimeline(newInterventions, newLxCurves, curvesData);
+        if (preRenderVB) {
+            const parts = preRenderVB.trim().split(/\s+/).map(Number);
+            if (parts.length === 4 && parts.every(n => Number.isFinite(n))) {
+                animatePhaseChartViewBoxHeight(svgEl_, parts[3], 0);
+            }
+        }
         revealTimelinePillsInstant();
+
+        // Leave bio strip & spotter group transforms from the animation loop
+        // in place. Calling preserveBiometricStrips here would do a full DOM
+        // teardown + rebuild of the bio strips, causing a visible jitter/pop.
+        // The transforms position everything correctly already.
 
         if (narration?.outro && cards.length > 0) {
             showSherlockStack(cards, cards.length - 1);
@@ -1187,12 +1222,13 @@ export async function animateRevisionScan(
         Array.from(timelineGroup.querySelectorAll('.timeline-pill-group')).forEach((pill: any) => {
             pill.classList.remove('revision-prehidden');
             pill.removeAttribute('visibility');
+            pill.style.removeProperty('opacity');
             const currentOp = parseFloat(pill.getAttribute('opacity') || '1');
             if (currentOp < 0.5) pill.setAttribute('opacity', '1');
         });
         stopPoiTracking();
         if (!cursorClosed) dayScan.remove();
         tempGroup.remove();
-        preserveBiometricStrips(true, true);
+        if (!cursorClosed) preserveBiometricStrips(true, true);
     }
 }
