@@ -22,8 +22,26 @@ function getGitBranch(): string {
     }
 }
 
+/**
+ * Resolve the main repo root (NOT the worktree root).
+ * `--git-common-dir` returns the shared .git directory; its parent is the
+ * main checkout.  This ensures gitignored data directories (saved-cycles/,
+ * .cortex-debug/, etc.) are always shared across all worktrees.
+ */
+function getGitRoot(): string {
+    try {
+        const commonDir = execSync('git rev-parse --git-common-dir', { encoding: 'utf8' }).trim();
+        // commonDir is <main-repo>/.git (or <main-repo>/.git for worktrees too)
+        return resolve(commonDir, '..');
+    } catch {
+        return process.cwd();
+    }
+}
+
+const GIT_ROOT = getGitRoot();
+
 const EXPORT_ROOT_DIR_NAME = '.cortex-debug';
-const EXPORT_ROOT_PATH = resolve(process.cwd(), EXPORT_ROOT_DIR_NAME);
+const EXPORT_ROOT_PATH = resolve(GIT_ROOT, EXPORT_ROOT_DIR_NAME);
 
 function sendJson(res: any, statusCode: number, payload: unknown) {
     res.statusCode = statusCode;
@@ -177,7 +195,7 @@ function debugBundlePlugin() {
 // Persists saved cycles as JSON files in saved-cycles/ so every Vite
 // instance (any port) reads from the same source of truth on disk.
 
-const CYCLES_DIR = resolve(process.cwd(), 'saved-cycles');
+const CYCLES_DIR = resolve(GIT_ROOT, 'saved-cycles');
 const CYCLES_INDEX_PATH = resolve(CYCLES_DIR, 'index.json');
 
 function sanitizeCycleId(raw: unknown): string {
@@ -514,7 +532,7 @@ function customSectionsPlugin() {
 // Persists pipeline model/provider presets as a single JSON file so
 // they survive across sessions and browsers.
 
-const PRESETS_PATH = resolve(process.cwd(), 'pipeline-presets.json');
+const PRESETS_PATH = resolve(GIT_ROOT, 'pipeline-presets.json');
 
 async function readPresetsFile(): Promise<any[]> {
     try {
@@ -641,7 +659,7 @@ function sectionOrderPlugin() {
 // GET  /__ab/status  →  lists all active A/B tests in source
 // GET  /__ab/pending →  returns any pending decisions awaiting cleanup
 
-const AB_DECISIONS_PATH = resolve(process.cwd(), '.ab-decisions.json');
+const AB_DECISIONS_PATH = resolve(GIT_ROOT, '.ab-decisions.json');
 
 function sanitizeAbArg(raw: unknown): string {
     return String(raw || '')
@@ -859,7 +877,7 @@ function abTestPlugin() {
 //   .cortex-logs/llm-log.json   — full log snapshot (overwritten)
 //   .cortex-logs/failures.jsonl — append-only failure audit trail
 
-const LOGS_DIR = resolve(process.cwd(), '.cortex-logs');
+const LOGS_DIR = resolve(GIT_ROOT, '.cortex-logs');
 
 async function readExistingFailureCids(filePath: string): Promise<Set<string>> {
     const cids = new Set<string>();
