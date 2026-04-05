@@ -1064,6 +1064,9 @@ async function runExtendedPipeline(
         console.warn('[Extended Pipeline] Extended Sherlock failed (non-critical):', err);
     });
 
+    // Finalize LLM cache so the cycle can be saved
+    LLMCache.markFlowComplete();
+
     PhaseState.isProcessing = false;
     console.log('[Extended Pipeline] Complete');
 }
