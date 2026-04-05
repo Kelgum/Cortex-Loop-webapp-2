@@ -507,12 +507,15 @@ export function renderExtendedChart(opts: {
                 // Build top-edge points for envelope
                 const topPoints: { x: number; y: number }[] = [];
                 let prevDoseMg = -1;
+                let lastAnnotatedLabel = '';
 
                 for (const day of run) {
                     const info = doseAtDay.get(day)!;
                     const fraction = 0.25 + 0.75 * (info.doseMg / maxDoseMg);
                     const topY = laneY + laneH * (1 - fraction);
                     const dayX = extendedChartX(day, config);
+                    // Clamp annotation Y to stay within the lane (3px from top, never below lane)
+                    const annY = Math.min(topY + 9, laneY + laneH - 2);
 
                     // At dose transitions, insert a ramp point
                     if (prevDoseMg >= 0 && Math.abs(info.doseMg - prevDoseMg) > 0.01) {
@@ -522,11 +525,15 @@ export function renderExtendedChart(opts: {
                         const prevTopY = laneY + laneH * (1 - prevFrac);
                         topPoints.push({ x: rampX, y: prevTopY });
 
-                        // Record dose annotation at transition
-                        doseAnnotations.push({ x: dayX, y: topY + 9, label: info.label });
+                        // Only annotate if the dose label actually changed
+                        if (info.label !== lastAnnotatedLabel) {
+                            doseAnnotations.push({ x: dayX, y: annY, label: info.label });
+                            lastAnnotatedLabel = info.label;
+                        }
                     } else if (day === runStartDay) {
                         // First day: annotate starting dose
-                        doseAnnotations.push({ x: dayX + 4, y: topY + 9, label: info.label });
+                        doseAnnotations.push({ x: dayX + 4, y: annY, label: info.label });
+                        lastAnnotatedLabel = info.label;
                     }
 
                     topPoints.push({ x: dayX, y: topY });
@@ -613,7 +620,7 @@ export function renderExtendedChart(opts: {
             // ── Left-side substance name label ──
             const shortName = subName.length > 16 ? subName.slice(0, 14) + '..' : subName;
             const nameLabel = svgEl('text', {
-                x: String(config.padL - 6),
+                x: String(config.padL - 12),
                 y: String(laneY + laneH / 2 + 3),
                 fill: isLight ? 'rgba(0,0,0,0.5)' : 'rgba(200,218,245,0.6)',
                 'text-anchor': 'end',
