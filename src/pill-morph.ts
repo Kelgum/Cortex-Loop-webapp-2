@@ -61,6 +61,9 @@ export interface PillMorphOptions {
     /** Custom per-frame callback for removed pills (e.g. connector retraction in revision).
      *  When provided, replaces the default fade+shrink for removed pills. */
     onRemoveTick?: (el: SVGGElement, geo: PillGeometry, t: number) => void;
+    /** Per-pill ease: given a pill's X position, return the local eased progress [0,1].
+     *  When provided, overrides the global lxEase for each pill individually. */
+    easeForX?: (x: number) => number;
 }
 
 // ============================================
@@ -312,14 +315,17 @@ export function tickPillMorph(
     curveCtx: PillMorphCurveCtx,
     options?: PillMorphOptions,
 ): void {
+    const efx = options?.easeForX;
+
     // ── Matched pills: glide to new position + interpolate dose ──
     for (const { from, to, el, doseMorph, ghost } of plan.matched) {
+        const pillEase = efx ? efx(from.x) : lxEase;
         const totalDx = to.x - from.x;
         const totalDy = to.y - from.y;
 
         if (ghost) {
             // ── Portal: origin fades out + drifts, destination ghost fades in + drifts — in parallel ──
-            const tf = teleportInterpolation(lxEase, TELEPORT.driftFraction);
+            const tf = teleportInterpolation(pillEase, TELEPORT.driftFraction);
 
             // Origin element: drift slightly toward destination, fade out
             const originDx = totalDx * tf.originPos;
@@ -346,33 +352,33 @@ export function tickPillMorph(
             if (gDot) gDot.setAttribute('fill-opacity', (0.65 * tf.destOpacity).toFixed(3));
 
             // Dose label on ghost during fade-in
-            if (doseMorph && lxEase > 0.01) {
-                _tickDoseLabel(ghost, doseMorph, lxEase);
+            if (doseMorph && pillEase > 0.01) {
+                _tickDoseLabel(ghost, doseMorph, pillEase);
             }
         } else {
             // ── Normal smooth glide ──
-            const dx = totalDx * lxEase;
-            const dy = totalDy * lxEase;
+            const dx = totalDx * pillEase;
+            const dy = totalDy * pillEase;
             el.setAttribute('transform', `translate(${dx.toFixed(2)}, ${dy.toFixed(2)})`);
             el.setAttribute('opacity', '1');
 
             // Interpolate bar width
             const bar = el.querySelector('.timeline-bar') as SVGRectElement | null;
             if (bar) {
-                const w = from.width + (to.width - from.width) * lxEase;
+                const w = from.width + (to.width - from.width) * pillEase;
                 bar.setAttribute('width', w.toFixed(1));
             }
 
             // Interpolate dose label
             if (doseMorph) {
-                _tickDoseLabel(el, doseMorph, lxEase);
+                _tickDoseLabel(el, doseMorph, pillEase);
             }
 
             // Interpolate connector + dot to track morphing Lx curves
             const connector = el.querySelector('.timeline-connector') as SVGLineElement | null;
             const dot = el.querySelector('.timeline-curve-dot') as SVGCircleElement | null;
             if (connector || dot) {
-                const morphTimeH = from.timeH + (to.timeH - from.timeH) * lxEase;
+                const morphTimeH = from.timeH + (to.timeH - from.timeH) * pillEase;
                 const ci = to.targetCurveIdx;
                 const fromLxPts = curveCtx.fromLxPoints[ci] || [];
                 const toLxPts = curveCtx.toLxPoints[ci] || [];
@@ -380,7 +386,7 @@ export function tickPillMorph(
                 if (fromLxPts.length > 0 && toLxPts.length > 0) {
                     const fromVal = interpolatePointsAtTime(fromLxPts, morphTimeH);
                     const toVal = interpolatePointsAtTime(toLxPts, morphTimeH);
-                    const morphVal = fromVal + (toVal - fromVal) * lxEase;
+                    const morphVal = fromVal + (toVal - fromVal) * pillEase;
                     curveY = phaseChartY(morphVal);
                 }
                 if (connector) connector.setAttribute('y1', curveY.toFixed(1));
@@ -391,10 +397,11 @@ export function tickPillMorph(
 
     // ── Removed pills: fade out + slight shrink (or custom callback) ──
     for (const { geo, el } of plan.removed) {
+        const pillEase = efx ? efx(geo.x) : lxEase;
         if (options?.onRemoveTick) {
-            options.onRemoveTick(el, geo, lxEase);
+            options.onRemoveTick(el, geo, pillEase);
         } else {
-            const fadeProgress = Math.min(1, lxEase / 0.5);
+            const fadeProgress = Math.min(1, pillEase / 0.5);
             const opacity = Math.max(0, 1 - fadeProgress);
             const scale = 1 - 0.15 * fadeProgress;
             const cx = geo.x + geo.width / 2;
@@ -409,14 +416,15 @@ export function tickPillMorph(
 
     // ── Added pills: fade in + slight grow + dose count from 0 ──
     for (const { geo, el, doseMorph } of plan.added) {
-        if (lxEase < 0.3) {
+        const pillEase = efx ? efx(geo.x) : lxEase;
+        if (pillEase < 0.3) {
             el.setAttribute('opacity', '0');
             if (doseMorph) {
                 const label = el.querySelector('.timeline-bar-label') as SVGTextElement | null;
                 if (label) label.textContent = `${doseMorph.prefix}0${doseMorph.unit}`;
             }
         } else {
-            const fadeIn = Math.min(1, (lxEase - 0.3) / 0.55);
+            const fadeIn = Math.min(1, (pillEase - 0.3) / 0.55);
             const scale = 0.85 + 0.15 * fadeIn;
             const cx = geo.x + geo.width / 2;
             const cy = geo.y + TIMELINE_ZONE.laneH / 2;

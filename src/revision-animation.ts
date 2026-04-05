@@ -1054,9 +1054,17 @@ export async function animateRevisionScan(
             const sweepDist = Math.max(1, plotEndX - plotStartX);
             const DURATION = clamp(sweepDist / SWEEP_SPEED_PX_PER_MS, 2000, 18000);
 
+            // Each pill's animation completes over this many px after the scan line touches it
+            const PILL_ANIM_WINDOW_PX = Math.max(40, sweepDist * 0.12);
+
             let nextCard = 0;
             let nextMorph = 0;
             const morphPromises: Promise<void>[] = [];
+
+            // Build sorted X positions for morphLxStep triggers (same order as morphEntries)
+            const morphTriggerXs = morphEntries.map((e: any) =>
+                phaseChartX((e.oldIv || e.newIv)?.timeMinutes ?? PHASE_CHART.startMin),
+            );
 
             await new Promise<void>(resolve => {
                 const startTs = performance.now();
@@ -1072,8 +1080,16 @@ export async function animateRevisionScan(
                     const scanX = plotStartX + sweepDist * rawT;
                     dayScan.setX(scanX);
 
-                    // 2. Tick all pills simultaneously
-                    tickPillMorph(pillPlan, ease, curveCtx, { onRemoveTick: revisionRemoveTick });
+                    // 2. Per-pill easing: each pill animates from when scanX reaches it
+                    const easeForX = (pillX: number) => {
+                        const localT = clamp((scanX - pillX) / PILL_ANIM_WINDOW_PX, 0, 1);
+                        // Apply easeInOutCubic to the local progress for smooth feel
+                        return easeInOutCubic(localT);
+                    };
+                    tickPillMorph(pillPlan, ease, curveCtx, {
+                        onRemoveTick: revisionRemoveTick,
+                        easeForX,
+                    });
 
                     // 3. Fire Sherlock cards as scan crosses X thresholds
                     while (nextCard < sherlockTriggers.length && scanX >= sherlockTriggers[nextCard].x) {
@@ -1081,10 +1097,10 @@ export async function animateRevisionScan(
                         nextCard++;
                     }
 
-                    // 4. Fire morphLxStep at evenly spaced t intervals
-                    if (morphEntries.length > 0) {
-                        const morphThreshold = (nextMorph + 0.5) / morphEntries.length;
-                        if (ease >= morphThreshold && nextMorph < morphEntries.length) {
+                    // 4. Fire morphLxStep as scan crosses each substance's X position
+                    while (nextMorph < morphEntries.length) {
+                        const triggerX = morphTriggerXs[nextMorph];
+                        if (scanX >= triggerX) {
                             const entry = morphEntries[nextMorph];
                             morphPromises.push(
                                 Promise.resolve(
@@ -1092,6 +1108,8 @@ export async function animateRevisionScan(
                                 ),
                             );
                             nextMorph++;
+                        } else {
+                            break;
                         }
                     }
 
