@@ -265,79 +265,181 @@ export function renderExtendedChart(opts: {
         ).textContent = String(val);
     }
 
-    // ── 6. Curves — render all effects, spotlight ones at full opacity ──
-    // Build a set of currently spotlighted effect names (union across all phases)
-    const allSpotlightEffects = new Set<string>();
-    for (const ps of phaseSpotlights) {
-        for (const eff of ps.effects) allSpotlightEffects.add(eff);
+    // ── 6. Curves — phase-scoped rendering ──
+    // Each effect only renders at full opacity within the phase day-ranges where
+    // it's spotlighted. Outside those ranges it appears as a faint ghost (0.08).
+    // SVG <clipPath> elements restrict the bright curves to their spotlight zones.
+
+    // Ensure a <defs> element exists for clip-paths
+    let defs = svg.querySelector('defs');
+    if (!defs) {
+        defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+        svg.insertBefore(defs, svg.firstChild);
     }
 
-    for (const curve of effectRoster) {
-        const isSpotlight = allSpotlightEffects.has(curve.effect);
-        const opacity = isSpotlight ? '1' : '0.12';
+    for (let ei = 0; ei < effectRoster.length; ei++) {
+        const curve = effectRoster[ei];
+        const effectName = curve.effect;
 
-        // Baseline (dashed)
+        // Find which phases spotlight this effect
+        const spotlightRanges = phaseSpotlights
+            .filter(ps => ps.effects.includes(effectName))
+            .map(ps => ({ start: ps.startDay, end: ps.endDay }));
+
+        const isSpotlighted = spotlightRanges.length > 0;
+
+        // Build paths for this curve
         const baselinePath = buildSmoothPath(curve.baseline, config);
-        if (baselinePath) {
-            gCurves.appendChild(
-                svgEl('path', {
-                    d: baselinePath,
-                    fill: 'none',
-                    stroke: curve.color,
-                    'stroke-width': isSpotlight ? '1.5' : '1',
-                    'stroke-dasharray': '4 3',
-                    opacity,
-                    'pointer-events': 'none',
-                }),
-            );
-        }
-
-        // Desired (solid)
         const desiredPath = buildSmoothPath(curve.desired, config);
-        if (desiredPath) {
-            gCurves.appendChild(
-                svgEl('path', {
-                    d: desiredPath,
-                    fill: 'none',
-                    stroke: curve.color,
-                    'stroke-width': isSpotlight ? '2.5' : '1',
-                    opacity,
-                    'pointer-events': 'none',
-                }),
-            );
-        }
+        if (!baselinePath && !desiredPath) continue;
 
-        // AUC fill between baseline and desired for spotlight effects
-        if (isSpotlight && curve.baseline.length > 0 && curve.desired.length > 0) {
-            const fillPath = buildSmoothPath(curve.desired, config)
-                + ' L' + extendedChartX(curve.baseline[curve.baseline.length - 1].day, config).toFixed(1)
-                + ',' + extendedChartY(curve.baseline[curve.baseline.length - 1].value, config).toFixed(1)
-                + ' ' + buildSmoothPath([...curve.baseline].reverse(), config).replace(/^M/, 'L')
-                + ' Z';
-            gCurves.appendChild(
-                svgEl('path', {
-                    d: fillPath,
-                    fill: curve.color,
-                    opacity: '0.06',
-                    'pointer-events': 'none',
-                }),
-            );
-        }
+        if (isSpotlighted) {
+            // Create a clip-path covering only the spotlight day ranges
+            const clipId = `ext-spotlight-clip-${ei}`;
+            // Remove any stale clip with same ID
+            const oldClip = defs.querySelector(`#${clipId}`);
+            if (oldClip) oldClip.remove();
 
-        // Effect label at right edge
-        if (isSpotlight && curve.desired.length > 0) {
-            const lastPt = curve.desired[curve.desired.length - 1];
-            gCurves.appendChild(
-                svgEl('text', {
-                    x: String(config.padL + config.plotW + 8),
-                    y: String(extendedChartY(lastPt.value, config) + 3),
-                    fill: curve.color,
-                    'font-family': "'Space Grotesk', sans-serif",
-                    'font-size': '10',
-                    'font-weight': '600',
-                    opacity: '0.8',
-                }),
-            ).textContent = curve.effect;
+            const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
+            clipPath.id = clipId;
+            for (const range of spotlightRanges) {
+                const x1 = extendedChartX(range.start - 0.5, config);
+                const x2 = extendedChartX(range.end + 0.5, config);
+                clipPath.appendChild(
+                    svgEl('rect', {
+                        x: String(Math.max(x1, config.padL)),
+                        y: '0',
+                        width: String(Math.min(x2, config.padL + config.plotW) - Math.max(x1, config.padL)),
+                        height: String(config.padT + config.plotH + 60),
+                    }),
+                );
+            }
+            defs.appendChild(clipPath);
+
+            // Ghost layer — full curve at very low opacity (visible everywhere)
+            if (baselinePath) {
+                gCurves.appendChild(
+                    svgEl('path', {
+                        d: baselinePath,
+                        fill: 'none',
+                        stroke: curve.color,
+                        'stroke-width': '0.75',
+                        'stroke-dasharray': '4 3',
+                        opacity: '0.08',
+                        'pointer-events': 'none',
+                    }),
+                );
+            }
+            if (desiredPath) {
+                gCurves.appendChild(
+                    svgEl('path', {
+                        d: desiredPath,
+                        fill: 'none',
+                        stroke: curve.color,
+                        'stroke-width': '0.75',
+                        opacity: '0.08',
+                        'pointer-events': 'none',
+                    }),
+                );
+            }
+
+            // Spotlight layer — clipped to spotlight day ranges, full opacity
+            if (baselinePath) {
+                gCurves.appendChild(
+                    svgEl('path', {
+                        d: baselinePath,
+                        fill: 'none',
+                        stroke: curve.color,
+                        'stroke-width': '1.5',
+                        'stroke-dasharray': '4 3',
+                        opacity: '1',
+                        'clip-path': `url(#${clipId})`,
+                        'pointer-events': 'none',
+                    }),
+                );
+            }
+            if (desiredPath) {
+                gCurves.appendChild(
+                    svgEl('path', {
+                        d: desiredPath,
+                        fill: 'none',
+                        stroke: curve.color,
+                        'stroke-width': '2.5',
+                        opacity: '1',
+                        'clip-path': `url(#${clipId})`,
+                        'pointer-events': 'none',
+                    }),
+                );
+            }
+
+            // AUC fill between baseline and desired — clipped to spotlight ranges
+            if (curve.baseline.length > 0 && curve.desired.length > 0) {
+                const fillPath =
+                    buildSmoothPath(curve.desired, config) +
+                    ' L' + extendedChartX(curve.baseline[curve.baseline.length - 1].day, config).toFixed(1) +
+                    ',' + extendedChartY(curve.baseline[curve.baseline.length - 1].value, config).toFixed(1) +
+                    ' ' + buildSmoothPath([...curve.baseline].reverse(), config).replace(/^M/, 'L') +
+                    ' Z';
+                gCurves.appendChild(
+                    svgEl('path', {
+                        d: fillPath,
+                        fill: curve.color,
+                        opacity: '0.06',
+                        'clip-path': `url(#${clipId})`,
+                        'pointer-events': 'none',
+                    }),
+                );
+            }
+
+            // Effect label at the right edge of its LAST spotlight range
+            const lastRange = spotlightRanges[spotlightRanges.length - 1];
+            const labelDay = lastRange.end;
+            const labelPt = curve.desired.find(p => p.day === labelDay)
+                || curve.desired[curve.desired.length - 1];
+            if (labelPt) {
+                const labelX = Math.min(
+                    extendedChartX(labelDay + 0.8, config),
+                    config.padL + config.plotW + 8,
+                );
+                gCurves.appendChild(
+                    svgEl('text', {
+                        x: String(labelX),
+                        y: String(extendedChartY(labelPt.value, config) + 3),
+                        fill: curve.color,
+                        'font-family': "'Space Grotesk', sans-serif",
+                        'font-size': '10',
+                        'font-weight': '600',
+                        opacity: '0.8',
+                    }),
+                ).textContent = curve.effect;
+            }
+        } else {
+            // Not spotlighted in any phase — render as faint ghost only
+            if (baselinePath) {
+                gCurves.appendChild(
+                    svgEl('path', {
+                        d: baselinePath,
+                        fill: 'none',
+                        stroke: curve.color,
+                        'stroke-width': '0.75',
+                        'stroke-dasharray': '4 3',
+                        opacity: '0.08',
+                        'pointer-events': 'none',
+                    }),
+                );
+            }
+            if (desiredPath) {
+                gCurves.appendChild(
+                    svgEl('path', {
+                        d: desiredPath,
+                        fill: 'none',
+                        stroke: curve.color,
+                        'stroke-width': '0.75',
+                        opacity: '0.08',
+                        'pointer-events': 'none',
+                    }),
+                );
+            }
         }
     }
 

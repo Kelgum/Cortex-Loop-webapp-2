@@ -108,7 +108,7 @@ Rules:
 7. Colors: distinct, visible on dark background (#0a0a0f). Use muted but vibrant tones like #60a5fa, #c084fc, #4ade80, #fb7185, #fbbf24, #38bdf8
 8. Effect names MUST be pharmacodynamic effects, not molecule names. Use 1-2 word labels.
 9. polarity: "higher_is_better" for effects the user wants to INCREASE, "higher_is_worse" for effects to REDUCE
-10. Phase spotlights: each phase MUST list 2-3 effect names from the roster. Effects can appear in multiple phase spotlights.
+10. Phase spotlights: each phase MUST list 2-3 effect names from the roster. Spotlight effects should be DISTINCT per phase — avoid assigning the same effects to every phase. The chart displays ONLY the spotlight effects during that phase, so different phases should highlight DIFFERENT clinical concerns. An effect may appear in multiple phases if genuinely relevant, but at least 1 spotlight effect per phase should be unique to that phase.
 11. Phase day ranges must cover the full timeline without gaps (startDay of phase N+1 = endDay of phase N + 1)
 12. Each phase needs a color for its visual band
 13. STRING SAFETY: Do NOT use double quotes inside string values. Use single quotes for inner quotes.
@@ -159,7 +159,8 @@ RULES:
 9. impacts: fraction of gap this substance fills for each effect at peak. Values 0-1.
 10. protocolPhases must match or refine the phases from the Strategist. Day ranges must cover the full {{durationDays}} days.
 11. STRING SAFETY: No double quotes inside string values.
-12. Select 3-8 substances total. Quality over quantity.`,
+12. Select 4-8 substances total. Each protocol phase MUST have at least 1 substance starting within it — distribute substances across phases, not all on day 1. Different phases target different effects and should use different substances.
+13. PHASE COVERAGE: If you defined 4 protocol phases, you need at least 4 distinct substances (one per phase minimum). Substances may span multiple phases via frequency, but each phase should introduce at least one new substance.`,
 
     // ── Stage 3: Strategist — Pharmacodynamic Curves ───────────────────
     curveModel: `You are an expert pharmacologist modeling 24-hour pharmacodynamic curves. Given the user's desired outcome:
