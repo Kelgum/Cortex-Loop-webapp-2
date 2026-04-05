@@ -82,6 +82,17 @@ export function renderExtendedChart(opts: {
     const config = getExtendedChartConfig(durationDays);
     const isLight = isLightMode();
 
+    // Expand viewBox to fit substance lanes below the plot area
+    const substanceCount = interventions
+        ? new Set(interventions.map(iv => iv.key)).size
+        : 0;
+    const laneH = 16;
+    const laneGap = 2;
+    const substanceAreaHeight = substanceCount > 0 ? 10 + substanceCount * (laneH + laneGap) : 0;
+    const requiredHeight = config.padT + config.plotH + substanceAreaHeight + 10;
+    const viewH = Math.max(PHASE_CHART.viewH as number, requiredHeight);
+    svg.setAttribute('viewBox', `0 0 ${config.viewW} ${viewH}`);
+
     // Create/clear groups
     const gDayBands = ensureGroup(svg, GROUP_IDS.dayBands);
     const gPhaseBands = ensureGroup(svg, GROUP_IDS.phaseBands);
@@ -579,4 +590,6 @@ export function clearExtendedChart(svg: SVGSVGElement): void {
     if (defs) {
         defs.querySelectorAll('[id^="ext-"]').forEach(el => el.remove());
     }
+    // Restore original viewBox
+    svg.setAttribute('viewBox', `0 0 ${PHASE_CHART.viewW} ${PHASE_CHART.viewH}`);
 }
