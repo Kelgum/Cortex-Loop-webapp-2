@@ -5,7 +5,7 @@
  * Depends on: constants, utils, types, substances
  */
 import { PHASE_CHART, getExtendedChartConfig } from './constants';
-import { svgEl, extendedChartX, extendedChartY, isLightMode } from './utils';
+import { svgEl, extendedChartX, extendedChartY, isLightMode, parseDoseToMg } from './utils';
 import { resolveSubstance } from './substances';
 import type {
     ExtendedCurveData,
@@ -397,7 +397,7 @@ export function renderExtendedChart(opts: {
         }
     }
 
-    // ── 7. Substance timeline (24h-style rich pills) ──
+    // ── 7. Substance timeline — dose envelope (FCP volume curve style) ──
     if (interventions && interventions.length > 0) {
         const laneH = 16;
         const laneGap = 2;
@@ -428,21 +428,20 @@ export function renderExtendedChart(opts: {
         const laneStep = laneH + laneGap;
         let rowIdx = 0;
         for (const [key, entries] of substanceMap) {
-            const y = barAreaTop + rowIdx * laneStep;
+            const laneY = barAreaTop + rowIdx * laneStep;
 
-            // Resolve substance from DB for rich info
+            // Resolve substance from DB
             const sub = resolveSubstance(key, {});
             const subName = sub ? sub.name : key.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
             const subColor = sub ? (sub.color || '#60a5fa') : '#60a5fa';
             const regStatus = sub ? ((sub as any).regulatoryStatus || '').toLowerCase() : '';
-            const dose = entries[0]?.dose || (sub ? (sub as any).standardDose : '') || '';
 
             // Lane stripe (alternating odd rows)
             if (rowIdx % 2 === 1) {
                 gSubstanceBars.appendChild(
                     svgEl('rect', {
                         x: String(config.padL),
-                        y: String(y),
+                        y: String(laneY),
                         width: String(config.plotW),
                         height: String(laneH),
                         fill: isLight ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.02)',
@@ -451,128 +450,184 @@ export function renderExtendedChart(opts: {
                 );
             }
 
-            // Determine active days for this substance
-            const activeDays = new Set<number>();
-            for (const entry of entries) {
+            // ── Build dose-per-day map ──
+            // Sort entries by start day so later entries override earlier for overlapping days
+            const sorted = [...entries].sort((a, b) => a.day - b.day);
+            const doseAtDay = new Map<number, { doseMg: number; label: string }>();
+            let maxDoseMg = 0;
+
+            for (const entry of sorted) {
+                const baseMg = parseDoseToMg(entry.dose || '') ?? 100;
+                const effectiveMg = baseMg * (entry.doseMultiplier || 1.0);
                 const endDay = protocolPhases
                     ? (protocolPhases.find(p => p.name === entry.phase)?.endDay || durationDays)
                     : durationDays;
                 for (let d = entry.day; d <= endDay; d++) {
                     if (entry.frequency === 'alternate' && (d - entry.day) % 2 !== 0) continue;
-                    activeDays.add(d);
+                    doseAtDay.set(d, { doseMg: effectiveMg, label: entry.dose || '' });
                 }
+                if (effectiveMg > maxDoseMg) maxDoseMg = effectiveMg;
             }
+            if (maxDoseMg <= 0) maxDoseMg = 100;
 
-            // Find contiguous runs and render pill bars
-            const sortedDays = [...activeDays].sort((a, b) => a - b);
-            if (sortedDays.length === 0) { rowIdx++; continue; }
-            let runStart = sortedDays[0];
-            let runEnd = sortedDays[0];
+            // ── Find contiguous runs and render dose envelopes ──
+            const activeDays = [...doseAtDay.keys()].sort((a, b) => a - b);
+            if (activeDays.length === 0) { rowIdx++; continue; }
+
+            const laneBottom = laneY + laneH;
+            const doseAnnotations: { x: number; y: number; label: string }[] = [];
             let firstBarX1 = 0;
-            let firstBarW = 0;
             let isFirstRun = true;
 
-            for (let i = 1; i <= sortedDays.length; i++) {
-                if (i < sortedDays.length && sortedDays[i] === runEnd + 1) {
-                    runEnd = sortedDays[i];
+            // Split into contiguous runs
+            const runs: number[][] = [];
+            let currentRun = [activeDays[0]];
+            for (let i = 1; i < activeDays.length; i++) {
+                if (activeDays[i] === activeDays[i - 1] + 1) {
+                    currentRun.push(activeDays[i]);
                 } else {
-                    const x1 = extendedChartX(runStart - 0.4, config);
-                    const x2 = extendedChartX(runEnd + 0.4, config);
-                    const barW = Math.max(4, x2 - x1);
-
-                    if (isFirstRun) {
-                        firstBarX1 = x1;
-                        firstBarW = barW;
-                        isFirstRun = false;
-                    }
-
-                    // Pill bar: fill + stroke layering (matching 24h style)
-                    gSubstanceBars.appendChild(
-                        svgEl('rect', {
-                            x: String(x1),
-                            y: String(y),
-                            width: String(barW),
-                            height: String(laneH),
-                            rx: String(pillRx),
-                            ry: String(pillRx),
-                            fill: subColor,
-                            'fill-opacity': '0.22',
-                            stroke: subColor,
-                            'stroke-opacity': '0.45',
-                            'stroke-width': '0.75',
-                            'pointer-events': 'none',
-                        }),
-                    );
-
-                    if (i < sortedDays.length) {
-                        runStart = sortedDays[i];
-                        runEnd = sortedDays[i];
-                    }
+                    runs.push(currentRun);
+                    currentRun = [activeDays[i]];
                 }
             }
+            runs.push(currentRun);
 
-            // Clip-path for label (extends to cover the full first bar + overflow)
-            const clipId = `ext-tl-clip-${rowIdx}`;
+            // Clip-path for pill-shaped rounding of the whole lane
+            const clipId = `ext-env-clip-${rowIdx}`;
             const oldClip = defs.querySelector(`#${clipId}`);
             if (oldClip) oldClip.remove();
-            const clip = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
-            clip.id = clipId;
-            const labelOverflow = Math.max(0, config.padL + config.plotW - (firstBarX1 + firstBarW));
-            clip.appendChild(
-                svgEl('rect', {
-                    x: String(firstBarX1),
-                    y: String(y),
-                    width: String(firstBarW + labelOverflow),
-                    height: String(laneH),
-                    rx: String(pillRx),
-                    ry: String(pillRx),
-                }),
-            );
-            defs.appendChild(clip);
 
-            // Rich label inside the first pill bar
-            const contentG = svgEl('g', { 'clip-path': `url(#${clipId})` });
-            const label = svgEl('text', {
-                x: String(firstBarX1 + 5),
-                y: String(y + laneH / 2 + 3),
-                fill: isLight ? 'rgba(20,30,50,0.95)' : 'rgba(255,255,255,0.92)',
+            for (const run of runs) {
+                const runStartDay = run[0];
+                const runEndDay = run[run.length - 1];
+                const x1 = extendedChartX(runStartDay - 0.4, config);
+                const x2 = extendedChartX(runEndDay + 0.4, config);
+                if (isFirstRun) { firstBarX1 = x1; isFirstRun = false; }
+
+                // Build top-edge points for envelope
+                const topPoints: { x: number; y: number }[] = [];
+                let prevDoseMg = -1;
+
+                for (const day of run) {
+                    const info = doseAtDay.get(day)!;
+                    const fraction = 0.25 + 0.75 * (info.doseMg / maxDoseMg);
+                    const topY = laneY + laneH * (1 - fraction);
+                    const dayX = extendedChartX(day, config);
+
+                    // At dose transitions, insert a ramp point
+                    if (prevDoseMg >= 0 && Math.abs(info.doseMg - prevDoseMg) > 0.01) {
+                        // Ramp: start diagonal 0.5 days before this point
+                        const rampX = extendedChartX(day - 0.5, config);
+                        const prevFrac = 0.25 + 0.75 * (prevDoseMg / maxDoseMg);
+                        const prevTopY = laneY + laneH * (1 - prevFrac);
+                        topPoints.push({ x: rampX, y: prevTopY });
+
+                        // Record dose annotation at transition
+                        doseAnnotations.push({ x: dayX, y: topY + 9, label: info.label });
+                    } else if (day === runStartDay) {
+                        // First day: annotate starting dose
+                        doseAnnotations.push({ x: dayX + 4, y: topY + 9, label: info.label });
+                    }
+
+                    topPoints.push({ x: dayX, y: topY });
+                    prevDoseMg = info.doseMg;
+                }
+
+                // Build closed envelope path: top edge forward, bottom edge back
+                if (topPoints.length === 0) continue;
+                let fillD = `M${x1.toFixed(1)},${laneBottom.toFixed(1)}`;
+                // Up to first top point
+                fillD += ` L${topPoints[0].x.toFixed(1)},${topPoints[0].y.toFixed(1)}`;
+                // Along top edge
+                for (let i = 1; i < topPoints.length; i++) {
+                    fillD += ` L${topPoints[i].x.toFixed(1)},${topPoints[i].y.toFixed(1)}`;
+                }
+                // Down to bottom right, back along bottom, close
+                fillD += ` L${x2.toFixed(1)},${topPoints[topPoints.length - 1].y.toFixed(1)}`;
+                fillD += ` L${x2.toFixed(1)},${laneBottom.toFixed(1)} Z`;
+
+                // Top-edge-only open path (for stroke)
+                let strokeD = `M${topPoints[0].x.toFixed(1)},${topPoints[0].y.toFixed(1)}`;
+                for (let i = 1; i < topPoints.length; i++) {
+                    strokeD += ` L${topPoints[i].x.toFixed(1)},${topPoints[i].y.toFixed(1)}`;
+                }
+                strokeD += ` L${x2.toFixed(1)},${topPoints[topPoints.length - 1].y.toFixed(1)}`;
+
+                // Render filled envelope
+                gSubstanceBars.appendChild(
+                    svgEl('path', {
+                        d: fillD,
+                        fill: subColor,
+                        'fill-opacity': '0.22',
+                        'pointer-events': 'none',
+                    }),
+                );
+
+                // Render top-edge stroke
+                gSubstanceBars.appendChild(
+                    svgEl('path', {
+                        d: strokeD,
+                        fill: 'none',
+                        stroke: subColor,
+                        'stroke-opacity': '0.55',
+                        'stroke-width': '0.75',
+                        'pointer-events': 'none',
+                    }),
+                );
+
+                // Bottom baseline stroke
+                gSubstanceBars.appendChild(
+                    svgEl('line', {
+                        x1: String(x1),
+                        y1: String(laneBottom),
+                        x2: String(x2),
+                        y2: String(laneBottom),
+                        stroke: subColor,
+                        'stroke-opacity': '0.15',
+                        'stroke-width': '0.5',
+                        'pointer-events': 'none',
+                    }),
+                );
+            }
+
+            // ── Dose annotations at transition points ──
+            for (const ann of doseAnnotations) {
+                gSubstanceBars.appendChild(
+                    svgEl('text', {
+                        x: String(ann.x),
+                        y: String(ann.y),
+                        fill: isLight ? 'rgba(20,30,50,0.8)' : 'rgba(255,255,255,0.75)',
+                        'font-family': "'IBM Plex Mono', monospace",
+                        'font-size': '7',
+                        'font-weight': '500',
+                        'pointer-events': 'none',
+                    }),
+                ).textContent = ann.label;
+            }
+
+            // ── Left-side substance name label ──
+            const shortName = subName.length > 16 ? subName.slice(0, 14) + '..' : subName;
+            const nameLabel = svgEl('text', {
+                x: String(config.padL - 6),
+                y: String(laneY + laneH / 2 + 3),
+                fill: isLight ? 'rgba(0,0,0,0.5)' : 'rgba(200,218,245,0.6)',
+                'text-anchor': 'end',
                 'font-family': "'IBM Plex Mono', monospace",
-                'font-size': '9',
+                'font-size': '8',
                 'font-weight': '500',
-                'letter-spacing': '0.02em',
             });
-
-            const displayText = dose ? `${subName} ${dose}` : subName;
-            label.textContent = displayText;
-
-            // Rx badge as inline tspan
+            nameLabel.textContent = shortName;
+            // Rx badge after name
             if (regStatus === 'rx' || regStatus === 'controlled') {
                 const rxSpan = svgEl('tspan', {
                     fill: '#e11d48',
-                    'font-size': '7',
+                    'font-size': '6.5',
                     'font-weight': '700',
-                    dy: '-0.5',
                 });
                 rxSpan.textContent = ' Rx';
-                label.appendChild(rxSpan);
+                nameLabel.appendChild(rxSpan);
             }
-
-            contentG.appendChild(label);
-            gSubstanceBars.appendChild(contentG);
-
-            // Substance name label on the left (outside chart area)
-            const shortName = subName.length > 16 ? subName.slice(0, 14) + '..' : subName;
-            gSubstanceBars.appendChild(
-                svgEl('text', {
-                    x: String(config.padL - 6),
-                    y: String(y + laneH / 2 + 3),
-                    fill: isLight ? 'rgba(0,0,0,0.5)' : 'rgba(200,218,245,0.6)',
-                    'text-anchor': 'end',
-                    'font-family': "'IBM Plex Mono', monospace",
-                    'font-size': '8',
-                    'font-weight': '500',
-                }),
-            ).textContent = shortName;
+            gSubstanceBars.appendChild(nameLabel);
 
             rowIdx++;
         }
