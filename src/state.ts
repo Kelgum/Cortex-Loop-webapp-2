@@ -51,6 +51,9 @@ const STAGE_IDS = [
     'grandmasterDaily',
     'agentMatch',
     'sherlock7d',
+    'curvesExtended',
+    'interventionExtended',
+    'sherlockExtended',
 ];
 
 const STAGE_DEFAULTS_BY_PROVIDER: any = {
@@ -72,6 +75,9 @@ const STAGE_DEFAULTS_BY_PROVIDER: any = {
         grandmasterDaily: 'opus',
         agentMatch: 'haiku',
         sherlock7d: 'haiku',
+        curvesExtended: 'opus',
+        interventionExtended: 'opus',
+        sherlockExtended: 'haiku',
     },
     openai: {
         fast: '5.3-instant',
@@ -91,6 +97,9 @@ const STAGE_DEFAULTS_BY_PROVIDER: any = {
         grandmasterDaily: '5.4-thinking',
         agentMatch: '5.3-instant',
         sherlock7d: '5.3-instant',
+        curvesExtended: '5.4-thinking',
+        interventionExtended: '5.4-thinking',
+        sherlockExtended: '5.3-instant',
     },
     grok: {
         fast: 'fast',
@@ -110,6 +119,9 @@ const STAGE_DEFAULTS_BY_PROVIDER: any = {
         grandmasterDaily: 'full',
         agentMatch: 'fast',
         sherlock7d: 'fast',
+        curvesExtended: 'full',
+        interventionExtended: 'full',
+        sherlockExtended: 'fast',
     },
     gemini: {
         fast: 'flash-lite',
@@ -129,6 +141,9 @@ const STAGE_DEFAULTS_BY_PROVIDER: any = {
         grandmasterDaily: 'pro-preview',
         agentMatch: 'flash-lite',
         sherlock7d: 'flash-lite',
+        curvesExtended: 'pro-preview',
+        interventionExtended: 'pro-preview',
+        sherlockExtended: 'flash-lite',
     },
 };
 
@@ -281,6 +296,9 @@ export const AppState: IAppState = {
         grandmasterDaily: resolveStoredStageProvider('grandmasterDaily'),
         agentMatch: resolveStoredStageProvider('agentMatch'),
         sherlock7d: resolveStoredStageProvider('sherlock7d'),
+        curvesExtended: resolveStoredStageProvider('curvesExtended'),
+        interventionExtended: resolveStoredStageProvider('interventionExtended'),
+        sherlockExtended: resolveStoredStageProvider('sherlockExtended'),
     },
     stageModels: {
         fast: resolveStoredStageModel('fast', resolveStoredStageProvider('fast')),
@@ -303,6 +321,12 @@ export const AppState: IAppState = {
         grandmasterDaily: resolveStoredStageModel('grandmasterDaily', resolveStoredStageProvider('grandmasterDaily')),
         agentMatch: resolveStoredStageModel('agentMatch', resolveStoredStageProvider('agentMatch')),
         sherlock7d: resolveStoredStageModel('sherlock7d', resolveStoredStageProvider('sherlock7d')),
+        curvesExtended: resolveStoredStageModel('curvesExtended', resolveStoredStageProvider('curvesExtended')),
+        interventionExtended: resolveStoredStageModel(
+            'interventionExtended',
+            resolveStoredStageProvider('interventionExtended'),
+        ),
+        sherlockExtended: resolveStoredStageModel('sherlockExtended', resolveStoredStageProvider('sherlockExtended')),
     },
     turboTargetPhase: _turboTarget,
 };

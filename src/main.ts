@@ -54,6 +54,7 @@ import {
     callSherlockModel,
     callExtendedStrategist,
     callExtendedIntervention,
+    callExtendedSherlock,
 } from './llm-pipeline';
 import {
     validateInterventions, computeIncrementalLxOverlay, animateSequentialLxReveal,
@@ -1046,6 +1047,23 @@ async function runExtendedPipeline(
     PhaseState.phase = 'lx-rendered';
     PhaseState.maxPhaseReached = 2;
     PhaseState.viewingPhase = 2;
+
+    // ── Step 5: Call Extended Sherlock (non-blocking narration) ──
+    callExtendedSherlock(
+        prompt,
+        durationDays,
+        effectRoster,
+        phaseSpotlights,
+        interventions,
+        protocolPhases,
+    ).then((narrationResult) => {
+        if (narrationResult?.beats) {
+            console.log(`[Extended Pipeline] Sherlock narration: ${narrationResult.beats.length} phase beats`);
+        }
+    }).catch((err) => {
+        console.warn('[Extended Pipeline] Extended Sherlock failed (non-critical):', err);
+    });
+
     PhaseState.isProcessing = false;
     console.log('[Extended Pipeline] Complete');
 }

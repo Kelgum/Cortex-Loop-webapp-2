@@ -23,7 +23,10 @@ export type PipelineStage =
     | 'strategistBioDaily'
     | 'grandmasterDaily'
     | 'agentMatch'
-    | 'sherlock7d';
+    | 'sherlock7d'
+    | 'curvesExtended'
+    | 'interventionExtended'
+    | 'sherlockExtended';
 
 export type Provider = 'anthropic' | 'openai' | 'grok' | 'gemini';
 
@@ -351,6 +354,23 @@ export interface ExtendedInterventionResult {
     protocolPhases: ProtocolPhase[];
 }
 
+// -- Narration (Sherlock Extended — per-phase summary for extended timelines) --
+
+export interface SherlockExtendedBeat {
+    phase: string;
+    startDay: number;
+    endDay: number;
+    text: string;
+    direction: 'up' | 'down' | 'neutral';
+    keySubstances: string;
+    spotlightEffects: string[];
+}
+
+export interface SherlockExtendedNarration {
+    beats: SherlockExtendedBeat[];
+    outro: string;
+}
+
 export interface ExtendedChartConfig {
     startUnit: number;
     endUnit: number;
@@ -463,6 +483,9 @@ export interface StageResultMap {
     grandmasterDaily: GrandmasterDailyOutput;
     agentMatch: { categoryTitle?: string; ranked: AgentMatchResult[] };
     sherlock7d: Sherlock7DNarration;
+    curvesExtended: ExtendedStrategistResult;
+    interventionExtended: ExtendedInterventionResult;
+    sherlockExtended: SherlockExtendedNarration;
 }
 
 export type StageRunner<TStage extends keyof StageResultMap> = (...args: unknown[]) => Promise<StageResultMap[TStage]>;

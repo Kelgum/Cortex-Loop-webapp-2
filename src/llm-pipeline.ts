@@ -1338,7 +1338,7 @@ export async function callExtendedStrategist(prompt: string, durationDays: numbe
     const userPrompt = `Design a ${durationDays}-day pharmacodynamic landscape for: ${prompt}`;
 
     const result = await runCachedStage<any>({
-        stage: 'curves',
+        stage: 'curvesExtended',
         stageLabel: 'Extended Strategist',
         stageClass: 'extended-strategist',
         systemPrompt,
@@ -1377,12 +1377,68 @@ export async function callExtendedIntervention(
     const userPrompt = `Design a ${durationDays}-day substance protocol for: ${prompt}`;
 
     const result = await runCachedStage<any>({
-        stage: 'intervention',
+        stage: 'interventionExtended',
         stageLabel: 'Extended Chess Player',
         stageClass: 'extended-intervention',
         systemPrompt,
         userPrompt,
         maxTokens: 8192,
+    });
+
+    return result;
+}
+
+// ============================================
+// 10f. EXTENDED SHERLOCK — Phase-Level Narration
+// ============================================
+
+export async function callExtendedSherlock(
+    prompt: string,
+    durationDays: number,
+    effectRoster: any[],
+    phaseSpotlights: any[],
+    interventions: any[],
+    protocolPhases: any[],
+): Promise<any> {
+    const phaseSummary = JSON.stringify(
+        (protocolPhases.length > 0 ? protocolPhases : phaseSpotlights).map((p: any) => ({
+            name: p.name || p.phase,
+            startDay: p.startDay,
+            endDay: p.endDay,
+        })),
+    );
+    const effectSummary = JSON.stringify(
+        effectRoster.map((e: any) => ({
+            effect: e.effect,
+            polarity: e.polarity,
+        })),
+    );
+    const interventionSummary = JSON.stringify(
+        interventions.slice(0, 20).map((iv: any) => ({
+            key: iv.key,
+            day: iv.day,
+            dose: iv.dose,
+            phase: iv.phase,
+            frequency: iv.frequency,
+        })),
+    );
+
+    const systemPrompt = interpolatePrompt(PROMPTS.sherlockExtended, {
+        durationDays,
+        userGoal: prompt,
+        phaseSummary,
+        effectSummary,
+        interventionSummary,
+    });
+    const userPrompt = `Narrate the ${durationDays}-day protocol for: ${prompt}`;
+
+    const result = await runCachedStage<any>({
+        stage: 'sherlockExtended',
+        stageLabel: 'Extended Sherlock',
+        stageClass: 'extended-sherlock',
+        systemPrompt,
+        userPrompt,
+        maxTokens: 4096,
     });
 
     return result;

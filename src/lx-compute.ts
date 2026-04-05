@@ -16,7 +16,7 @@ import {
 } from './constants';
 import { SUBSTANCE_DB, getActiveSubstances, resolveSubstance } from './substances';
 import { smoothPhaseValues } from './curve-utils';
-import { substanceEffectAt, normalizedEffectAt } from './pharma-model';
+import { substanceEffectAt, normalizedEffectAt, computeToleranceMultiplier } from './pharma-model';
 import { reportRuntimeBug } from './runtime-error-banner';
 import { clamp } from './utils';
 
@@ -883,4 +883,133 @@ function rescaleSurvivors(surviving: any[], original: any[], curvesData: any[]):
             }
         }
     }
+}
+
+// ============================================
+// EXTENDED LX OVERLAY — Day-Level Computation
+// ============================================
+
+/**
+ * Compute day-level Lx overlay curves for extended (multi-day) timelines.
+ *
+ * For each effect in the roster, iterates over days 1..N and sums the
+ * pharmacodynamic contributions of all active substances on that day,
+ * applying tolerance decay for consecutive-day usage.
+ *
+ * Returns one overlay point array per effect in the roster, representing
+ * the predicted state with supplementation at each day.
+ */
+export function computeExtendedLxOverlay(
+    effectRoster: {
+        effect: string;
+        baseline: { day: number; value: number }[];
+        desired: { day: number; value: number }[];
+        polarity?: string;
+    }[],
+    interventions: {
+        key: string;
+        day: number;
+        dose?: string;
+        doseMultiplier?: number;
+        frequency?: 'daily' | 'alternate' | 'weekdays' | 'as-needed';
+        impacts?: Record<string, number>;
+        phase?: string;
+    }[],
+    durationDays: number,
+): { effect: string; overlay: { day: number; value: number }[] }[] {
+    return effectRoster.map((curve) => {
+        const effectName = (curve.effect || '').toLowerCase().trim();
+        const overlay: { day: number; value: number }[] = [];
+
+        // Build a baseline lookup for interpolation
+        const baselineByDay = new Map<number, number>();
+        for (const pt of curve.baseline) baselineByDay.set(pt.day, pt.value);
+
+        // Build a desired lookup for gap calculation
+        const desiredByDay = new Map<number, number>();
+        for (const pt of curve.desired) desiredByDay.set(pt.day, pt.value);
+
+        // Track consecutive days per substance for tolerance
+        const consecutiveDays = new Map<string, number>();
+
+        for (let day = 1; day <= durationDays; day++) {
+            const bl = baselineByDay.get(day) ?? interpolateDay(curve.baseline, day);
+            const ds = desiredByDay.get(day) ?? interpolateDay(curve.desired, day);
+            const gap = ds - bl;
+
+            // Sum substance contributions for this day
+            let totalEffect = 0;
+            const activeKeys = new Set<string>();
+
+            for (const iv of interventions) {
+                if (!isActiveOnDay(iv, day, durationDays)) continue;
+
+                // Match this intervention to the current effect curve
+                const impactValue = iv.impacts
+                    ? matchImpactToCurve(iv.impacts, effectName)
+                    : 0;
+                if (impactValue === 0) continue;
+
+                activeKeys.add(iv.key);
+
+                // Count consecutive days for tolerance
+                const prevConsec = consecutiveDays.get(iv.key) || 0;
+                const daysSinceStart = day - iv.day;
+                const consec = daysSinceStart >= 0 ? daysSinceStart : 0;
+                const toleranceMult = computeToleranceMultiplier(consec);
+
+                totalEffect += impactValue * (iv.doseMultiplier || 1.0) * toleranceMult;
+            }
+
+            // Scale the total effect to map onto the gap
+            // Normalized so that a total effect of ~1.0 covers LX_GAP_COVERAGE of the gap
+            const scaledEffect = gap !== 0 ? totalEffect * Math.abs(gap) * LX_GAP_COVERAGE : 0;
+            const overlayValue = clamp(bl + scaledEffect, 0, 100);
+
+            overlay.push({ day, value: overlayValue });
+
+            // Update consecutive day tracking
+            for (const [key, prev] of consecutiveDays) {
+                if (!activeKeys.has(key)) consecutiveDays.set(key, 0);
+            }
+            for (const key of activeKeys) {
+                consecutiveDays.set(key, (consecutiveDays.get(key) || 0) + 1);
+            }
+        }
+
+        return { effect: curve.effect, overlay };
+    });
+}
+
+/** Check if an intervention is active on a given day based on its start day and frequency. */
+function isActiveOnDay(
+    iv: { day: number; frequency?: string },
+    day: number,
+    _durationDays: number,
+): boolean {
+    if (day < iv.day) return false;
+    const freq = iv.frequency || 'daily';
+    if (freq === 'daily') return true;
+    if (freq === 'alternate') return (day - iv.day) % 2 === 0;
+    if (freq === 'weekdays') {
+        // Approximate: days 6,7,13,14,... are weekends (assuming day 1 = Monday)
+        const dayOfWeek = ((day - 1) % 7) + 1;
+        return dayOfWeek <= 5;
+    }
+    return true; // 'as-needed' treated as daily for overlay purposes
+}
+
+/** Linear interpolation for day-level curve values. */
+function interpolateDay(points: { day: number; value: number }[], targetDay: number): number {
+    if (points.length === 0) return 50;
+    if (points.length === 1) return points[0].value;
+    if (targetDay <= points[0].day) return points[0].value;
+    if (targetDay >= points[points.length - 1].day) return points[points.length - 1].value;
+    for (let i = 0; i < points.length - 1; i++) {
+        if (targetDay >= points[i].day && targetDay <= points[i + 1].day) {
+            const t = (targetDay - points[i].day) / (points[i + 1].day - points[i].day);
+            return points[i].value + t * (points[i + 1].value - points[i].value);
+        }
+    }
+    return points[points.length - 1].value;
 }

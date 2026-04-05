@@ -72,6 +72,30 @@ export function getChartLevelDesc(curve: any, val: number): string {
 }
 
 // ============================================
+// Extended Chart: Axis Setup (day-level labels via setXAxisFormat)
+// ============================================
+
+/**
+ * Configure the x-axis format for extended (multi-day) timelines.
+ * Sets the label format to "Day N" and adjusts density based on duration.
+ * Call resetXAxisFormat() to restore the default 24h format.
+ */
+export function renderExtendedAxes(durationDays: number): void {
+    setXAxisFormat({
+        format: (day) => `${day}`,
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: durationDays > 14 ? 8 : 9.5,
+        fontWeight: '400',
+        shouldLabel: (day) => {
+            if (durationDays <= 14) return true;
+            // For 15-28 days, label odd days + last day
+            return day % 2 === 1 || day === durationDays;
+        },
+        secondaryLabel: () => null,
+    });
+}
+
+// ============================================
 // Phase Chart: X-Axis
 // ============================================
 
