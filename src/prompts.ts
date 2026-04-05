@@ -76,13 +76,13 @@ Rules:
 USER GOAL: {{userGoal}}
 
 INSTRUCTIONS:
-1. Identify 4-6 pharmacodynamic effects relevant across the FULL {{durationDays}}-day timeline. These should cover ALL phases of the user's goal — different effects may be dominant at different times.
+1. Identify exactly 3-4 pharmacodynamic effects relevant across the FULL {{durationDays}}-day timeline. Keep it focused — fewer effects with clear phase assignments, not more. Different effects should be dominant at different times.
 2. For EACH effect, provide:
    - A baseline curve (population average without intervention, showing natural cyclical/daily patterns across {{durationDays}} days)
    - A desired curve (optimal target state with intervention)
    - Both curves have one datapoint per day (day 1 through day {{durationDays}})
 3. Define 2-4 protocol phases that partition the {{durationDays}}-day timeline. Each phase represents a distinct clinical focus period.
-4. For each phase, assign 2-3 SPOTLIGHT effects — the effects most clinically relevant during that phase. The chart will display these spotlight effects prominently during that phase and crossfade to the next phase's spotlights at boundaries.
+4. For each phase, assign 1-2 SPOTLIGHT effects — the effects most clinically relevant during that phase. The chart ONLY displays spotlight effects during that phase (all others are hidden), so keep it clean: 1 effect per phase is ideal, 2 maximum.
 
 Rules:
 1. Return ONLY valid JSON — no markdown, no code fences
@@ -108,7 +108,7 @@ Rules:
 7. Colors: distinct, visible on dark background (#0a0a0f). Use muted but vibrant tones like #60a5fa, #c084fc, #4ade80, #fb7185, #fbbf24, #38bdf8
 8. Effect names MUST be pharmacodynamic effects, not molecule names. Use 1-2 word labels.
 9. polarity: "higher_is_better" for effects the user wants to INCREASE, "higher_is_worse" for effects to REDUCE
-10. Phase spotlights: each phase MUST list 2-3 effect names from the roster. Spotlight effects should be DISTINCT per phase — avoid assigning the same effects to every phase. The chart displays ONLY the spotlight effects during that phase, so different phases should highlight DIFFERENT clinical concerns. An effect may appear in multiple phases if genuinely relevant, but at least 1 spotlight effect per phase should be unique to that phase.
+10. Phase spotlights: each phase MUST list 1-2 effect names from the roster (1 is preferred, 2 maximum). Spotlight effects MUST be DISTINCT per phase — each phase should highlight a DIFFERENT clinical concern. The chart ONLY displays the spotlight effects during that phase, so assigning the same effect to every phase defeats the purpose. An effect may appear in 2 phases if genuinely relevant, but never in all phases.
 11. Phase day ranges must cover the full timeline without gaps (startDay of phase N+1 = endDay of phase N + 1)
 12. Each phase needs a color for its visual band
 13. STRING SAFETY: Do NOT use double quotes inside string values. Use single quotes for inner quotes.

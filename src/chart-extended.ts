@@ -179,61 +179,61 @@ export function renderExtendedChart(opts: {
         }
     }
 
-    // ── 4. X-axis: day labels ──
+    // ── 4. X-axis: day labels (at TOP, just below phase bands) ──
     const axisY = config.padT + config.plotH;
-    // Bottom boundary line
+    const dayLabelY = phaseBandY + phaseBandH + 14; // just below phase bands, above plot area
+
+    // Bottom boundary line of plot area
     gAxes.appendChild(
         svgEl('line', {
             x1: String(config.padL),
             y1: String(axisY),
             x2: String(config.padL + config.plotW),
             y2: String(axisY),
-            stroke: isLight ? 'rgba(0,0,0,0.2)' : 'rgba(174,201,237,0.22)',
-            'stroke-width': '0.75',
+            stroke: isLight ? 'rgba(0,0,0,0.15)' : 'rgba(174,201,237,0.12)',
+            'stroke-width': '0.5',
         }),
     );
-    // Day labels
+    // Top boundary line (day labels sit on this)
+    gAxes.appendChild(
+        svgEl('line', {
+            x1: String(config.padL),
+            y1: String(config.padT),
+            x2: String(config.padL + config.plotW),
+            y2: String(config.padT),
+            stroke: isLight ? 'rgba(0,0,0,0.15)' : 'rgba(174,201,237,0.12)',
+            'stroke-width': '0.5',
+        }),
+    );
+    // Day labels at top
     const skipEvery = durationDays > 21 ? 2 : durationDays > 14 ? 2 : 1;
     for (let d = config.startUnit; d <= config.endUnit; d++) {
         if (skipEvery > 1 && d % skipEvery !== 1 && d !== config.endUnit) continue;
         const x = extendedChartX(d, config);
-        // Tick
+        // Tick mark (above plot area)
         gAxes.appendChild(
             svgEl('line', {
                 x1: String(x),
-                y1: String(axisY),
+                y1: String(config.padT - 4),
                 x2: String(x),
-                y2: String(axisY + 5),
-                stroke: isLight ? 'rgba(0,0,0,0.2)' : 'rgba(174,201,237,0.3)',
+                y2: String(config.padT),
+                stroke: isLight ? 'rgba(0,0,0,0.15)' : 'rgba(174,201,237,0.2)',
                 'stroke-width': '0.5',
             }),
         );
-        // Label
+        // Day number label
         gAxes.appendChild(
             svgEl('text', {
                 x: String(x),
-                y: String(axisY + 16),
-                fill: isLight ? 'rgba(0,0,0,0.55)' : 'rgba(174,201,237,0.7)',
+                y: String(dayLabelY),
+                fill: isLight ? 'rgba(0,0,0,0.45)' : 'rgba(174,201,237,0.55)',
                 'text-anchor': 'middle',
                 'font-family': "'IBM Plex Mono', monospace",
-                'font-size': durationDays > 14 ? '8' : '9',
+                'font-size': durationDays > 14 ? '7.5' : '8.5',
                 'font-weight': '400',
             }),
         ).textContent = `${d}`;
     }
-    // "Day" label centered below
-    gAxes.appendChild(
-        svgEl('text', {
-            x: String(config.padL + config.plotW / 2),
-            y: String(axisY + 30),
-            fill: isLight ? 'rgba(0,0,0,0.35)' : 'rgba(174,201,237,0.45)',
-            'text-anchor': 'middle',
-            'font-family': "'IBM Plex Mono', monospace",
-            'font-size': '9',
-            'font-weight': '500',
-            'letter-spacing': '0.08em',
-        }),
-    ).textContent = 'DAY';
 
     // ── 5. Y-axis (0-100 effect scale) ──
     const ySteps = [0, 25, 50, 75, 100];
@@ -445,7 +445,7 @@ export function renderExtendedChart(opts: {
 
     // ── 7. Substance calendar bars (if interventions provided) ──
     if (interventions && interventions.length > 0) {
-        const barAreaTop = axisY + 38;
+        const barAreaTop = axisY + 8;
         const barH = 10;
         const barGap = 3;
 
@@ -494,7 +494,7 @@ export function renderExtendedChart(opts: {
                             width: String(Math.max(2, x2 - x1)),
                             height: String(barH),
                             fill: color,
-                            opacity: isLight ? '0.25' : '0.3',
+                            opacity: isLight ? '0.4' : '0.55',
                             rx: '2',
                             'pointer-events': 'none',
                         }),
