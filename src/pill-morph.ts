@@ -418,17 +418,22 @@ export function tickPillMorph(
     for (const { geo, el, doseMorph } of plan.added) {
         const pillEase = efx ? efx(geo.x) : lxEase;
         if (pillEase < 0.3) {
-            el.setAttribute('opacity', '0');
+            (el as SVGElement).style.setProperty('opacity', '0', 'important');
             if (doseMorph) {
                 const label = el.querySelector('.timeline-bar-label') as SVGTextElement | null;
                 if (label) label.textContent = `${doseMorph.prefix}0${doseMorph.unit}`;
             }
         } else {
+            // Remove revision-prehidden so the pill becomes visible
+            if (el.classList.contains('revision-prehidden')) {
+                el.classList.remove('revision-prehidden');
+                el.removeAttribute('visibility');
+            }
             const fadeIn = Math.min(1, (pillEase - 0.3) / 0.55);
             const scale = 0.85 + 0.15 * fadeIn;
             const cx = geo.x + geo.width / 2;
             const cy = geo.y + TIMELINE_ZONE.laneH / 2;
-            el.setAttribute('opacity', fadeIn.toFixed(3));
+            (el as SVGElement).style.setProperty('opacity', fadeIn.toFixed(3), 'important');
             el.setAttribute(
                 'transform',
                 `translate(${cx.toFixed(1)}, ${cy.toFixed(1)}) scale(${scale.toFixed(3)}) translate(${(-cx).toFixed(1)}, ${(-cy).toFixed(1)})`,
