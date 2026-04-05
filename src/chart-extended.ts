@@ -2,10 +2,11 @@
  * Chart Extended — Day-level chart rendering for extended timelines (7-28 days).
  * Renders into the existing #phase-chart-svg at the same dimensions.
  * Exports: renderExtendedChart, clearExtendedChart
- * Depends on: constants, utils, types
+ * Depends on: constants, utils, types, substances
  */
 import { PHASE_CHART, getExtendedChartConfig } from './constants';
 import { svgEl, extendedChartX, extendedChartY, isLightMode } from './utils';
+import { resolveSubstance } from './substances';
 import type {
     ExtendedCurveData,
     ExtendedChartConfig,
@@ -265,10 +266,8 @@ export function renderExtendedChart(opts: {
         ).textContent = String(val);
     }
 
-    // ── 6. Curves — phase-scoped rendering ──
-    // Each effect only renders at full opacity within the phase day-ranges where
-    // it's spotlighted. Outside those ranges it appears as a faint ghost (0.08).
-    // SVG <clipPath> elements restrict the bright curves to their spotlight zones.
+    // ── 6. Curves — clean phase-scoped rendering ──
+    // Only desired curves + AUC fill in spotlight zones. No baselines, no ghosts.
 
     // Ensure a <defs> element exists for clip-paths
     let defs = svg.querySelector('defs');
@@ -286,168 +285,126 @@ export function renderExtendedChart(opts: {
             .filter(ps => ps.effects.includes(effectName))
             .map(ps => ({ start: ps.startDay, end: ps.endDay }));
 
-        const isSpotlighted = spotlightRanges.length > 0;
+        if (spotlightRanges.length === 0) continue; // not spotlighted — don't render at all
 
-        // Build paths for this curve
-        const baselinePath = buildSmoothPath(curve.baseline, config);
+        // Build paths
         const desiredPath = buildSmoothPath(curve.desired, config);
-        if (!baselinePath && !desiredPath) continue;
+        if (!desiredPath) continue;
 
-        if (isSpotlighted) {
-            // Create a clip-path covering only the spotlight day ranges
-            const clipId = `ext-spotlight-clip-${ei}`;
-            // Remove any stale clip with same ID
-            const oldClip = defs.querySelector(`#${clipId}`);
-            if (oldClip) oldClip.remove();
+        // Create clip-path covering only the spotlight day ranges
+        const clipId = `ext-spotlight-clip-${ei}`;
+        const oldClip = defs.querySelector(`#${clipId}`);
+        if (oldClip) oldClip.remove();
 
-            const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
-            clipPath.id = clipId;
-            for (const range of spotlightRanges) {
-                const x1 = extendedChartX(range.start - 0.5, config);
-                const x2 = extendedChartX(range.end + 0.5, config);
-                clipPath.appendChild(
-                    svgEl('rect', {
-                        x: String(Math.max(x1, config.padL)),
-                        y: '0',
-                        width: String(Math.min(x2, config.padL + config.plotW) - Math.max(x1, config.padL)),
-                        height: String(config.padT + config.plotH + 60),
-                    }),
-                );
-            }
-            defs.appendChild(clipPath);
+        const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
+        clipPath.id = clipId;
+        for (const range of spotlightRanges) {
+            const x1 = extendedChartX(range.start - 0.5, config);
+            const x2 = extendedChartX(range.end + 0.5, config);
+            clipPath.appendChild(
+                svgEl('rect', {
+                    x: String(Math.max(x1, config.padL)),
+                    y: '0',
+                    width: String(Math.min(x2, config.padL + config.plotW) - Math.max(x1, config.padL)),
+                    height: String(config.padT + config.plotH + 60),
+                }),
+            );
+        }
+        defs.appendChild(clipPath);
 
-            // Ghost layer — full curve at very low opacity (visible everywhere)
-            if (baselinePath) {
-                gCurves.appendChild(
-                    svgEl('path', {
-                        d: baselinePath,
-                        fill: 'none',
-                        stroke: curve.color,
-                        'stroke-width': '0.75',
-                        'stroke-dasharray': '4 3',
-                        opacity: '0.08',
-                        'pointer-events': 'none',
-                    }),
-                );
-            }
-            if (desiredPath) {
-                gCurves.appendChild(
-                    svgEl('path', {
-                        d: desiredPath,
-                        fill: 'none',
-                        stroke: curve.color,
-                        'stroke-width': '0.75',
-                        opacity: '0.08',
-                        'pointer-events': 'none',
-                    }),
-                );
-            }
+        // AUC fill between baseline and desired — clipped to spotlight ranges
+        if (curve.baseline.length > 0 && curve.desired.length > 0) {
+            const fillPath =
+                buildSmoothPath(curve.desired, config) +
+                ' L' + extendedChartX(curve.baseline[curve.baseline.length - 1].day, config).toFixed(1) +
+                ',' + extendedChartY(curve.baseline[curve.baseline.length - 1].value, config).toFixed(1) +
+                ' ' + buildSmoothPath([...curve.baseline].reverse(), config).replace(/^M/, 'L') +
+                ' Z';
+            gCurves.appendChild(
+                svgEl('path', {
+                    d: fillPath,
+                    fill: curve.color,
+                    opacity: '0.10',
+                    'clip-path': `url(#${clipId})`,
+                    'pointer-events': 'none',
+                }),
+            );
+        }
 
-            // Spotlight layer — clipped to spotlight day ranges, full opacity
-            if (baselinePath) {
-                gCurves.appendChild(
-                    svgEl('path', {
-                        d: baselinePath,
-                        fill: 'none',
-                        stroke: curve.color,
-                        'stroke-width': '1.5',
-                        'stroke-dasharray': '4 3',
-                        opacity: '1',
-                        'clip-path': `url(#${clipId})`,
-                        'pointer-events': 'none',
-                    }),
-                );
-            }
-            if (desiredPath) {
-                gCurves.appendChild(
-                    svgEl('path', {
-                        d: desiredPath,
-                        fill: 'none',
-                        stroke: curve.color,
-                        'stroke-width': '2.5',
-                        opacity: '1',
-                        'clip-path': `url(#${clipId})`,
-                        'pointer-events': 'none',
-                    }),
-                );
-            }
+        // Glow layer — thicker, blurred behind the main curve for depth
+        gCurves.appendChild(
+            svgEl('path', {
+                d: desiredPath,
+                fill: 'none',
+                stroke: curve.color,
+                'stroke-width': '6',
+                opacity: '0.12',
+                'clip-path': `url(#${clipId})`,
+                'pointer-events': 'none',
+            }),
+        );
 
-            // AUC fill between baseline and desired — clipped to spotlight ranges
-            if (curve.baseline.length > 0 && curve.desired.length > 0) {
-                const fillPath =
-                    buildSmoothPath(curve.desired, config) +
-                    ' L' + extendedChartX(curve.baseline[curve.baseline.length - 1].day, config).toFixed(1) +
-                    ',' + extendedChartY(curve.baseline[curve.baseline.length - 1].value, config).toFixed(1) +
-                    ' ' + buildSmoothPath([...curve.baseline].reverse(), config).replace(/^M/, 'L') +
-                    ' Z';
-                gCurves.appendChild(
-                    svgEl('path', {
-                        d: fillPath,
-                        fill: curve.color,
-                        opacity: '0.06',
-                        'clip-path': `url(#${clipId})`,
-                        'pointer-events': 'none',
-                    }),
-                );
-            }
+        // Main desired curve — solid, thick, clipped to spotlight ranges
+        gCurves.appendChild(
+            svgEl('path', {
+                d: desiredPath,
+                fill: 'none',
+                stroke: curve.color,
+                'stroke-width': '3',
+                opacity: '1',
+                'clip-path': `url(#${clipId})`,
+                'pointer-events': 'none',
+            }),
+        );
 
-            // Effect label at the right edge of its LAST spotlight range
-            const lastRange = spotlightRanges[spotlightRanges.length - 1];
-            const labelDay = lastRange.end;
-            const labelPt = curve.desired.find(p => p.day === labelDay)
-                || curve.desired[curve.desired.length - 1];
-            if (labelPt) {
-                const labelX = Math.min(
-                    extendedChartX(labelDay + 0.8, config),
-                    config.padL + config.plotW + 8,
-                );
-                gCurves.appendChild(
-                    svgEl('text', {
-                        x: String(labelX),
-                        y: String(extendedChartY(labelPt.value, config) + 3),
-                        fill: curve.color,
-                        'font-family': "'Space Grotesk', sans-serif",
-                        'font-size': '10',
-                        'font-weight': '600',
-                        opacity: '0.8',
-                    }),
-                ).textContent = curve.effect;
-            }
-        } else {
-            // Not spotlighted in any phase — render as faint ghost only
-            if (baselinePath) {
-                gCurves.appendChild(
-                    svgEl('path', {
-                        d: baselinePath,
-                        fill: 'none',
-                        stroke: curve.color,
-                        'stroke-width': '0.75',
-                        'stroke-dasharray': '4 3',
-                        opacity: '0.08',
-                        'pointer-events': 'none',
-                    }),
-                );
-            }
-            if (desiredPath) {
-                gCurves.appendChild(
-                    svgEl('path', {
-                        d: desiredPath,
-                        fill: 'none',
-                        stroke: curve.color,
-                        'stroke-width': '0.75',
-                        opacity: '0.08',
-                        'pointer-events': 'none',
-                    }),
-                );
-            }
+        // Effect label — positioned at the midpoint of the first spotlight range
+        const firstRange = spotlightRanges[0];
+        const midDay = Math.round((firstRange.start + firstRange.end) / 2);
+        const labelPt = curve.desired.reduce((best, p) =>
+            Math.abs(p.day - midDay) < Math.abs(best.day - midDay) ? p : best,
+        );
+        if (labelPt) {
+            // Find peak value in the spotlight range for better positioning
+            const peakPt = curve.desired
+                .filter(p => p.day >= firstRange.start && p.day <= firstRange.end)
+                .reduce((best, p) => (p.value > best.value ? p : best), labelPt);
+
+            const labelX = extendedChartX(midDay, config);
+            const labelYPos = extendedChartY(peakPt.value, config) - 10;
+            gCurves.appendChild(
+                svgEl('text', {
+                    x: String(labelX),
+                    y: String(Math.max(labelYPos, config.padT + 8)),
+                    fill: curve.color,
+                    'text-anchor': 'middle',
+                    'font-family': "'Space Grotesk', sans-serif",
+                    'font-size': '11',
+                    'font-weight': '600',
+                    opacity: '0.85',
+                }),
+            ).textContent = curve.effect;
         }
     }
 
-    // ── 7. Substance calendar bars (if interventions provided) ──
+    // ── 7. Substance timeline (24h-style rich pills) ──
     if (interventions && interventions.length > 0) {
-        const barAreaTop = axisY + 8;
-        const barH = 10;
-        const barGap = 3;
+        const laneH = 16;
+        const laneGap = 2;
+        const pillRx = 3;
+        const barAreaTop = axisY + 6;
+
+        // Separator line between chart and substance timeline
+        gSubstanceBars.appendChild(
+            svgEl('line', {
+                x1: String(config.padL),
+                y1: String(axisY + 1),
+                x2: String(config.padL + config.plotW),
+                y2: String(axisY + 1),
+                stroke: isLight ? 'rgba(80,110,150,0.3)' : 'rgba(146,186,255,0.2)',
+                'stroke-width': '0.75',
+                'pointer-events': 'none',
+            }),
+        );
 
         // Group interventions by substance key
         const substanceMap = new Map<string, ExtendedInterventionEntry[]>();
@@ -457,9 +414,31 @@ export function renderExtendedChart(opts: {
             substanceMap.set(iv.key, list);
         }
 
+        const laneStep = laneH + laneGap;
         let rowIdx = 0;
         for (const [key, entries] of substanceMap) {
-            const y = barAreaTop + rowIdx * (barH + barGap);
+            const y = barAreaTop + rowIdx * laneStep;
+
+            // Resolve substance from DB for rich info
+            const sub = resolveSubstance(key, {});
+            const subName = sub ? sub.name : key.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            const subColor = sub ? (sub.color || '#60a5fa') : '#60a5fa';
+            const regStatus = sub ? ((sub as any).regulatoryStatus || '').toLowerCase() : '';
+            const dose = entries[0]?.dose || (sub ? (sub as any).standardDose : '') || '';
+
+            // Lane stripe (alternating odd rows)
+            if (rowIdx % 2 === 1) {
+                gSubstanceBars.appendChild(
+                    svgEl('rect', {
+                        x: String(config.padL),
+                        y: String(y),
+                        width: String(config.plotW),
+                        height: String(laneH),
+                        fill: isLight ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.02)',
+                        'pointer-events': 'none',
+                    }),
+                );
+            }
 
             // Determine active days for this substance
             const activeDays = new Set<number>();
@@ -473,13 +452,14 @@ export function renderExtendedChart(opts: {
                 }
             }
 
-            // Find contiguous runs for bar rendering
+            // Find contiguous runs and render pill bars
             const sortedDays = [...activeDays].sort((a, b) => a - b);
+            if (sortedDays.length === 0) { rowIdx++; continue; }
             let runStart = sortedDays[0];
             let runEnd = sortedDays[0];
-            const color = entries[0].impacts
-                ? (effectRoster.find(e => Object.keys(entries[0].impacts!).includes(e.effect))?.color || '#60a5fa')
-                : '#60a5fa';
+            let firstBarX1 = 0;
+            let firstBarW = 0;
+            let isFirstRun = true;
 
             for (let i = 1; i <= sortedDays.length; i++) {
                 if (i < sortedDays.length && sortedDays[i] === runEnd + 1) {
@@ -487,18 +467,32 @@ export function renderExtendedChart(opts: {
                 } else {
                     const x1 = extendedChartX(runStart - 0.4, config);
                     const x2 = extendedChartX(runEnd + 0.4, config);
+                    const barW = Math.max(4, x2 - x1);
+
+                    if (isFirstRun) {
+                        firstBarX1 = x1;
+                        firstBarW = barW;
+                        isFirstRun = false;
+                    }
+
+                    // Pill bar: fill + stroke layering (matching 24h style)
                     gSubstanceBars.appendChild(
                         svgEl('rect', {
                             x: String(x1),
                             y: String(y),
-                            width: String(Math.max(2, x2 - x1)),
-                            height: String(barH),
-                            fill: color,
-                            opacity: isLight ? '0.4' : '0.55',
-                            rx: '2',
+                            width: String(barW),
+                            height: String(laneH),
+                            rx: String(pillRx),
+                            ry: String(pillRx),
+                            fill: subColor,
+                            'fill-opacity': '0.22',
+                            stroke: subColor,
+                            'stroke-opacity': '0.45',
+                            'stroke-width': '0.75',
                             'pointer-events': 'none',
                         }),
                     );
+
                     if (i < sortedDays.length) {
                         runStart = sortedDays[i];
                         runEnd = sortedDays[i];
@@ -506,19 +500,68 @@ export function renderExtendedChart(opts: {
                 }
             }
 
-            // Substance label
-            const displayName = key.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            // Clip-path for label (extends to cover the full first bar + overflow)
+            const clipId = `ext-tl-clip-${rowIdx}`;
+            const oldClip = defs.querySelector(`#${clipId}`);
+            if (oldClip) oldClip.remove();
+            const clip = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
+            clip.id = clipId;
+            const labelOverflow = Math.max(0, config.padL + config.plotW - (firstBarX1 + firstBarW));
+            clip.appendChild(
+                svgEl('rect', {
+                    x: String(firstBarX1),
+                    y: String(y),
+                    width: String(firstBarW + labelOverflow),
+                    height: String(laneH),
+                    rx: String(pillRx),
+                    ry: String(pillRx),
+                }),
+            );
+            defs.appendChild(clip);
+
+            // Rich label inside the first pill bar
+            const contentG = svgEl('g', { 'clip-path': `url(#${clipId})` });
+            const label = svgEl('text', {
+                x: String(firstBarX1 + 5),
+                y: String(y + laneH / 2 + 3),
+                fill: isLight ? 'rgba(20,30,50,0.95)' : 'rgba(255,255,255,0.92)',
+                'font-family': "'IBM Plex Mono', monospace",
+                'font-size': '9',
+                'font-weight': '500',
+                'letter-spacing': '0.02em',
+            });
+
+            const displayText = dose ? `${subName} ${dose}` : subName;
+            label.textContent = displayText;
+
+            // Rx badge as inline tspan
+            if (regStatus === 'rx' || regStatus === 'controlled') {
+                const rxSpan = svgEl('tspan', {
+                    fill: '#e11d48',
+                    'font-size': '7',
+                    'font-weight': '700',
+                    dy: '-0.5',
+                });
+                rxSpan.textContent = ' Rx';
+                label.appendChild(rxSpan);
+            }
+
+            contentG.appendChild(label);
+            gSubstanceBars.appendChild(contentG);
+
+            // Substance name label on the left (outside chart area)
+            const shortName = subName.length > 16 ? subName.slice(0, 14) + '..' : subName;
             gSubstanceBars.appendChild(
                 svgEl('text', {
                     x: String(config.padL - 6),
-                    y: String(y + barH - 1),
+                    y: String(y + laneH / 2 + 3),
                     fill: isLight ? 'rgba(0,0,0,0.5)' : 'rgba(200,218,245,0.6)',
                     'text-anchor': 'end',
                     'font-family': "'IBM Plex Mono', monospace",
                     'font-size': '8',
                     'font-weight': '500',
                 }),
-            ).textContent = displayName.length > 18 ? displayName.slice(0, 16) + '..' : displayName;
+            ).textContent = shortName;
 
             rowIdx++;
         }
@@ -530,5 +573,10 @@ export function clearExtendedChart(svg: SVGSVGElement): void {
     for (const id of Object.values(GROUP_IDS)) {
         const g = svg.getElementById(id);
         if (g) g.remove();
+    }
+    // Clean up clip-paths from defs
+    const defs = svg.querySelector('defs');
+    if (defs) {
+        defs.querySelectorAll('[id^="ext-"]').forEach(el => el.remove());
     }
 }
