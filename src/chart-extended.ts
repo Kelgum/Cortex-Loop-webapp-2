@@ -533,25 +533,30 @@ export function renderExtendedChart(opts: {
                     prevDoseMg = info.doseMg;
                 }
 
-                // Build closed envelope path: top edge forward, bottom edge back
+                // Build closed envelope path: vertical walls at start/end, top edge varies
                 if (topPoints.length === 0) continue;
+                const firstTopY = topPoints[0].y;
+                const lastTopY = topPoints[topPoints.length - 1].y;
+
+                // Start at bottom-left, vertical wall up to first dose height
                 let fillD = `M${x1.toFixed(1)},${laneBottom.toFixed(1)}`;
-                // Up to first top point
-                fillD += ` L${topPoints[0].x.toFixed(1)},${topPoints[0].y.toFixed(1)}`;
-                // Along top edge
-                for (let i = 1; i < topPoints.length; i++) {
-                    fillD += ` L${topPoints[i].x.toFixed(1)},${topPoints[i].y.toFixed(1)}`;
+                fillD += ` L${x1.toFixed(1)},${firstTopY.toFixed(1)}`;
+                // Along top edge through all points
+                for (const pt of topPoints) {
+                    fillD += ` L${pt.x.toFixed(1)},${pt.y.toFixed(1)}`;
                 }
-                // Down to bottom right, back along bottom, close
-                fillD += ` L${x2.toFixed(1)},${topPoints[topPoints.length - 1].y.toFixed(1)}`;
+                // Vertical wall down at the end, back along bottom, close
+                fillD += ` L${x2.toFixed(1)},${lastTopY.toFixed(1)}`;
                 fillD += ` L${x2.toFixed(1)},${laneBottom.toFixed(1)} Z`;
 
-                // Top-edge-only open path (for stroke)
-                let strokeD = `M${topPoints[0].x.toFixed(1)},${topPoints[0].y.toFixed(1)}`;
-                for (let i = 1; i < topPoints.length; i++) {
-                    strokeD += ` L${topPoints[i].x.toFixed(1)},${topPoints[i].y.toFixed(1)}`;
+                // Top-edge-only open path (for stroke) — includes vertical walls
+                let strokeD = `M${x1.toFixed(1)},${laneBottom.toFixed(1)}`;
+                strokeD += ` L${x1.toFixed(1)},${firstTopY.toFixed(1)}`;
+                for (const pt of topPoints) {
+                    strokeD += ` L${pt.x.toFixed(1)},${pt.y.toFixed(1)}`;
                 }
-                strokeD += ` L${x2.toFixed(1)},${topPoints[topPoints.length - 1].y.toFixed(1)}`;
+                strokeD += ` L${x2.toFixed(1)},${lastTopY.toFixed(1)}`;
+                strokeD += ` L${x2.toFixed(1)},${laneBottom.toFixed(1)}`;
 
                 // Render filled envelope
                 gSubstanceBars.appendChild(
