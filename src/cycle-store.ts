@@ -14,6 +14,7 @@
 
 import { settingsStore } from './settings-store';
 import type { SessionCacheBundle, CacheEntryEnvelope } from './llm-cache';
+import type { TimeHorizon } from './types';
 
 export { SessionCacheBundle, CacheEntryEnvelope };
 
@@ -33,6 +34,7 @@ export interface SavedCycleIndexEntry {
     iconSvg?: string | null;
     recommendedDevices?: string[];
     substanceClasses?: string[];
+    timeHorizon?: TimeHorizon;
 }
 
 export interface SavedCycleRecord extends SavedCycleIndexEntry {

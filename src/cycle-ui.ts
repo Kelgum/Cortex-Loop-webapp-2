@@ -49,7 +49,8 @@ function updateSaveButtonVisibility(): void {
     if (!_saveBtn) return;
     const isLiveRun = !PhaseState.loadedCycleId;
     const hasComplete = LLMCache.hasCompleteFlow();
-    const cycleActuallyRan = PhaseState.maxPhaseReached >= 5;
+    const isExtended = PhaseState.timeHorizon && PhaseState.timeHorizon.mode !== 'daily';
+    const cycleActuallyRan = PhaseState.maxPhaseReached >= 5 || !!isExtended;
     const alreadySaved = _saveBtn.classList.contains('saved');
     if (isLiveRun && hasComplete && cycleActuallyRan && !alreadySaved) {
         _saveBtn.style.display = '';
@@ -78,7 +79,10 @@ async function handleSave(): Promise<void> {
         bioRecPayload && Array.isArray(bioRecPayload.recommended) ? bioRecPayload.recommended : [];
 
     // Extract unique substance classes from the intervention protocol
-    const ivPayload = bundle.stages?.['intervention-model']?.payload;
+    // Fallback to extended intervention stage if daily one is missing
+    const ivPayload =
+        bundle.stages?.['intervention-model']?.payload ||
+        bundle.stages?.['extended-intervention']?.payload;
     const ivList: any[] = ivPayload?.interventions || [];
     const substanceClasses = [
         ...new Set(
@@ -105,6 +109,7 @@ async function handleSave(): Promise<void> {
         iconSvg,
         recommendedDevices,
         substanceClasses,
+        timeHorizon: PhaseState.timeHorizon || undefined,
         bundle,
     };
 
@@ -339,6 +344,13 @@ async function handleLoadCycle(id: string): Promise<void> {
         setLoadedCyclePrompt(entry.prompt, entry.rxMode);
         LLMCache.loadBundle(bundle);
 
+        // Persist timeHorizon so extended cycles route correctly on reload
+        if (entry.timeHorizon) {
+            sessionSettingsStore.setJson('cortex_loaded_time_horizon', entry.timeHorizon);
+        } else {
+            sessionSettingsStore.remove('cortex_loaded_time_horizon');
+        }
+
         // Store prompt for auto-submit after reload (sessionStorage for immediate,
         // localStorage via setLoadedCyclePrompt for subsequent refreshes)
         const payload = {
@@ -383,6 +395,12 @@ function applyLoadedCycleState(): void {
     }
 
     PhaseState.loadedCycleId = loadedId;
+
+    // Restore timeHorizon for extended cycles so pipeline routes correctly
+    const savedHorizon = sessionSettingsStore.getJson<any>('cortex_loaded_time_horizon', null);
+    if (savedHorizon && savedHorizon.mode && savedHorizon.mode !== 'daily') {
+        PhaseState.timeHorizon = savedHorizon;
+    }
 
     const form = document.getElementById('prompt-form');
     const input = document.getElementById('prompt-input') as HTMLInputElement | null;
