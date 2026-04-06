@@ -151,18 +151,25 @@ export function renderExtendedChart(opts: {
         }
     }
 
-    // ── 3. Protocol phase bands (above the chart, in the header area) ──
+    // ── 3. Protocol phase bands with effect swimlanes ──
     const phases = protocolPhases || phaseSpotlights;
-    const phaseBandY = 4;
-    const phaseBandH = 14;
+    const phaseBandY = 2;
+    const phaseBandH = 12;
+    const subLaneH = 9;
+    const subLaneGap = 1;
+
     for (const phase of phases) {
         const x1 = extendedChartX(phase.startDay - 0.5, config);
         const x2 = extendedChartX(phase.endDay + 0.5, config);
-        const w = Math.max(0, Math.min(x2, config.padL + config.plotW) - Math.max(x1, config.padL));
+        const phaseXL = Math.max(x1, config.padL);
+        const phaseXR = Math.min(x2, config.padL + config.plotW);
+        const w = Math.max(0, phaseXR - phaseXL);
         const color = phase.color || '#60a5fa';
+
+        // Phase name band
         gPhaseBands.appendChild(
             svgEl('rect', {
-                x: String(Math.max(x1, config.padL)),
+                x: String(phaseXL),
                 y: String(phaseBandY),
                 width: String(w),
                 height: String(phaseBandH),
@@ -172,22 +179,58 @@ export function renderExtendedChart(opts: {
                 'pointer-events': 'none',
             }),
         );
-        // Phase label centered
-        const cx = Math.max(x1, config.padL) + w / 2;
+        const cx = phaseXL + w / 2;
         if (w > 30) {
             gPhaseBands.appendChild(
                 svgEl('text', {
                     x: String(cx),
-                    y: String(phaseBandY + 10),
+                    y: String(phaseBandY + 9),
                     fill: isLight ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.7)',
                     'text-anchor': 'middle',
                     'font-family': "'IBM Plex Mono', monospace",
-                    'font-size': '8',
+                    'font-size': '7',
                     'font-weight': '600',
                     'letter-spacing': '0.06em',
-                    'text-transform': 'uppercase',
                 }),
             ).textContent = ('name' in phase ? (phase as ProtocolPhase).name : phase.phase).toUpperCase();
+        }
+
+        // Effect sub-lanes below the phase name band
+        const spotEffects = 'effects' in phase ? (phase as PhaseSpotlight).effects : [];
+        for (let si = 0; si < spotEffects.length; si++) {
+            const effName = spotEffects[si];
+            const effCurve = effectRoster.find(c => c.effect === effName);
+            const effColor = effCurve?.color || color;
+            const subY = phaseBandY + phaseBandH + si * (subLaneH + subLaneGap);
+
+            // Sub-lane background tinted with effect color
+            gPhaseBands.appendChild(
+                svgEl('rect', {
+                    x: String(phaseXL),
+                    y: String(subY),
+                    width: String(w),
+                    height: String(subLaneH),
+                    fill: effColor,
+                    opacity: isLight ? '0.08' : '0.10',
+                    rx: '2',
+                    'pointer-events': 'none',
+                }),
+            );
+
+            // Effect name label
+            if (w > 40) {
+                gPhaseBands.appendChild(
+                    svgEl('text', {
+                        x: String(phaseXL + 4),
+                        y: String(subY + 7),
+                        fill: effColor,
+                        'font-family': "'IBM Plex Mono', monospace",
+                        'font-size': '6.5',
+                        'font-weight': '500',
+                        opacity: '0.8',
+                    }),
+                ).textContent = effName;
+            }
         }
     }
 
@@ -277,8 +320,10 @@ export function renderExtendedChart(opts: {
         ).textContent = String(val);
     }
 
-    // ── 6. Curves — clean phase-scoped rendering ──
-    // Only desired curves + AUC fill in spotlight zones. No baselines, no ghosts.
+    // ── 6. Curves — full-span with emphasis modulation ──
+    // Both curves always visible across all 28 days.
+    // Spotlight phases get: full opacity, thick stroke, glow, AUC fill.
+    // Non-spotlight phases get: reduced opacity, thinner stroke, no fill.
 
     // Ensure a <defs> element exists for clip-paths
     let defs = svg.querySelector('defs');
@@ -291,103 +336,105 @@ export function renderExtendedChart(opts: {
         const curve = effectRoster[ei];
         const effectName = curve.effect;
 
-        // Find which phases spotlight this effect
+        const desiredPath = buildSmoothPath(curve.desired, config);
+        if (!desiredPath) continue;
+
+        // Find which phases spotlight this effect (for emphasis)
         const spotlightRanges = phaseSpotlights
             .filter(ps => ps.effects.includes(effectName))
             .map(ps => ({ start: ps.startDay, end: ps.endDay }));
 
-        if (spotlightRanges.length === 0) continue; // not spotlighted — don't render at all
-
-        // Build paths
-        const desiredPath = buildSmoothPath(curve.desired, config);
-        if (!desiredPath) continue;
-
-        // Create clip-path covering only the spotlight day ranges
+        // Create clip-path for spotlight emphasis zones
         const clipId = `ext-spotlight-clip-${ei}`;
         const oldClip = defs.querySelector(`#${clipId}`);
         if (oldClip) oldClip.remove();
 
-        const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
-        clipPath.id = clipId;
-        for (const range of spotlightRanges) {
-            const x1 = extendedChartX(range.start - 0.5, config);
-            const x2 = extendedChartX(range.end + 0.5, config);
-            clipPath.appendChild(
-                svgEl('rect', {
-                    x: String(Math.max(x1, config.padL)),
-                    y: '0',
-                    width: String(Math.min(x2, config.padL + config.plotW) - Math.max(x1, config.padL)),
-                    height: String(config.padT + config.plotH + 60),
-                }),
-            );
+        if (spotlightRanges.length > 0) {
+            const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
+            clipPath.id = clipId;
+            for (const range of spotlightRanges) {
+                const rx1 = extendedChartX(range.start - 0.5, config);
+                const rx2 = extendedChartX(range.end + 0.5, config);
+                clipPath.appendChild(
+                    svgEl('rect', {
+                        x: String(Math.max(rx1, config.padL)),
+                        y: '0',
+                        width: String(Math.min(rx2, config.padL + config.plotW) - Math.max(rx1, config.padL)),
+                        height: String(config.padT + config.plotH + 60),
+                    }),
+                );
+            }
+            defs.appendChild(clipPath);
         }
-        defs.appendChild(clipPath);
 
-        // AUC fill between baseline and desired — clipped to spotlight ranges
-        if (curve.baseline.length > 0 && curve.desired.length > 0) {
-            const fillPath =
-                buildSmoothPath(curve.desired, config) +
-                ' L' + extendedChartX(curve.baseline[curve.baseline.length - 1].day, config).toFixed(1) +
-                ',' + extendedChartY(curve.baseline[curve.baseline.length - 1].value, config).toFixed(1) +
-                ' ' + buildSmoothPath([...curve.baseline].reverse(), config).replace(/^M/, 'L') +
-                ' Z';
+        // ── Base layer: full 28-day curve at reduced emphasis ──
+        gCurves.appendChild(
+            svgEl('path', {
+                d: desiredPath,
+                fill: 'none',
+                stroke: curve.color,
+                'stroke-width': '1.5',
+                opacity: '0.3',
+                'pointer-events': 'none',
+            }),
+        );
+
+        // ── Emphasis layer: clipped to spotlight ranges ──
+        if (spotlightRanges.length > 0) {
+            // AUC fill between baseline and desired in spotlight zones
+            if (curve.baseline.length > 0 && curve.desired.length > 0) {
+                const fillPath =
+                    buildSmoothPath(curve.desired, config) +
+                    ' L' + extendedChartX(curve.baseline[curve.baseline.length - 1].day, config).toFixed(1) +
+                    ',' + extendedChartY(curve.baseline[curve.baseline.length - 1].value, config).toFixed(1) +
+                    ' ' + buildSmoothPath([...curve.baseline].reverse(), config).replace(/^M/, 'L') +
+                    ' Z';
+                gCurves.appendChild(
+                    svgEl('path', {
+                        d: fillPath,
+                        fill: curve.color,
+                        opacity: '0.10',
+                        'clip-path': `url(#${clipId})`,
+                        'pointer-events': 'none',
+                    }),
+                );
+            }
+
+            // Glow layer
             gCurves.appendChild(
                 svgEl('path', {
-                    d: fillPath,
-                    fill: curve.color,
-                    opacity: '0.10',
+                    d: desiredPath,
+                    fill: 'none',
+                    stroke: curve.color,
+                    'stroke-width': '6',
+                    opacity: '0.12',
+                    'clip-path': `url(#${clipId})`,
+                    'pointer-events': 'none',
+                }),
+            );
+
+            // Thick emphasized curve
+            gCurves.appendChild(
+                svgEl('path', {
+                    d: desiredPath,
+                    fill: 'none',
+                    stroke: curve.color,
+                    'stroke-width': '3',
+                    opacity: '1',
                     'clip-path': `url(#${clipId})`,
                     'pointer-events': 'none',
                 }),
             );
         }
 
-        // Glow layer — thicker, blurred behind the main curve for depth
-        gCurves.appendChild(
-            svgEl('path', {
-                d: desiredPath,
-                fill: 'none',
-                stroke: curve.color,
-                'stroke-width': '6',
-                opacity: '0.12',
-                'clip-path': `url(#${clipId})`,
-                'pointer-events': 'none',
-            }),
-        );
-
-        // Main desired curve — solid, thick, clipped to spotlight ranges
-        gCurves.appendChild(
-            svgEl('path', {
-                d: desiredPath,
-                fill: 'none',
-                stroke: curve.color,
-                'stroke-width': '3',
-                opacity: '1',
-                'clip-path': `url(#${clipId})`,
-                'pointer-events': 'none',
-            }),
-        );
-
-        // Effect label — positioned at the midpoint of the first spotlight range
-        const firstRange = spotlightRanges[0];
-        const midDay = Math.round((firstRange.start + firstRange.end) / 2);
-        const labelPt = curve.desired.reduce((best, p) =>
-            Math.abs(p.day - midDay) < Math.abs(best.day - midDay) ? p : best,
-        );
-        if (labelPt) {
-            // Find peak value in the spotlight range for better positioning
-            const peakPt = curve.desired
-                .filter(p => p.day >= firstRange.start && p.day <= firstRange.end)
-                .reduce((best, p) => (p.value > best.value ? p : best), labelPt);
-
-            const labelX = extendedChartX(midDay, config);
-            const labelYPos = extendedChartY(peakPt.value, config) - 10;
+        // Effect label at chart right edge
+        if (curve.desired.length > 0) {
+            const lastPt = curve.desired[curve.desired.length - 1];
             gCurves.appendChild(
                 svgEl('text', {
-                    x: String(labelX),
-                    y: String(Math.max(labelYPos, config.padT + 8)),
+                    x: String(config.padL + config.plotW + 8),
+                    y: String(extendedChartY(lastPt.value, config) + 3),
                     fill: curve.color,
-                    'text-anchor': 'middle',
                     'font-family': "'Space Grotesk', sans-serif",
                     'font-size': '11',
                     'font-weight': '600',
