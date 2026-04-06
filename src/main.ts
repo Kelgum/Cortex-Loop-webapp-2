@@ -1292,11 +1292,8 @@ export async function handlePromptSubmit(e) {
 
     // Reset time horizon badge
     PhaseState.timeHorizon = null;
-    const horizonBadge = document.getElementById('time-horizon-badge');
-    if (horizonBadge) {
-        horizonBadge.classList.remove('visible');
-        horizonBadge.classList.add('hidden');
-    }
+    // Remove any inline time-horizon badge from hook sentence
+    document.querySelector('#hook-sentence .time-horizon-badge')?.remove();
 
     DebugLog.addEntry({
         stage: 'User Input',
@@ -1359,17 +1356,23 @@ export async function handlePromptSubmit(e) {
             console.log(
                 `[Scout] Extended timeline detected: ${PhaseState.timeHorizon.mode} (${PhaseState.timeHorizon.durationDays} days) — ${PhaseState.timeHorizon.rationale}`,
             );
-            // Show time horizon badge
-            const badgeEl = document.getElementById('time-horizon-badge');
-            if (badgeEl) {
+            // Append time horizon badge as suffix to hook sentence
+            const hookEl = document.getElementById('hook-sentence');
+            if (hookEl) {
                 const modeLabels: Record<string, string> = {
                     weekly: '7-Day Protocol',
                     cyclical: `${PhaseState.timeHorizon.durationDays}-Day Cycle`,
                     program: `${PhaseState.timeHorizon.durationDays}-Day Program`,
                 };
-                badgeEl.innerHTML = `<span class="badge-icon">\u{1F4C5}</span>${modeLabels[PhaseState.timeHorizon.mode] || ''}`;
-                badgeEl.classList.remove('hidden');
-                requestAnimationFrame(() => badgeEl.classList.add('visible'));
+                const label = modeLabels[PhaseState.timeHorizon.mode] || '';
+                if (label) {
+                    // Remove any existing badge
+                    hookEl.querySelector('.time-horizon-badge')?.remove();
+                    const badge = document.createElement('span');
+                    badge.className = 'time-horizon-badge visible';
+                    badge.innerHTML = `<span class="badge-icon">\u{1F4C5}</span>${label}`;
+                    hookEl.appendChild(badge);
+                }
             }
         }
     } catch (err) {

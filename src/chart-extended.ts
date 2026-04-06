@@ -153,35 +153,23 @@ export function renderExtendedChart(opts: {
         }
     }
 
-    // ── 2. Week dividers (every 7 days for 14+ day modes) ──
-    if (durationDays > 7) {
-        for (let d = 7; d < durationDays; d += 7) {
-            const x = extendedChartX(d + 0.5, config);
-            gDayBands.appendChild(
-                svgEl('line', {
-                    x1: String(x),
-                    y1: String(config.padT),
-                    x2: String(x),
-                    y2: String(config.padT + config.plotH),
-                    stroke: isLight ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.1)',
-                    'stroke-width': '1.5',
-                    'stroke-dasharray': '4 4',
-                    'pointer-events': 'none',
-                }),
-            );
-            // Week label
-            const weekNum = Math.floor(d / 7);
-            gDayBands.appendChild(
-                svgEl('text', {
-                    x: String(x + 4),
-                    y: String(config.padT + 12),
-                    fill: isLight ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.25)',
-                    'font-family': "'IBM Plex Mono', monospace",
-                    'font-size': '8',
-                    'font-weight': '500',
-                }),
-            ).textContent = `Wk ${weekNum + 1}`;
-        }
+    // ── 2. Phase boundary dividers (at phase transitions, not locked to weeks) ──
+    const allPhases = protocolPhases || phaseSpotlights;
+    for (let pi = 1; pi < allPhases.length; pi++) {
+        const boundaryDay = allPhases[pi].startDay;
+        const x = extendedChartX(boundaryDay - 0.5, config);
+        gDayBands.appendChild(
+            svgEl('line', {
+                x1: String(x),
+                y1: String(config.padT),
+                x2: String(x),
+                y2: String(config.padT + config.plotH),
+                stroke: isLight ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.08)',
+                'stroke-width': '1',
+                'stroke-dasharray': '4 4',
+                'pointer-events': 'none',
+            }),
+        );
     }
 
     // ── 3. Protocol phase bands with effect indicators ──
