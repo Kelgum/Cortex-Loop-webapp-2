@@ -231,7 +231,7 @@ async function writeCyclesIndex(entries: any[]): Promise<void> {
 }
 
 function toSavedCycleIndexEntry(record: any) {
-    return {
+    const entry: any = {
         id: record.id,
         filename: record.filename,
         prompt: record.prompt,
@@ -242,6 +242,11 @@ function toSavedCycleIndexEntry(record: any) {
         topEffects: record.topEffects,
         iconSvg: record.iconSvg ?? null,
     };
+    if (record.badgeCategory) entry.badgeCategory = record.badgeCategory;
+    if (record.recommendedDevices) entry.recommendedDevices = record.recommendedDevices;
+    if (record.substanceClasses) entry.substanceClasses = record.substanceClasses;
+    if (record.timeHorizon) entry.timeHorizon = record.timeHorizon;
+    return entry;
 }
 
 function cycleStoragePlugin() {
