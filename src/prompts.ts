@@ -76,13 +76,13 @@ Rules:
 USER GOAL: {{userGoal}}
 
 INSTRUCTIONS:
-1. Identify exactly 3-4 pharmacodynamic effects relevant across the FULL {{durationDays}}-day timeline. Keep it focused — fewer effects with clear phase assignments, not more. Different effects should be dominant at different times.
+1. Identify exactly 2 pharmacodynamic effects — the two most important clinical dimensions for this goal across the FULL {{durationDays}}-day timeline. Both curves will always be visible; emphasis shifts per phase.
 2. For EACH effect, provide:
    - A baseline curve (population average without intervention, showing natural cyclical/daily patterns across {{durationDays}} days)
    - A desired curve (optimal target state with intervention)
    - Both curves have one datapoint per day (day 1 through day {{durationDays}})
-3. Define 2-4 protocol phases that partition the {{durationDays}}-day timeline. Each phase represents a distinct clinical focus period.
-4. For each phase, assign 1-2 SPOTLIGHT effects — the effects most clinically relevant during that phase. The chart ONLY displays spotlight effects during that phase (all others are hidden), so keep it clean: 1 effect per phase is ideal, 2 maximum.
+3. Define 2-5 protocol phases that partition the {{durationDays}}-day timeline. Phase durations should reflect CLINICAL REALITY — do NOT align phases to week boundaries. A withdrawal peak might last 10 days, stabilization might be 4 days. Let the pharmacology dictate the timing.
+4. For each phase, assign 1-2 SPOTLIGHT effects from the 2-effect roster — the effects most clinically relevant during that phase. Spotlight effects get visual emphasis (thicker curves, brighter fill) during their phase. Both curves are always visible but spotlighted ones are prominent.
 
 Rules:
 1. Return ONLY valid JSON — no markdown, no code fences
@@ -108,8 +108,8 @@ Rules:
 7. Colors: distinct, visible on dark background (#0a0a0f). Use muted but vibrant tones like #60a5fa, #c084fc, #4ade80, #fb7185, #fbbf24, #38bdf8
 8. Effect names MUST be pharmacodynamic effects, not molecule names. Use 1-2 word labels.
 9. polarity: "higher_is_better" for effects the user wants to INCREASE, "higher_is_worse" for effects to REDUCE
-10. Phase spotlights: each phase MUST list 1-2 effect names from the roster (1 is preferred, 2 maximum). Spotlight effects MUST be DISTINCT per phase — each phase should highlight a DIFFERENT clinical concern. The chart ONLY displays the spotlight effects during that phase, so assigning the same effect to every phase defeats the purpose. An effect may appear in 2 phases if genuinely relevant, but never in all phases.
-11. Phase day ranges must cover the full timeline without gaps (startDay of phase N+1 = endDay of phase N + 1)
+10. Phase spotlights: each phase MUST list 1 or 2 effect names from the 2-effect roster. Both effects may appear together in phases where both are clinically critical. The chart always shows both curves but emphasizes the spotlighted ones.
+11. Phase day ranges must cover the full timeline without gaps (startDay of phase N+1 = endDay of phase N + 1). Phase durations MUST be clinically motivated — NOT aligned to week boundaries.
 12. Each phase needs a color for its visual band
 13. STRING SAFETY: Do NOT use double quotes inside string values. Use single quotes for inner quotes.
 14. Be physiologically realistic — baselines should show genuine biological variation across days, not flat lines`,
