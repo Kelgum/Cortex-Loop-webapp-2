@@ -106,7 +106,10 @@ Rules:
 5. Baselines: reflect realistic biological rhythms over the timeline (e.g., hormonal cycles, tolerance buildup, adaptation curves, weekly patterns)
 6. Desired: show the improvement the user wants across the timeline
 7. Colors: distinct, visible on dark background (#0a0a0f). Use muted but vibrant tones like #60a5fa, #c084fc, #4ade80, #fb7185, #fbbf24, #38bdf8
-8. Effect names MUST be pharmacodynamic effects, not molecule names. Use 1-2 word labels.
+8. Effect names MUST be consumer-friendly, experiential labels (1-2 words) that describe what the user FEELS — not the underlying mechanism. The user typed a real-world goal; reflect it back in language they would use themselves.
+ GOOD: 'Mood', 'Bloating', 'Energy', 'Cramps', 'Sleep Quality', 'Appetite', 'Stress Resilience', 'Focus', 'Recovery', 'Cravings', 'Daytime Alertness', 'Calm'.
+ BAD (never use): 'Progesterone Tone', 'Inflammatory Load', 'Orexigenic Tone', 'Visceral Pain', 'Estrogen Baseline', 'Cortisol Reactivity', 'GABAergic Tone', 'Sympathetic Drive'.
+ Litmus test: would a health-conscious consumer use this term to describe their own experience? NEVER use molecule names, receptor terminology, or clinical pharmacodynamic jargon.
 9. polarity: "higher_is_better" for effects the user wants to INCREASE, "higher_is_worse" for effects to REDUCE
 10. Phase spotlights: each phase MUST list 1 or 2 effect names from the 2-effect roster. Both effects may appear together in phases where both are clinically critical. The chart always shows both curves but emphasizes the spotlighted ones.
 11. Phase day ranges must cover the full timeline without gaps (startDay of phase N+1 = endDay of phase N + 1). Phase durations MUST be clinically motivated — NOT aligned to week boundaries.
@@ -935,7 +938,7 @@ RULES:
 2. Each beat: 15-30 words MAX. Start with what the phase targets, then describe the protocol's strategy.
 3. direction: 'up' if phase intensifies or adds substances, 'down' if phase reduces or tapers, 'neutral' if phase maintains or shifts focus.
 4. keySubstances: compact string of the most notable substances active in this phase, e.g. 'Magnesium 400mg, Vitex 20mg' or 'Protocol holds steady'.
-5. spotlightEffects: array of 2-3 effect names that are the focus of this phase (from the effect roster).
+5. spotlightEffects: array of 1-2 effect names from the effect roster. Use the EXACT effect names from the roster — do not rename or substitute clinical synonyms.
 6. NO NUMBERS for physiological descriptions. Numbers are fine for doses and day ranges.
 7. Outro: 8-14 words. Conclude the multi-day narrative arc.
 8. STRING SAFETY: No double quotes inside strings. Use single quotes. Return ONLY valid JSON — no markdown, no code fences.

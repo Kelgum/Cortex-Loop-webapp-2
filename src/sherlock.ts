@@ -10,7 +10,7 @@ import { PHASE_CHART } from './constants';
 import { SherlockState, TimelineState, isTurboActive } from './state';
 import { formatMinutesAsClockTime } from './utils';
 import { SUBSTANCE_DB } from './substances';
-import type { Sherlock7DBeat } from './types';
+import type { Sherlock7DBeat, SherlockExtendedBeat } from './types';
 
 let _panel: HTMLElement | null = null;
 let _repositionRAF: number | null = null;
@@ -1052,9 +1052,7 @@ export function showSherlock7DStack(beats: Sherlock7DBeat[], activeDayIdx: numbe
         existingCards.forEach(el => el.remove());
 
         const cards: SherlockCardData[] = beats.map(beat => {
-            const subColor = beat.topSubstanceKey
-                ? SUBSTANCE_DB[beat.topSubstanceKey]?.color
-                : undefined;
+            const subColor = beat.topSubstanceKey ? SUBSTANCE_DB[beat.topSubstanceKey]?.color : undefined;
             return {
                 id: `day7d-${beat.day}`,
                 text: beat.text,
@@ -1102,7 +1100,7 @@ export function showSherlock7DStack(beats: Sherlock7DBeat[], activeDayIdx: numbe
             // Below active
             let y = activeTop + activeH + gap;
             for (let s = 1; s < offset; s++) {
-                const si = ((activeIdx + s) % n + n) % n;
+                const si = (((activeIdx + s) % n) + n) % n;
                 y += cardH[si] + gap;
             }
             top = y;
@@ -1110,7 +1108,7 @@ export function showSherlock7DStack(beats: Sherlock7DBeat[], activeDayIdx: numbe
             // Above active
             let y = activeTop;
             for (let s = -1; s >= offset; s--) {
-                const si = ((activeIdx + s) % n + n) % n;
+                const si = (((activeIdx + s) % n) + n) % n;
                 y -= cardH[si] + gap;
             }
             top = y;
@@ -1140,5 +1138,90 @@ export function reset7DCardState(): void {
 /** Hide the Sherlock 7D panel and clear 7D narration state. */
 export function hideSherlock7D(): void {
     reset7DCardState();
+    hideNarrationPanel();
+}
+
+// ── Sherlock Extended — Phase-based cards for extended (7-28 day) timelines ──
+
+let _extCardsBuilt = false;
+
+/**
+ * Display extended Sherlock narration cards (one per protocol phase).
+ * Maps SherlockExtendedBeat[] to SherlockCardData[] and reuses the card
+ * stack layout with linear positioning (fewer cards than 7D circular).
+ */
+export function showSherlockExtendedStack(beats: SherlockExtendedBeat[], activeIdx: number): void {
+    if (!SherlockState.enabled || beats.length === 0) return;
+    const panel = ensureNarrationPanel();
+    const n = beats.length;
+    const clamped = Math.max(0, Math.min(activeIdx, n - 1));
+
+    const existingCards = panel.querySelectorAll('.waze-card');
+    if (!_extCardsBuilt || existingCards.length !== n) {
+        existingCards.forEach(el => el.remove());
+
+        const cards: SherlockCardData[] = beats.map((beat, i) => ({
+            id: `ext-phase-${i}`,
+            text: beat.text,
+            direction: beat.direction || 'neutral',
+            dose: beat.keySubstances || undefined,
+            dayLabel: `${beat.phase} — Days ${beat.startDay}-${beat.endDay}`,
+        }));
+        cards.forEach(card => panel.appendChild(createCardElement(card)));
+        _extCardsBuilt = true;
+
+        panel.classList.remove('scrollable');
+        panel.style.removeProperty('--sherlock-scroll-pad');
+    }
+
+    // Position cards — linear stack (not circular) since there are only 2-5 cards
+    const allCards = Array.from(panel.querySelectorAll('.waze-card')) as HTMLElement[];
+    if (allCards.length === 0) return;
+
+    const centerY = panel.clientHeight / 2;
+    const gap = CARD_STACK_GAP;
+    const cardH = allCards.map(el => el.offsetHeight || 60);
+    const activeH = cardH[clamped];
+    const activeTop = centerY - activeH / 2;
+
+    allCards.forEach((el, i) => {
+        const offset = i - clamped;
+        let top: number;
+        if (offset === 0) {
+            top = activeTop;
+        } else if (offset > 0) {
+            let y = activeTop + activeH + gap;
+            for (let s = 1; s < offset; s++) {
+                y += cardH[clamped + s] + gap;
+            }
+            top = y;
+        } else {
+            let y = activeTop;
+            for (let s = -1; s >= offset; s--) {
+                y -= cardH[clamped + s] + gap;
+            }
+            top = y;
+        }
+
+        el.style.top = `${top}px`;
+        const dist = Math.abs(offset);
+        if (dist === 0) {
+            el.classList.add('sherlock-active');
+            el.classList.remove('sherlock-stale');
+            el.style.opacity = '1';
+        } else {
+            el.classList.remove('sherlock-active');
+            el.classList.add('sherlock-stale');
+            el.style.opacity = Math.max(0.08, 0.47 - dist * 0.15).toFixed(2);
+        }
+    });
+}
+
+export function resetExtendedCardState(): void {
+    _extCardsBuilt = false;
+}
+
+export function hideSherlockExtended(): void {
+    resetExtendedCardState();
     hideNarrationPanel();
 }
