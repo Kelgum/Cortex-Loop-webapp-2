@@ -100,7 +100,13 @@ export async function deleteCycle(id: string): Promise<void> {
 
 export async function patchCycle(
     id: string,
-    patch: { filename?: string; iconSvg?: string | null; recommendedDevices?: string[]; substanceClasses?: string[] },
+    patch: {
+        filename?: string;
+        iconSvg?: string | null;
+        recommendedDevices?: string[];
+        substanceClasses?: string[];
+        timeHorizon?: TimeHorizon;
+    },
 ): Promise<void> {
     const res = await fetch(`/__cycles/${encodeURIComponent(id)}`, {
         method: 'PATCH',

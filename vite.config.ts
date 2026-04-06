@@ -324,6 +324,9 @@ function cycleStoragePlugin() {
                     if (Array.isArray(body?.recommendedDevices)) {
                         record.recommendedDevices = body.recommendedDevices;
                     }
+                    if (body?.timeHorizon && typeof body.timeHorizon === 'object') {
+                        record.timeHorizon = body.timeHorizon;
+                    }
 
                     await writeFile(filePath, JSON.stringify(record), 'utf8');
 
@@ -334,6 +337,7 @@ function cycleStoragePlugin() {
                         if (typeof record.iconSvg !== 'undefined') entry.iconSvg = record.iconSvg;
                         if (record.substanceClasses) entry.substanceClasses = record.substanceClasses;
                         if (record.recommendedDevices) entry.recommendedDevices = record.recommendedDevices;
+                        if (record.timeHorizon) entry.timeHorizon = record.timeHorizon;
                     }
                     await writeCyclesIndex(index);
                     return index;

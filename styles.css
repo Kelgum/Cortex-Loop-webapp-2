@@ -40,6 +40,7 @@
 
     /* Stream visuals */
     --stream-card-width: 188px;
+    --stream-card-width-wide: 388px;
     --stream-card-gap: 12px;
     --stream-card-bg-top-alpha: 0.885;
     --stream-card-bg-bottom-alpha: 0.94;
@@ -2926,6 +2927,118 @@ body.mode-stream #hook-sentence {
     flex: 0 0 var(--stream-card-width);
     min-width: var(--stream-card-width);
     scroll-snap-align: start;
+}
+
+/* ---- Wide cards (28-day programs) ---- */
+
+.stream-section-row .cg-card.cg-card-wide {
+    flex: 0 0 var(--stream-card-width-wide);
+    min-width: var(--stream-card-width-wide);
+}
+
+.stream-grid .cg-card-wide .cg-card-icon {
+    aspect-ratio: 16 / 7;
+}
+
+.stream-grid .cg-card-wide .cg-card-overlay-title {
+    font-size: calc(34px * var(--stream-title-scale));
+}
+
+.stream-grid .cg-card-wide .cg-card-overlay-title.title-short {
+    font-size: calc(26px * var(--stream-title-scale));
+}
+
+.stream-grid .cg-card-wide .cg-card-overlay-title.title-long {
+    font-size: calc(27px * var(--stream-title-scale));
+}
+
+.stream-grid .cg-card-wide .cg-card-overlay-title.title-xlong {
+    font-size: calc(24px * var(--stream-title-scale));
+}
+
+.stream-grid .cg-card-wide .cg-card-name {
+    padding: 7px 14px 0;
+    font-size: 12px;
+}
+
+.stream-grid .cg-card-wide .cg-card-prompt {
+    padding: 2px 14px 0;
+    -webkit-line-clamp: 3;
+}
+
+.stream-grid .cg-card-wide .cg-card-meta {
+    padding: 2px 14px 0;
+    font-size: 10px;
+}
+
+.stream-grid .cg-card-wide .cg-card-devices {
+    padding: 3px 14px 11px;
+}
+
+/* Wide card top accent stroke */
+.stream-grid .cg-card-wide::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(188, 151, 82, 0.18) 30%, rgba(188, 151, 82, 0.18) 70%, transparent);
+    z-index: 2;
+}
+
+/* Duration badge (top-left capsule) */
+.cg-card-duration-badge {
+    position: absolute;
+    top: 7px;
+    left: 7px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(12, 18, 28, 0.72);
+    border: 1px solid rgba(188, 151, 82, 0.22);
+    font-family: var(--font-mono);
+    font-size: 8.5px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    color: rgba(214, 188, 128, 0.88);
+    z-index: 2;
+    pointer-events: none;
+    text-transform: uppercase;
+}
+
+/* Phase progress bar at thumbnail bottom */
+.cg-card-phase-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    display: flex;
+    z-index: 2;
+    pointer-events: none;
+}
+
+.cg-card-phase-bar span {
+    height: 100%;
+    opacity: 0.7;
+}
+
+/* Wide cards in search grid span 2 columns */
+.stream-grid:not(.stream-sections-mode) .cg-card-wide {
+    grid-column: span 2;
+}
+
+@media (max-width: 420px) {
+    .stream-grid:not(.stream-sections-mode) .cg-card-wide {
+        grid-column: span 1;
+    }
+    .stream-section-row .cg-card.cg-card-wide {
+        flex: 0 0 var(--stream-card-width);
+        min-width: var(--stream-card-width);
+    }
+    .stream-grid .cg-card-wide .cg-card-icon {
+        aspect-ratio: 5 / 3;
+    }
 }
 
 /* ---- Netflix landscape icon overrides ---- */

@@ -1,22 +1,24 @@
 /**
- * Cycle Icon — Generates animated landscape SVG thumbnails from 7-day cycle data.
+ * Cycle Icon — Generates animated landscape SVG thumbnails from cycle data.
  *
- * Produces a self-contained 200×120 landscape SVG with per-substance rainbow
- * AUC bands animating through 7 days via SMIL, plus a substance timing strip
- * below the curves showing colored pill rectangles that morph across days.
+ * Produces self-contained SVG thumbnails:
+ *  - Narrow (200×120) for 7-day daily cycles — animated SMIL bands + substance strip
+ *  - Wide (400×175) for 28-day programs — panoramic day-level curves with phase bands
  *
- * Two entry points:
- *  - generateCycleIconSvg()       — from live MultiDayState.days (at save time)
- *  - generateCycleIconFromBundle() — from a stored SessionCacheBundle (lazy regen)
+ * Entry points:
+ *  - generateCycleIconSvg()         — narrow, from live MultiDayState.days (at save time)
+ *  - generateCycleIconFromBundle()  — narrow, from a stored SessionCacheBundle (lazy regen)
+ *  - generateWideIconFromBundle()   — wide, from extended cycle bundle stages
  *
- * Exports: generateCycleIconSvg, generateCycleIconFromBundle
+ * Exports: generateCycleIconSvg, generateCycleIconFromBundle, generateWideIconFromBundle
  * Depends on: types, lx-system (barrel — computeIncrementalLxOverlay, validateInterventions)
  */
 
-import type { DaySnapshot, CurvePoint, CurveData } from './types';
+import type { DaySnapshot, CurvePoint, CurveData, ExtendedCurvePoint } from './types';
 import { computeIncrementalLxOverlay, validateInterventions } from './lx-system';
 import { extractInterventionsData } from './llm-response-shape';
 import { RUNTIME_REPLAY_STAGE_CLASS } from './replay-snapshot';
+import { SUBSTANCE_DB } from './substances';
 
 // ── Layout constants ────────────────────────────────────────────────────
 
@@ -489,7 +491,9 @@ export function generateCycleIconFromBundle(bundle: any): string | null {
     const runtimeDesignCurves = runtimeReplayPayload?.design?.curvesData;
 
     const curves: CurveData[] =
-        Array.isArray(runtimeDesignCurves) && runtimeDesignCurves.length > 0 ? runtimeDesignCurves : curvesPayload.curves;
+        Array.isArray(runtimeDesignCurves) && runtimeDesignCurves.length > 0
+            ? runtimeDesignCurves
+            : curvesPayload.curves;
     const effectCount = Math.min(curves.length, 2);
 
     if (Array.isArray(runtimeWeekDays) && runtimeWeekDays.length >= 2) {
@@ -553,4 +557,400 @@ export function generateCycleIconFromBundle(bundle: any): string | null {
     }
 
     return buildIconSvg(dayData, effectCount);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// WIDE ICON (400×175) — Panoramic 28-day program thumbnails
+//
+// Layout: compact sparkline curves (top 35%) + substance Gantt chart (bottom 65%)
+// The Gantt chart is the hero — each substance gets a swim lane showing when
+// it's active across the full program timeline. Phase transitions are shown as
+// subtle dotted vertical lines, not colored zones.
+// ══════════════════════════════════════════════════════════════════════════
+
+const WIDE_W = 400;
+const WIDE_H = 175;
+const WIDE_PAD = 12;
+const WIDE_CORNER_R = 8;
+
+// Sparkline curves: compact band at top
+const SPARK_TOP = 10;
+const SPARK_H = 46;
+
+// Gantt chart: hero substance strip
+const GANTT_TOP = 66;
+const GANTT_BOTTOM = 165;
+const GANTT_H = GANTT_BOTTOM - GANTT_TOP; // 99px
+const GANTT_LANE_H = 9;
+const GANTT_LANE_GAP = 3;
+const GANTT_LANE_R = 3;
+const GANTT_MAX_LANES = 8;
+
+/** Map day number → x pixel in wide icon. */
+function wideX(day: number, totalDays: number): number {
+    return WIDE_PAD + (day / totalDays) * (WIDE_W - 2 * WIDE_PAD);
+}
+
+/** Map value (0-100) → y pixel in sparkline area. */
+function sparkY(value: number): number {
+    const clamped = Math.max(0, Math.min(100, value));
+    return SPARK_TOP + SPARK_H - (clamped / 100) * SPARK_H;
+}
+
+/** Monotone cubic path from ExtendedCurvePoint[] in sparkline space. */
+function widePointsToPath(pts: ExtendedCurvePoint[], totalDays: number): string {
+    if (!pts || pts.length === 0) return `M ${WIDE_PAD} ${SPARK_TOP + SPARK_H}`;
+
+    const coords = pts.map(p => ({ x: wideX(p.day, totalDays), y: sparkY(p.value) }));
+
+    if (coords.length === 1) return `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)}`;
+    if (coords.length === 2) {
+        return `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)} L ${coords[1].x.toFixed(1)} ${coords[1].y.toFixed(1)}`;
+    }
+
+    // Fritsch-Carlson monotone cubic
+    const n = coords.length;
+    const dx = new Array(n - 1);
+    const dy = new Array(n - 1);
+    const m = new Array(n - 1);
+    const t = new Array(n);
+
+    for (let i = 0; i < n - 1; i++) {
+        dx[i] = coords[i + 1].x - coords[i].x;
+        dy[i] = coords[i + 1].y - coords[i].y;
+        m[i] = dx[i] !== 0 ? dy[i] / dx[i] : 0;
+    }
+    t[0] = m[0];
+    t[n - 1] = m[n - 2];
+    for (let i = 1; i < n - 1; i++) {
+        if (m[i - 1] === 0 || m[i] === 0 || m[i - 1] * m[i] <= 0) {
+            t[i] = 0;
+        } else {
+            const w1 = 2 * dx[i] + dx[i - 1];
+            const w2 = dx[i] + 2 * dx[i - 1];
+            t[i] = (w1 + w2) / (w1 / m[i - 1] + w2 / m[i]);
+        }
+    }
+
+    let d = `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)}`;
+    for (let i = 0; i < n - 1; i++) {
+        const p0 = coords[i];
+        const p1 = coords[i + 1];
+        const h = dx[i];
+        const cp1x = p0.x + h / 3;
+        const cp1y = p0.y + (t[i] * h) / 3;
+        const cp2x = p1.x - h / 3;
+        const cp2y = p1.y - (t[i + 1] * h) / 3;
+        d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p1.x.toFixed(1)} ${p1.y.toFixed(1)}`;
+    }
+    return d;
+}
+
+interface WidePhase {
+    name: string;
+    startDay: number;
+    endDay: number;
+    color: string;
+}
+
+interface WideIntervention {
+    key: string;
+    day: number;
+    endDay: number;
+    color: string;
+    phase?: string;
+}
+
+/** Build wide icon SVG — sparkline curves + substance Gantt chart. */
+function buildWideIconSvg(
+    effectRoster: { effect: string; color: string; baseline: ExtendedCurvePoint[]; desired: ExtendedCurvePoint[] }[],
+    phases: WidePhase[],
+    interventions: WideIntervention[],
+    totalDays: number,
+): string {
+    const u = Math.random().toString(36).slice(2, 6);
+    const effectCount = Math.min(effectRoster.length, 2);
+    const elements: string[] = [];
+    const defs: string[] = [];
+
+    // ── Week separator lines — full height, very subtle ──
+    for (let week = 1; week < Math.ceil(totalDays / 7); week++) {
+        const dayMark = week * 7;
+        if (dayMark >= totalDays) break;
+        const x = wideX(dayMark, totalDays);
+        elements.push(
+            `<line x1="${x.toFixed(1)}" y1="${SPARK_TOP}" x2="${x.toFixed(1)}" y2="${GANTT_BOTTOM}" ` +
+                `stroke="rgba(255,255,255,0.05)" stroke-width="0.5"/>`,
+        );
+    }
+
+    // ── Phase boundary lines — dotted verticals at phase transitions ──
+    for (const phase of phases) {
+        if (phase.startDay > 0) {
+            const x = wideX(phase.startDay, totalDays);
+            elements.push(
+                `<line x1="${x.toFixed(1)}" y1="${GANTT_TOP - 2}" x2="${x.toFixed(1)}" y2="${GANTT_BOTTOM}" ` +
+                    `stroke="rgba(255,255,255,0.1)" stroke-width="0.5" stroke-dasharray="2,2"/>`,
+            );
+        }
+    }
+
+    // ── Sparkline curves (compact, top section) ──
+    for (let ei = 0; ei < effectCount; ei++) {
+        const eff = effectRoster[ei];
+        const lineColor = eff.color || '#60a5fa';
+
+        // Subtle fill under desired curve
+        const rightX = wideX(totalDays, totalDays).toFixed(1);
+        const leftX = wideX(0, totalDays).toFixed(1);
+        const bottom = (SPARK_TOP + SPARK_H).toFixed(1);
+        const desiredPath = widePointsToPath(eff.desired, totalDays);
+
+        defs.push(
+            `<linearGradient id="wsg-${ei}-${u}" x1="0" y1="${SPARK_TOP}" x2="0" y2="${SPARK_TOP + SPARK_H}" gradientUnits="userSpaceOnUse">` +
+                `<stop offset="0" stop-color="${lineColor}" stop-opacity="0.18"/>` +
+                `<stop offset="1" stop-color="${lineColor}" stop-opacity="0.02"/>` +
+                `</linearGradient>`,
+        );
+        elements.push(
+            `<path d="${desiredPath} L ${rightX} ${bottom} L ${leftX} ${bottom} Z" fill="url(#wsg-${ei}-${u})" stroke="none"/>`,
+        );
+
+        // Desired line (solid, thin sparkline)
+        elements.push(
+            `<path d="${desiredPath}" stroke="${lineColor}" stroke-width="1.2" fill="none" opacity="0.8" ` +
+                `stroke-linecap="round" stroke-linejoin="round"/>`,
+        );
+    }
+
+    // ── Separator line between sparklines and Gantt ──
+    elements.push(
+        `<line x1="${WIDE_PAD}" y1="${GANTT_TOP - 5}" x2="${WIDE_W - WIDE_PAD}" y2="${GANTT_TOP - 5}" ` +
+            `stroke="rgba(255,255,255,0.06)" stroke-width="0.5"/>`,
+    );
+
+    // ── Substance Gantt chart (hero visual) ──
+    const ganttSvg = buildGanttChart(interventions, phases, totalDays, u);
+    elements.push(ganttSvg);
+
+    // ── Sweep-reveal animation ──
+    defs.push(
+        `<clipPath id="wsweep-${u}">` +
+            `<rect x="0" y="0" width="0" height="${WIDE_H}">` +
+            `<animate attributeName="width" from="0" to="${WIDE_W}" dur="4s" fill="freeze"/>` +
+            `</rect>` +
+            `</clipPath>`,
+    );
+
+    return [
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDE_W} ${WIDE_H}" data-v="10" data-wide="1">`,
+        defs.length ? `<defs>${defs.join('')}</defs>` : '',
+        `<rect class="ci-bg" width="${WIDE_W}" height="${WIDE_H}" rx="${WIDE_CORNER_R}"/>`,
+        `<g clip-path="url(#wsweep-${u})">`,
+        ...elements,
+        `</g>`,
+        `<rect class="ci-frame" width="${WIDE_W}" height="${WIDE_H}" rx="${WIDE_CORNER_R}" fill="none"/>`,
+        `</svg>`,
+    ].join('');
+}
+
+/**
+ * Build the substance Gantt chart — each substance gets a colored swim lane
+ * spanning its active days. Looks like a protocol schedule / musical score.
+ */
+function buildGanttChart(
+    interventions: WideIntervention[],
+    phases: WidePhase[],
+    totalDays: number,
+    uid: string,
+): string {
+    if (!interventions?.length) return '';
+
+    // Group by substance key, collecting all active day ranges
+    const substanceMap = new Map<
+        string,
+        { color: string; ranges: { start: number; end: number }[] }
+    >();
+
+    for (const iv of interventions) {
+        if (!iv.key) continue;
+        if (!substanceMap.has(iv.key)) {
+            substanceMap.set(iv.key, { color: iv.color || '#60a5fa', ranges: [] });
+        }
+        const entry = substanceMap.get(iv.key)!;
+        entry.ranges.push({ start: iv.day, end: iv.endDay });
+    }
+
+    if (substanceMap.size === 0) return '';
+
+    // Sort by earliest active day, then by total span (longer first for visual weight)
+    const substances = Array.from(substanceMap.entries())
+        .map(([key, info]) => {
+            // Merge overlapping ranges
+            const sorted = [...info.ranges].sort((a, b) => a.start - b.start);
+            const merged: { start: number; end: number }[] = [];
+            for (const r of sorted) {
+                const last = merged[merged.length - 1];
+                if (last && r.start <= last.end + 1) {
+                    last.end = Math.max(last.end, r.end);
+                } else {
+                    merged.push({ ...r });
+                }
+            }
+            return {
+                key,
+                color: info.color,
+                ranges: merged,
+                minDay: merged[0]?.start ?? 0,
+                totalSpan: merged.reduce((s, r) => s + (r.end - r.start + 1), 0),
+            };
+        })
+        .sort((a, b) => a.minDay - b.minDay || b.totalSpan - a.totalSpan);
+
+    // Lane allocation (first-fit, order by start day)
+    const laneEnds: number[] = []; // tracks the last occupied day in each lane
+    const laneAssignments: number[] = [];
+
+    for (const sub of substances) {
+        const maxEnd = Math.max(...sub.ranges.map(r => r.end));
+        let assigned = -1;
+        for (let li = 0; li < GANTT_MAX_LANES; li++) {
+            if ((laneEnds[li] ?? -1) < sub.minDay - 1) {
+                laneEnds[li] = maxEnd;
+                assigned = li;
+                break;
+            }
+        }
+        if (assigned === -1) {
+            // No free lane — stack at the bottom
+            assigned = Math.min(laneEnds.length, GANTT_MAX_LANES - 1);
+            laneEnds[assigned] = maxEnd;
+        }
+        laneAssignments.push(assigned);
+    }
+
+    const usedLanes = Math.max(...laneAssignments) + 1;
+    // Center the lanes vertically in the Gantt area
+    const totalLaneHeight = usedLanes * GANTT_LANE_H + (usedLanes - 1) * GANTT_LANE_GAP;
+    const ganttYStart = GANTT_TOP + Math.max(0, (GANTT_H - totalLaneHeight) / 2);
+
+    const rects: string[] = [];
+
+    for (let si = 0; si < substances.length; si++) {
+        const sub = substances[si];
+        const lane = laneAssignments[si];
+        const y = ganttYStart + lane * (GANTT_LANE_H + GANTT_LANE_GAP);
+
+        for (const range of sub.ranges) {
+            const x = wideX(range.start, totalDays);
+            const x2 = wideX(range.end + 1, totalDays);
+            const w = Math.max(3, x2 - x);
+
+            // Main bar
+            rects.push(
+                `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${GANTT_LANE_H}" ` +
+                    `rx="${GANTT_LANE_R}" fill="${sub.color}" opacity="0.6"/>`,
+            );
+
+            // Subtle glow/highlight at top edge for depth
+            rects.push(
+                `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${Math.min(2, GANTT_LANE_H / 2)}" ` +
+                    `rx="${GANTT_LANE_R}" fill="rgba(255,255,255,0.12)"/>`,
+            );
+        }
+    }
+
+    return rects.join('');
+}
+
+// ── Public: wide icon from a stored SessionCacheBundle ────────────────
+
+export function generateWideIconFromBundle(bundle: any): string | null {
+    if (!bundle?.stages) return null;
+
+    // Try extended-strategist stage first (curvesExtended)
+    const extStrategist = bundle.stages['extended-strategist']?.payload || bundle.stages['curvesExtended']?.payload;
+    if (!extStrategist?.effectRoster || !Array.isArray(extStrategist.effectRoster)) return null;
+
+    const effectRoster = extStrategist.effectRoster.slice(0, 2).map((eff: any) => ({
+        effect: eff.effect || '',
+        color: eff.color || '#60a5fa',
+        baseline: Array.isArray(eff.baseline) ? eff.baseline : [],
+        desired: Array.isArray(eff.desired) ? eff.desired : [],
+    }));
+
+    // Get total days from the data
+    const allDays = effectRoster.flatMap((e: any) => [
+        ...e.baseline.map((p: ExtendedCurvePoint) => p.day),
+        ...e.desired.map((p: ExtendedCurvePoint) => p.day),
+    ]);
+    const totalDays = allDays.length > 0 ? Math.max(...allDays) : 28;
+
+    // Try extended-intervention stage for protocol phases + interventions
+    const extIntervention =
+        bundle.stages['extended-intervention']?.payload || bundle.stages['interventionExtended']?.payload;
+
+    // Extract protocol phases for boundary lines
+    const phases: WidePhase[] = [];
+    if (extIntervention?.protocolPhases && Array.isArray(extIntervention.protocolPhases)) {
+        for (const pp of extIntervention.protocolPhases) {
+            phases.push({
+                name: pp.name || '',
+                startDay: pp.startDay ?? 0,
+                endDay: pp.endDay ?? totalDays,
+                color: pp.color || '#888',
+            });
+        }
+    }
+    // Fallback to strategist spotlights
+    if (phases.length === 0) {
+        const phaseSpotlights = extStrategist.phaseSpotlights || [];
+        for (const ps of phaseSpotlights) {
+            phases.push({
+                name: ps.phase || '',
+                startDay: ps.startDay ?? 0,
+                endDay: ps.endDay ?? totalDays,
+                color: ps.color || '#888',
+            });
+        }
+    }
+
+    // Extract interventions with proper day ranges for the Gantt chart
+    // Each intervention entry has a start day and frequency='daily', meaning it runs
+    // until a new entry for the same substance appears or the phase ends.
+    const rawIvs = extIntervention?.interventions || [];
+    const interventions: WideIntervention[] = [];
+
+    // Group raw interventions by substance key
+    const byKey = new Map<string, any[]>();
+    for (const iv of rawIvs) {
+        if (!iv.key) continue;
+        if (!byKey.has(iv.key)) byKey.set(iv.key, []);
+        byKey.get(iv.key)!.push(iv);
+    }
+
+    // For each substance, compute day ranges: each entry runs from its day until
+    // the next entry for the same substance starts (or until its phase ends)
+    for (const [key, entries] of byKey) {
+        const sorted = [...entries].sort((a: any, b: any) => (a.day ?? 0) - (b.day ?? 0));
+        for (let i = 0; i < sorted.length; i++) {
+            const iv = sorted[i];
+            const startDay = iv.day ?? 0;
+            // End day: either the next entry's start - 1, or the phase end
+            let endDay: number;
+            if (i + 1 < sorted.length) {
+                endDay = (sorted[i + 1].day ?? totalDays) - 1;
+            } else {
+                // Last entry: runs until its phase ends, or program end
+                const phase = phases.find(p => p.name === iv.phase);
+                endDay = phase ? phase.endDay : totalDays;
+            }
+            // Look up substance color from the database
+            const dbSub = SUBSTANCE_DB[key];
+            const color = dbSub?.color || iv.substance?.color || iv.color || '#60a5fa';
+            interventions.push({ key, day: startDay, endDay, color, phase: iv.phase });
+        }
+    }
+
+    return buildWideIconSvg(effectRoster, phases, interventions, totalDays);
 }

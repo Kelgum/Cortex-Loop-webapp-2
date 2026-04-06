@@ -22,7 +22,7 @@ import {
     deleteCycle,
 } from './cycle-store';
 import type { SavedCycleIndexEntry } from './cycle-store';
-import { generateCycleIconFromBundle } from './cycle-icon';
+import { generateCycleIconFromBundle, generateWideIconFromBundle } from './cycle-icon';
 import { LLMCache } from './llm-cache';
 import { settingsStore, sessionSettingsStore, STORAGE_KEYS } from './settings-store';
 import { BIOMETRIC_DEVICES } from './biometric-devices';
@@ -1008,18 +1008,66 @@ function getOverlayTitleClass(overlayTitle: string): string {
     return '';
 }
 
+// ── Wide Card Detection ───────────────────────────────────────────────
+
+function isWideCard(entry: SavedCycleIndexEntry): boolean {
+    if (!entry.timeHorizon) return false;
+    return (
+        entry.timeHorizon.mode === 'program' ||
+        entry.timeHorizon.mode === 'cyclical' ||
+        (entry.timeHorizon.durationDays ?? 1) >= 14
+    );
+}
+
+/** Format a duration badge label from timeHorizon. */
+function durationBadgeLabel(entry: SavedCycleIndexEntry): string {
+    const days = entry.timeHorizon?.durationDays ?? 28;
+    return `${days} days`;
+}
+
+/** Build phase progress bar HTML from protocolPhases stored in the bundle. */
+function buildPhaseBarHtml(entry: SavedCycleIndexEntry): string {
+    // Phase colors: loading=teal, maintenance=gold, tapering=muted
+    const DEFAULT_PHASE_COLORS: Record<string, string> = {
+        loading: 'rgba(56, 178, 172, 0.8)',
+        ramp: 'rgba(56, 178, 172, 0.8)',
+        'ramp-up': 'rgba(56, 178, 172, 0.8)',
+        maintenance: 'rgba(188, 151, 82, 0.8)',
+        sustain: 'rgba(188, 151, 82, 0.8)',
+        tapering: 'rgba(128, 143, 164, 0.6)',
+        taper: 'rgba(128, 143, 164, 0.6)',
+        'wind-down': 'rgba(128, 143, 164, 0.6)',
+    };
+    // Without bundle access here, render a generic 3-phase bar
+    const totalDays = entry.timeHorizon?.durationDays ?? 28;
+    const loadDays = Math.round(totalDays * 0.25);
+    const maintDays = Math.round(totalDays * 0.5);
+    const taperDays = totalDays - loadDays - maintDays;
+    const phases = [
+        { days: loadDays, color: DEFAULT_PHASE_COLORS.loading },
+        { days: maintDays, color: DEFAULT_PHASE_COLORS.maintenance },
+        { days: taperDays, color: DEFAULT_PHASE_COLORS.tapering },
+    ];
+    const spans = phases.map(p => `<span style="flex:${p.days};background:${p.color}"></span>`).join('');
+    return `<div class="cg-card-phase-bar">${spans}</div>`;
+}
+
 // ── Card Builder ───────────────────────────────────────────────────────
 
 function buildCardHtml(entry: SavedCycleIndexEntry, activeId: string | null): string {
     const isActive = entry.id === activeId;
+    const wide = isWideCard(entry);
     const effectStr = entry.maxEffects === 1 ? '1 effect' : '2 effects';
     const dateStr = formatDate(entry.savedAt);
     const prompt = entry.prompt ? escHtml(entry.prompt.slice(0, 80)) + (entry.prompt.length > 80 ? '...' : '') : '';
+
+    const fallbackW = wide ? 400 : 200;
+    const fallbackH = wide ? 175 : 120;
     const iconHtml = entry.iconSvg
         ? entry.iconSvg
-        : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120">` +
-          `<rect class="ci-bg" width="200" height="120" rx="8"/>` +
-          `<text class="ci-day" x="100" y="65" text-anchor="middle" font-size="20" fill="rgba(255,255,255,0.12)">${entry.maxEffects}</text>` +
+        : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${fallbackW} ${fallbackH}">` +
+          `<rect class="ci-bg" width="${fallbackW}" height="${fallbackH}" rx="8"/>` +
+          `<text class="ci-day" x="${fallbackW / 2}" y="${fallbackH / 2 + 5}" text-anchor="middle" font-size="20" fill="rgba(255,255,255,0.12)">${entry.maxEffects}</text>` +
           `</svg>`;
 
     const badges = computeBadges(entry);
@@ -1036,18 +1084,32 @@ function buildCardHtml(entry: SavedCycleIndexEntry, activeId: string | null): st
         ? `<button class="cg-card-delete-btn" data-delete-id="${escHtml(entry.id)}" aria-label="Delete protocol" title="Delete protocol">&times;</button>`
         : '';
 
+    // Wide card extras
+    const durationBadgeHtml = wide
+        ? `<span class="cg-card-duration-badge">${escHtml(durationBadgeLabel(entry))}</span>`
+        : '';
+    const phaseBarHtml = wide ? buildPhaseBarHtml(entry) : '';
+    const wideClass = wide ? ' cg-card-wide' : '';
+
+    // Enriched meta for wide cards: "28-day program · 2 effects · Mar 12"
+    const metaStr = wide
+        ? `${entry.timeHorizon?.durationDays ?? 28}-day program · ${effectStr} · ${isActive ? 'loaded' : dateStr}`
+        : `${effectStr} · ${isActive ? 'loaded' : dateStr}`;
+
     return (
-        `<div class="cg-card${isActive ? ' cg-card-active' : ''}" data-cycle-id="${escHtml(entry.id)}">` +
+        `<div class="cg-card${isActive ? ' cg-card-active' : ''}${wideClass}" data-cycle-id="${escHtml(entry.id)}">` +
         cardDeleteHtml +
         `<div class="cg-card-icon">` +
         iconHtml +
         badgesHtml +
+        durationBadgeHtml +
         `<div class="cg-card-overlay-title${overlayTitleClass}" style="color:${titleColor}">${overlayTitle}</div>` +
         rxHtml +
+        phaseBarHtml +
         `</div>` +
         `<h3 class="cg-card-name">${escHtml(entry.filename)}</h3>` +
         (prompt ? `<p class="cg-card-prompt">${prompt}</p>` : '') +
-        `<div class="cg-card-meta">${effectStr} · ${isActive ? 'loaded' : dateStr}</div>` +
+        `<div class="cg-card-meta">${metaStr}</div>` +
         deviceIconsHtml +
         `</div>`
     );
@@ -1304,7 +1366,10 @@ function renderStreamSections(): void {
 
     // Lazy icon regen (deduplicated across sections)
     for (const entry of index) {
-        if (!seenForRegen.has(entry.id) && (!entry.iconSvg || !entry.iconSvg.includes('data-v="10"'))) {
+        const needsRegen = !entry.iconSvg || !entry.iconSvg.includes('data-v="10"');
+        // Wide cards with a narrow-format icon need regen for panoramic thumbnail
+        const needsWideRegen = isWideCard(entry) && entry.iconSvg && !entry.iconSvg.includes('viewBox="0 0 400');
+        if (!seenForRegen.has(entry.id) && (needsRegen || needsWideRegen)) {
             const iconEl = _gridEl.querySelector(
                 `.cg-card[data-cycle-id="${CSS.escape(entry.id)}"] .cg-card-icon`,
             ) as HTMLElement | null;
@@ -2149,8 +2214,20 @@ async function regenIconsSequentially(queue: { entry: SavedCycleIndexEntry; el: 
         try {
             const bundle = await loadCycleBundle(entry.id);
             if (!bundle) continue;
-            const svg = generateCycleIconFromBundle(bundle);
-            if (!svg) continue;
+            const wide = isWideCard(entry);
+            const svg = wide ? generateWideIconFromBundle(bundle) : generateCycleIconFromBundle(bundle);
+            if (!svg) {
+                // Fallback for wide: try narrow generator
+                if (wide) {
+                    const fallback = generateCycleIconFromBundle(bundle);
+                    if (fallback) {
+                        el.innerHTML = fallback;
+                        entry.iconSvg = fallback;
+                        await patchCycle(entry.id, { iconSvg: fallback });
+                    }
+                }
+                continue;
+            }
             el.innerHTML = svg;
             entry.iconSvg = svg;
             await patchCycle(entry.id, { iconSvg: svg });
