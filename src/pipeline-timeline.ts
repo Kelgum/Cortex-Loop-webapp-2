@@ -229,6 +229,12 @@ function mapLane(stageClass: string): PipelineLaneId | null {
             return 'referee';
         case 'agent-match-model':
             return 'agent-match';
+        case 'extended-strategist':
+            return 'strategist';
+        case 'extended-intervention':
+            return 'chess-player';
+        case 'extended-sherlock':
+            return 'sherlock';
         default:
             return null;
     }
@@ -254,6 +260,9 @@ function mapSubstep(entry: any): string {
     if (stageClass === 'strategist-bio-daily-model') return 'Bio Correct';
     if (stageClass === 'grandmaster-daily-model') return 'Protocols';
     if (stageClass === 'referee-model') return 'Stacking Fix';
+    if (stageClass === 'extended-strategist') return 'Ext Curves';
+    if (stageClass === 'extended-intervention') return 'Ext Protocol';
+    if (stageClass === 'extended-sherlock') return 'Ext Narration';
     return stage || 'Step';
 }
 

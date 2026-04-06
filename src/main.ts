@@ -57,9 +57,14 @@ import {
     callExtendedSherlock,
 } from './llm-pipeline';
 import {
-    validateInterventions, computeIncrementalLxOverlay, animateSequentialLxReveal,
-    renderLxCurves, renderSubstanceTimeline, revealTimelinePillsInstant,
-    renderLxBandsStatic, animatePhaseChartViewBoxHeight,
+    validateInterventions,
+    computeIncrementalLxOverlay,
+    animateSequentialLxReveal,
+    renderLxCurves,
+    renderSubstanceTimeline,
+    revealTimelinePillsInstant,
+    renderLxBandsStatic,
+    animatePhaseChartViewBoxHeight,
 } from './lx-system';
 import {
     showBiometricTrigger,
@@ -73,7 +78,13 @@ import {
     showWeekSequenceButton,
 } from './biometric';
 import { BiometricState, RevisionState, SherlockState } from './state';
-import { clearNarration, hideNarrationPanel, showLxStepControls } from './sherlock';
+import {
+    clearNarration,
+    hideNarrationPanel,
+    showLxStepControls,
+    showNarrationPanel,
+    showSherlockExtendedStack,
+} from './sherlock';
 import { cleanupBaselineEditor } from './baseline-editor';
 import { DebugLog } from './debug-panel';
 import {
@@ -85,7 +96,12 @@ import {
 import { extractCurvesData, extractInterventionsData, extractTimeHorizon } from './llm-response-shape';
 import { renderExtendedChart, clearExtendedChart } from './chart-extended';
 import type { TimeHorizon } from './types';
-import { normalizeSherlockNarration } from './sherlock-narration';
+import {
+    normalizeSherlockNarration,
+    normalizeSherlockExtendedNarration,
+    buildFallbackSherlockExtended,
+} from './sherlock-narration';
+import type { ProtocolPhaseInfo } from './sherlock-narration';
 import { describeStageClasses, reconcileEnabledCacheDependencies } from './cache-policy';
 import { initAnalogyOverlay } from './analogy-overlay';
 
@@ -871,12 +887,7 @@ configureBiometricRuntime({
         TimelineState.cursor = buildPhase3BioCorrectionSegments(timelineEngine, TimelineState.cursor);
         _bioCorrectionEndTime = TimelineState.cursor;
         engine.advanceTimeTo(correctionStartTime);
-        startBioCorrectionPlayheadTracker(
-            engine,
-            correctionStartTime,
-            BIO_CORRECTION_MORPH_MS,
-            _bioCorrectionEndTime,
-        );
+        startBioCorrectionPlayheadTracker(engine, correctionStartTime, BIO_CORRECTION_MORPH_MS, _bioCorrectionEndTime);
     },
     onBioCorrectionStop: () => {
         const engine = TimelineState.engine;
@@ -925,11 +936,7 @@ configureBiometricRuntime({
 // EXTENDED TIMELINE PIPELINE
 // ============================================
 
-async function runExtendedPipeline(
-    prompt: string,
-    timeHorizon: TimeHorizon,
-    _engine: any,
-): Promise<void> {
+async function runExtendedPipeline(prompt: string, timeHorizon: TimeHorizon, _engine: any): Promise<void> {
     const { durationDays } = timeHorizon;
     const svg = document.getElementById('phase-chart-svg') as unknown as SVGSVGElement;
 
@@ -937,11 +944,20 @@ async function runExtendedPipeline(
 
     // Clear ALL daily-specific SVG groups so we start with a clean chart
     const groupsToClear = [
-        'phase-x-axis', 'phase-y-axis-left', 'phase-y-axis-right',
-        'phase-grid', 'phase-baseline-curves', 'phase-desired-curves',
-        'phase-lx-curves', 'phase-substance-timeline', 'phase-scan-line',
-        'phase-mission-arrows', 'phase-word-cloud', 'phase-biometric-strips',
-        'phase-spotter-highlights', 'phase-legend',
+        'phase-x-axis',
+        'phase-y-axis-left',
+        'phase-y-axis-right',
+        'phase-grid',
+        'phase-baseline-curves',
+        'phase-desired-curves',
+        'phase-lx-curves',
+        'phase-substance-timeline',
+        'phase-scan-line',
+        'phase-mission-arrows',
+        'phase-word-cloud',
+        'phase-biometric-strips',
+        'phase-spotter-highlights',
+        'phase-legend',
     ];
     for (const id of groupsToClear) {
         const g = svg.getElementById(id) || document.getElementById(id);
@@ -965,9 +981,16 @@ async function runExtendedPipeline(
     loadingText.setAttribute('font-size', '12');
     loadingText.setAttribute('font-weight', '500');
     loadingText.setAttribute('letter-spacing', '0.1em');
-    loadingText.textContent = `DESIGNING ${durationDays}-DAY PROTOCOL...`;
+    loadingText.textContent = `MAPPING ${durationDays}-DAY LANDSCAPE...`;
     loadingGroup.appendChild(loadingText);
     svg.appendChild(loadingGroup);
+
+    // Helper to update loading indicator text
+    const updateLoadingText = (msg: string) => {
+        const el = svg.getElementById('extended-loading');
+        const txt = el?.querySelector('text');
+        if (txt) txt.textContent = msg;
+    };
 
     // ── Step 1: Call Extended Strategist ──
     PhaseState.phase = 'loading';
@@ -1012,14 +1035,10 @@ async function runExtendedPipeline(
     PhaseState.viewingPhase = 2;
 
     // ── Step 3: Call Extended Chess Player ──
+    updateLoadingText(`DESIGNING ${durationDays}-DAY PROTOCOL...`);
     let extInterventionResult: any;
     try {
-        extInterventionResult = await callExtendedIntervention(
-            prompt,
-            durationDays,
-            effectRoster,
-            phaseSpotlights,
-        );
+        extInterventionResult = await callExtendedIntervention(prompt, durationDays, effectRoster, phaseSpotlights);
     } catch (err) {
         console.error('[Extended Pipeline] Extended Chess Player failed:', err);
         // Still show curves even if intervention fails
@@ -1048,21 +1067,44 @@ async function runExtendedPipeline(
     PhaseState.maxPhaseReached = 2;
     PhaseState.viewingPhase = 2;
 
-    // ── Step 5: Call Extended Sherlock (non-blocking narration) ──
-    callExtendedSherlock(
-        prompt,
-        durationDays,
-        effectRoster,
-        phaseSpotlights,
-        interventions,
-        protocolPhases,
-    ).then((narrationResult) => {
-        if (narrationResult?.beats) {
-            console.log(`[Extended Pipeline] Sherlock narration: ${narrationResult.beats.length} phase beats`);
+    // ── Step 5: Call Extended Sherlock — await and display narration ──
+    // Build phase info for normalization/fallback
+    const phases: ProtocolPhaseInfo[] = (protocolPhases.length > 0 ? protocolPhases : phaseSpotlights).map(
+        (p: any) => ({
+            name: p.name || p.phase || 'Phase',
+            startDay: p.startDay ?? 1,
+            endDay: p.endDay ?? durationDays,
+        }),
+    );
+
+    let sherlockNarrationResult: any = null;
+    try {
+        sherlockNarrationResult = await callExtendedSherlock(
+            prompt,
+            durationDays,
+            effectRoster,
+            phaseSpotlights,
+            interventions,
+            protocolPhases,
+        );
+        if (sherlockNarrationResult?.beats) {
+            console.log(`[Extended Pipeline] Sherlock narration: ${sherlockNarrationResult.beats.length} phase beats`);
         }
-    }).catch((err) => {
+    } catch (err) {
         console.warn('[Extended Pipeline] Extended Sherlock failed (non-critical):', err);
-    });
+    }
+
+    // Normalize and display Sherlock narration in the side panel
+    const normalized = normalizeSherlockExtendedNarration(sherlockNarrationResult, phases, SherlockState.enabled);
+    if (normalized.narration) {
+        showNarrationPanel();
+        showSherlockExtendedStack(normalized.narration.beats, 0);
+    } else if (SherlockState.enabled && phases.length > 0) {
+        // Fallback: show basic phase cards even if LLM failed
+        const fallback = buildFallbackSherlockExtended(phases);
+        showNarrationPanel();
+        showSherlockExtendedStack(fallback.beats, 0);
+    }
 
     // Finalize LLM cache so the cycle can be saved
     LLMCache.markFlowComplete();
@@ -1325,8 +1367,7 @@ export async function handlePromptSubmit(e) {
                     cyclical: `${PhaseState.timeHorizon.durationDays}-Day Cycle`,
                     program: `${PhaseState.timeHorizon.durationDays}-Day Program`,
                 };
-                badgeEl.innerHTML =
-                    `<span class="badge-icon">\u{1F4C5}</span>${modeLabels[PhaseState.timeHorizon.mode] || ''}`;
+                badgeEl.innerHTML = `<span class="badge-icon">\u{1F4C5}</span>${modeLabels[PhaseState.timeHorizon.mode] || ''}`;
                 badgeEl.classList.remove('hidden');
                 requestAnimationFrame(() => badgeEl.classList.add('visible'));
             }
@@ -1989,11 +2030,7 @@ function buildVisualControlsMarkup(mode: SettingsVisualMode): string {
     ].join('');
 }
 
-function bindVisualSlider(
-    sliderId: string,
-    onInput: (value: number) => void,
-    valueId = `${sliderId}-value`,
-): void {
+function bindVisualSlider(sliderId: string, onInput: (value: number) => void, valueId = `${sliderId}-value`): void {
     const slider = document.getElementById(sliderId) as HTMLInputElement | null;
     const valueEl = document.getElementById(valueId);
     if (!slider || !valueEl) return;

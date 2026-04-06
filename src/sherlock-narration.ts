@@ -6,6 +6,8 @@ import type {
     RevisionNarrationBeat,
     Sherlock7DBeat,
     Sherlock7DNarration,
+    SherlockExtendedBeat,
+    SherlockExtendedNarration,
     SherlockNarration,
     SherlockRevisionNarration,
 } from './types';
@@ -333,5 +335,98 @@ export function normalizeSherlock7DNarration(
         status,
         modelBeatCount,
         fallbackBeatCount,
+    };
+}
+
+// ── Sherlock Extended normalization ──
+
+const DEFAULT_SHERLOCK_EXTENDED_OUTRO = 'The protocol evolves with you. Every phase has a purpose.';
+
+export interface ProtocolPhaseInfo {
+    name: string;
+    startDay: number;
+    endDay: number;
+}
+
+export function normalizeSherlockExtendedNarration(
+    raw: unknown,
+    phases: ProtocolPhaseInfo[],
+    enabled: boolean,
+): SherlockNormalizationResult<SherlockExtendedNarration> {
+    if (!enabled || !raw) {
+        return { narration: null, status: 'disabled-or-empty', modelBeatCount: 0, fallbackBeatCount: 0 };
+    }
+
+    const base = raw as any;
+    const rawBeats: unknown[] = Array.isArray(base.beats) ? base.beats : [];
+
+    let modelBeatCount = 0;
+    let fallbackBeatCount = 0;
+
+    const beats: SherlockExtendedBeat[] = [];
+    for (const phase of phases) {
+        const rawBeat = rawBeats.find((b: any) => b && (b.phase === phase.name || b.startDay === phase.startDay));
+
+        if (rawBeat && typeof rawBeat === 'object') {
+            const rb = rawBeat as any;
+            const text = extractSherlockBeatText(rb);
+            if (text) {
+                modelBeatCount++;
+                beats.push({
+                    phase: phase.name,
+                    startDay: phase.startDay,
+                    endDay: phase.endDay,
+                    text,
+                    direction: rb.direction === 'up' || rb.direction === 'down' ? rb.direction : 'neutral',
+                    keySubstances: typeof rb.keySubstances === 'string' ? rb.keySubstances : '',
+                    spotlightEffects: Array.isArray(rb.spotlightEffects) ? rb.spotlightEffects : [],
+                });
+                continue;
+            }
+        }
+
+        // Fallback beat
+        fallbackBeatCount++;
+        beats.push({
+            phase: phase.name,
+            startDay: phase.startDay,
+            endDay: phase.endDay,
+            text: `${phase.name} phase — days ${phase.startDay} to ${phase.endDay}.`,
+            direction: 'neutral',
+            keySubstances: '',
+            spotlightEffects: [],
+        });
+    }
+
+    if (beats.length === 0) {
+        return { narration: null, status: 'disabled-or-empty', modelBeatCount: 0, fallbackBeatCount: 0 };
+    }
+
+    const status: SherlockNormalizationStatus =
+        modelBeatCount === 0 ? 'full-fallback' : fallbackBeatCount === 0 ? 'full-model' : 'partial-fallback';
+
+    return {
+        narration: {
+            beats,
+            outro: normalizeOutro(base.outro, DEFAULT_SHERLOCK_EXTENDED_OUTRO),
+        },
+        status,
+        modelBeatCount,
+        fallbackBeatCount,
+    };
+}
+
+export function buildFallbackSherlockExtended(phases: ProtocolPhaseInfo[]): SherlockExtendedNarration {
+    return {
+        beats: phases.map(p => ({
+            phase: p.name,
+            startDay: p.startDay,
+            endDay: p.endDay,
+            text: `${p.name} phase — days ${p.startDay} to ${p.endDay}.`,
+            direction: 'neutral' as const,
+            keySubstances: '',
+            spotlightEffects: [],
+        })),
+        outro: DEFAULT_SHERLOCK_EXTENDED_OUTRO,
     };
 }
