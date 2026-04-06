@@ -1013,3 +1013,53 @@ function interpolateDay(points: { day: number; value: number }[], targetDay: num
     }
     return points[points.length - 1].value;
 }
+
+// ============================================
+// INCREMENTAL EXTENDED LX OVERLAY — Per-Substance Snapshots
+// ============================================
+
+/**
+ * Compute incremental Lx overlay snapshots for extended timelines.
+ * Groups interventions by substance key, sorts by earliest start day,
+ * then computes cumulative overlay for each step.
+ *
+ * Returns one snapshot per substance group where each snapshot contains
+ * overlay curves with all substances up to and including that step.
+ */
+export function computeIncrementalExtendedLxOverlay(
+    effectRoster: {
+        effect: string;
+        baseline: { day: number; value: number }[];
+        desired: { day: number; value: number }[];
+        polarity?: string;
+    }[],
+    interventions: any[],
+    durationDays: number,
+): { step: any[]; overlay: { effect: string; points: { day: number; value: number }[] }[] }[] {
+    // Group by substance key
+    const groups = new Map<string, typeof interventions>();
+    for (const iv of interventions) {
+        const list = groups.get(iv.key) || [];
+        list.push(iv);
+        groups.set(iv.key, list);
+    }
+
+    // Sort groups by earliest start day
+    const sortedGroups = [...groups.entries()].sort(
+        (a, b) => Math.min(...a[1].map(iv => iv.day)) - Math.min(...b[1].map(iv => iv.day)),
+    );
+
+    // Build incremental snapshots
+    const snapshots: { step: any[]; overlay: { effect: string; points: { day: number; value: number }[] }[] }[] = [];
+    const accumulated: any[] = [];
+
+    for (const [_key, entries] of sortedGroups) {
+        accumulated.push(...entries);
+        const raw = computeExtendedLxOverlay(effectRoster, accumulated, durationDays);
+        // Map 'overlay' field to 'points' to match ExtendedLxSnapshot type
+        const overlay = raw.map(r => ({ effect: r.effect, points: r.overlay }));
+        snapshots.push({ step: entries, overlay });
+    }
+
+    return snapshots;
+}
