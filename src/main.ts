@@ -94,7 +94,8 @@ import {
     reportRuntimeCacheWarning,
 } from './runtime-error-banner';
 import { extractCurvesData, extractInterventionsData, extractTimeHorizon } from './llm-response-shape';
-import { renderExtendedChart, clearExtendedChart } from './chart-extended';
+import { renderExtendedChart, clearExtendedChart, renderExtendedPhaseA, revealExtendedDesired, revealExtendedSubstances } from './chart-extended';
+import { computeIncrementalExtendedLxOverlay } from './lx-compute';
 import type { TimeHorizon } from './types';
 import {
     normalizeSherlockNarration,
@@ -1021,9 +1022,22 @@ async function runExtendedPipeline(prompt: string, timeHorizon: TimeHorizon, _en
     const loadingEl = svg.getElementById('extended-loading');
     if (loadingEl) loadingEl.remove();
 
-    // ── Step 2: Render extended chart with curves ──
+    // ── Phase A: Baseline curves only ──
     clearExtendedChart(svg);
-    renderExtendedChart({
+    renderExtendedPhaseA({
+        svg,
+        durationDays,
+        effectRoster,
+        phaseSpotlights,
+    });
+
+    PhaseState.phase = 'baseline-shown';
+    PhaseState.maxPhaseReached = 1;
+    PhaseState.viewingPhase = 1;
+
+    // ── Phase B: Desired curves fade in (after brief pause) ──
+    await sleep(400);
+    await revealExtendedDesired({
         svg,
         durationDays,
         effectRoster,
@@ -1052,15 +1066,18 @@ async function runExtendedPipeline(prompt: string, timeHorizon: TimeHorizon, _en
 
     console.log(`[Extended Pipeline] Got ${interventions.length} interventions, ${protocolPhases.length} phases`);
 
-    // ── Step 4: Re-render chart with interventions ──
-    clearExtendedChart(svg);
-    renderExtendedChart({
+    // ── Phase C: Sequential substance reveal ──
+    const lxSnapshots = computeIncrementalExtendedLxOverlay(effectRoster, interventions, durationDays);
+    console.log(`[Extended Pipeline] Computed ${lxSnapshots.length} incremental Lx snapshots`);
+
+    await revealExtendedSubstances({
         svg,
         durationDays,
         effectRoster,
         phaseSpotlights,
         interventions,
         protocolPhases: protocolPhases.length > 0 ? protocolPhases : undefined,
+        lxSnapshots,
     });
 
     PhaseState.phase = 'lx-rendered';

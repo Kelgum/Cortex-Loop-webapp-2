@@ -354,6 +354,11 @@ export interface ExtendedInterventionResult {
     protocolPhases: ProtocolPhase[];
 }
 
+export interface ExtendedLxSnapshot {
+    step: ExtendedInterventionEntry[];
+    overlay: { effect: string; points: { day: number; value: number }[] }[];
+}
+
 // -- Narration (Sherlock Extended — per-phase summary for extended timelines) --
 
 export interface SherlockExtendedBeat {

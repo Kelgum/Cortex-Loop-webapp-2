@@ -5,14 +5,17 @@
  * Depends on: constants, utils, types, substances
  */
 import { PHASE_CHART, getExtendedChartConfig } from './constants';
-import { svgEl, extendedChartX, extendedChartY, isLightMode, parseDoseToMg } from './utils';
+import { svgEl, extendedChartX, extendedChartY, isLightMode, parseDoseToMg, sleep } from './utils';
 import { resolveSubstance } from './substances';
+import { animateSvgOpacity } from './svg-animate';
+import { isTurboActive } from './state';
 import type {
     ExtendedCurveData,
     ExtendedChartConfig,
     PhaseSpotlight,
     ProtocolPhase,
     ExtendedInterventionEntry,
+    ExtendedLxSnapshot,
 } from './types';
 
 // ── SVG group IDs used by extended chart ──
@@ -23,6 +26,8 @@ const GROUP_IDS = {
     curves: 'extended-curves',
     substanceBars: 'extended-substance-bars',
     yAxis: 'extended-y-axis',
+    lxOverlay: 'extended-lx-overlay',
+    lxBands: 'extended-lx-bands',
 };
 
 // ── Helpers ──
@@ -762,6 +767,576 @@ export function renderExtendedChart(opts: {
 
             rowIdx++;
         }
+    }
+}
+
+// ============================================
+// PHASED REVEAL FUNCTIONS
+// ============================================
+
+interface PhasedRenderOpts {
+    svg: SVGSVGElement;
+    durationDays: number;
+    effectRoster: ExtendedCurveData[];
+    phaseSpotlights: PhaseSpotlight[];
+    protocolPhases?: ProtocolPhase[];
+}
+
+/**
+ * Phase A: Render scaffolding + baseline curves only (dashed, dim).
+ * No desired curves, no AUC fills, no substance bars.
+ */
+export function renderExtendedPhaseA(opts: PhasedRenderOpts): void {
+    const { svg, durationDays, effectRoster, phaseSpotlights, protocolPhases } = opts;
+    const config = getExtendedChartConfig(durationDays);
+    const isLight = isLightMode();
+
+    // ViewBox — reserve space for up to 8 substance lanes
+    const viewH = Math.max(PHASE_CHART.viewH as number, config.padT + config.plotH + 160);
+    svg.setAttribute('viewBox', `0 0 ${config.viewW} ${viewH}`);
+
+    // Render scaffolding (sections 1-5 from renderExtendedChart)
+    _renderScaffolding(svg, config, durationDays, effectRoster, phaseSpotlights, protocolPhases);
+
+    // Render baseline curves only — dashed, reduced opacity
+    const gCurves = ensureGroup(svg, GROUP_IDS.curves);
+    for (const curve of effectRoster) {
+        const baselinePath = buildSmoothPath(curve.baseline, config);
+        if (!baselinePath) continue;
+        gCurves.appendChild(
+            svgEl('path', {
+                d: baselinePath,
+                fill: 'none',
+                stroke: curve.color,
+                'stroke-width': '3',
+                'stroke-dasharray': '6 4',
+                opacity: '0.35',
+                'pointer-events': 'none',
+                class: 'ext-baseline-path',
+            }),
+        );
+    }
+}
+
+/**
+ * Phase B: Fade in desired curves + AUC fills on top of baselines.
+ * Baselines dim further. Returns promise when animations complete.
+ */
+export async function revealExtendedDesired(opts: PhasedRenderOpts): Promise<void> {
+    const { svg, durationDays, effectRoster, phaseSpotlights } = opts;
+    const config = getExtendedChartConfig(durationDays);
+    const fadeDur = isTurboActive() ? 0 : 800;
+
+    const gCurves = svg.getElementById(GROUP_IDS.curves) as SVGGElement;
+    if (!gCurves) return;
+
+    // Ensure defs
+    let defs = svg.querySelector('defs');
+    if (!defs) {
+        defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+        svg.insertBefore(defs, svg.firstChild);
+    }
+
+    const fadeDays = 2;
+    const maskH = config.padT + config.plotH + 60;
+    const animPromises: Promise<void>[] = [];
+
+    // Dim baselines
+    gCurves.querySelectorAll('.ext-baseline-path').forEach((el: any) => {
+        animPromises.push(animateSvgOpacity(el, 0.35, 0.15, fadeDur));
+    });
+
+    for (let ei = 0; ei < effectRoster.length; ei++) {
+        const curve = effectRoster[ei];
+        const desiredPath = buildSmoothPath(curve.desired, config);
+        if (!desiredPath) continue;
+
+        // Build emphasis mask
+        const spotlightRanges = phaseSpotlights
+            .filter(ps => ps.effects.includes(curve.effect))
+            .map(ps => ({ start: ps.startDay, end: ps.endDay }));
+
+        const maskId = `ext-emphasis-mask-${ei}`;
+        defs.querySelector(`#${maskId}`)?.remove();
+        if (spotlightRanges.length > 0) {
+            const mask = document.createElementNS('http://www.w3.org/2000/svg', 'mask');
+            mask.id = maskId;
+            mask.setAttribute('maskUnits', 'userSpaceOnUse');
+            mask.setAttribute('x', '0');
+            mask.setAttribute('y', '0');
+            mask.setAttribute('width', String(config.viewW));
+            mask.setAttribute('height', String(maskH));
+            for (let ri = 0; ri < spotlightRanges.length; ri++) {
+                const range = spotlightRanges[ri];
+                const solidX1 = extendedChartX(range.start, config);
+                const solidX2 = extendedChartX(range.end, config);
+                const fadeInX = extendedChartX(Math.max(1, range.start - fadeDays), config);
+                const fadeOutX = extendedChartX(Math.min(durationDays, range.end + fadeDays), config);
+
+                const fiId = `ext-fi-${ei}-${ri}`;
+                const fiGrad = svgEl('linearGradient', { id: fiId, x1: String(fadeInX), y1: '0', x2: String(solidX1), y2: '0', gradientUnits: 'userSpaceOnUse' });
+                fiGrad.appendChild(svgEl('stop', { offset: '0', 'stop-color': 'white', 'stop-opacity': '0' }));
+                fiGrad.appendChild(svgEl('stop', { offset: '1', 'stop-color': 'white', 'stop-opacity': '1' }));
+                defs.appendChild(fiGrad);
+                mask.appendChild(svgEl('rect', { x: String(fadeInX), y: '0', width: String(Math.max(1, solidX1 - fadeInX)), height: String(maskH), fill: `url(#${fiId})` }));
+                mask.appendChild(svgEl('rect', { x: String(solidX1), y: '0', width: String(Math.max(1, solidX2 - solidX1)), height: String(maskH), fill: 'white' }));
+                const foId = `ext-fo-${ei}-${ri}`;
+                const foGrad = svgEl('linearGradient', { id: foId, x1: String(solidX2), y1: '0', x2: String(fadeOutX), y2: '0', gradientUnits: 'userSpaceOnUse' });
+                foGrad.appendChild(svgEl('stop', { offset: '0', 'stop-color': 'white', 'stop-opacity': '1' }));
+                foGrad.appendChild(svgEl('stop', { offset: '1', 'stop-color': 'white', 'stop-opacity': '0' }));
+                defs.appendChild(foGrad);
+                mask.appendChild(svgEl('rect', { x: String(solidX2), y: '0', width: String(Math.max(1, fadeOutX - solidX2)), height: String(maskH), fill: `url(#${foId})` }));
+            }
+            defs.appendChild(mask);
+        }
+
+        const maskRef = spotlightRanges.length > 0 ? `url(#${maskId})` : undefined;
+
+        // AUC fill (starts invisible)
+        if (curve.baseline.length > 0 && curve.desired.length > 0) {
+            const fillPath =
+                buildSmoothPath(curve.desired, config) +
+                ' L' + extendedChartX(curve.baseline[curve.baseline.length - 1].day, config).toFixed(1) +
+                ',' + extendedChartY(curve.baseline[curve.baseline.length - 1].value, config).toFixed(1) +
+                ' ' + buildSmoothPath([...curve.baseline].reverse(), config).replace(/^M/, 'L') + ' Z';
+            const fill = svgEl('path', {
+                d: fillPath, fill: curve.color, opacity: '0',
+                ...(maskRef ? { mask: maskRef } : {}), 'pointer-events': 'none',
+            });
+            gCurves.appendChild(fill);
+            animPromises.push(animateSvgOpacity(fill, 0, 0.10, fadeDur));
+        }
+
+        // Glow (starts invisible)
+        const glow = svgEl('path', {
+            d: desiredPath, fill: 'none', stroke: curve.color, 'stroke-width': '6', opacity: '0',
+            ...(maskRef ? { mask: maskRef } : {}), 'pointer-events': 'none',
+        });
+        gCurves.appendChild(glow);
+        animPromises.push(animateSvgOpacity(glow, 0, 0.12, fadeDur));
+
+        // Desired curve (starts invisible)
+        const desired = svgEl('path', {
+            d: desiredPath, fill: 'none', stroke: curve.color, 'stroke-width': '3', opacity: '0',
+            ...(maskRef ? { mask: maskRef } : {}), 'pointer-events': 'none',
+            class: 'ext-desired-path',
+        });
+        gCurves.appendChild(desired);
+        animPromises.push(animateSvgOpacity(desired, 0, 0.9, fadeDur));
+
+        // Base layer (dim everywhere)
+        const base = svgEl('path', {
+            d: desiredPath, fill: 'none', stroke: curve.color, 'stroke-width': '3', opacity: '0',
+            'pointer-events': 'none',
+        });
+        gCurves.appendChild(base);
+        animPromises.push(animateSvgOpacity(base, 0, 0.2, fadeDur));
+
+        // Effect label
+        if (curve.desired.length > 0) {
+            const lastPt = curve.desired[curve.desired.length - 1];
+            const label = svgEl('text', {
+                x: String(config.padL + config.plotW + 8),
+                y: String(extendedChartY(lastPt.value, config) + 3),
+                fill: curve.color, 'font-family': "'Space Grotesk', sans-serif",
+                'font-size': '11', 'font-weight': '600', opacity: '0',
+            });
+            label.textContent = curve.effect;
+            gCurves.appendChild(label);
+            animPromises.push(animateSvgOpacity(label, 0, 0.85, fadeDur));
+        }
+    }
+
+    await Promise.all(animPromises);
+}
+
+/**
+ * Phase C: Sequential substance reveal with incremental Lx overlay.
+ * Each substance fades in with its dose envelope and AUC contribution band.
+ */
+export async function revealExtendedSubstances(opts: PhasedRenderOpts & {
+    interventions: ExtendedInterventionEntry[];
+    lxSnapshots: ExtendedLxSnapshot[];
+}): Promise<void> {
+    const { svg, durationDays, effectRoster, interventions, protocolPhases, lxSnapshots } = opts;
+    const config = getExtendedChartConfig(durationDays);
+    const isLight = isLightMode();
+
+    // Expand viewBox for substance lanes
+    const substanceCount = new Set(interventions.map(iv => iv.key)).size;
+    const laneH = 16;
+    const laneGap = 2;
+    const substanceAreaHeight = 10 + substanceCount * (laneH + laneGap);
+    const viewH = Math.max(PHASE_CHART.viewH as number, config.padT + config.plotH + substanceAreaHeight + 10);
+    svg.setAttribute('viewBox', `0 0 ${config.viewW} ${viewH}`);
+
+    let defs = svg.querySelector('defs');
+    if (!defs) {
+        defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+        svg.insertBefore(defs, svg.firstChild);
+    }
+
+    const gSubstanceBars = ensureGroup(svg, GROUP_IDS.substanceBars);
+    const gLxOverlay = ensureGroup(svg, GROUP_IDS.lxOverlay);
+    const gLxBands = ensureGroup(svg, GROUP_IDS.lxBands);
+    const axisY = config.padT + config.plotH;
+    const barAreaTop = axisY + 6;
+
+    // Separator line
+    gSubstanceBars.appendChild(
+        svgEl('line', {
+            x1: String(config.padL), y1: String(axisY + 1),
+            x2: String(config.padL + config.plotW), y2: String(axisY + 1),
+            stroke: isLight ? 'rgba(80,110,150,0.3)' : 'rgba(146,186,255,0.2)',
+            'stroke-width': '0.75', 'pointer-events': 'none',
+        }),
+    );
+
+    // Create Lx overlay paths (start at baseline)
+    const lxPaths: SVGPathElement[] = [];
+    const currentOverlayPts: { day: number; value: number }[][] = [];
+    for (let ei = 0; ei < effectRoster.length; ei++) {
+        const curve = effectRoster[ei];
+        const baselinePts = curve.baseline;
+        currentOverlayPts.push([...baselinePts]);
+
+        const path = svgEl('path', {
+            d: buildSmoothPath(baselinePts, config),
+            fill: 'none',
+            stroke: curve.color,
+            'stroke-width': '3',
+            opacity: '0',
+            'stroke-dasharray': 'none',
+            'pointer-events': 'none',
+        }) as SVGPathElement;
+        gLxOverlay.appendChild(path);
+        lxPaths.push(path);
+    }
+
+    // Dim desired curves to make room for Lx overlay
+    const desiredPaths = svg.querySelectorAll('.ext-desired-path');
+    desiredPaths.forEach((el: any) => {
+        animateSvgOpacity(el, parseFloat(el.getAttribute('opacity') || '0.9'), 0.25, 400);
+    });
+
+    // Group interventions by substance key for lane assignment
+    const substanceOrder: string[] = [];
+    for (const snap of lxSnapshots) {
+        const key = snap.step[0]?.key;
+        if (key && !substanceOrder.includes(key)) substanceOrder.push(key);
+    }
+
+    let rowIdx = 0;
+    for (let si = 0; si < lxSnapshots.length; si++) {
+        const snapshot = lxSnapshots[si];
+        const key = snapshot.step[0]?.key;
+        if (!key) continue;
+
+        const sub = resolveSubstance(key, {});
+        const subName = sub ? sub.name : key.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const subColor = sub ? (sub.color || '#60a5fa') : '#60a5fa';
+        const regStatus = sub ? ((sub as any).regulatoryStatus || '').toLowerCase() : '';
+
+        // ── 1. Substance pill envelope fade-in ──
+        const laneY = barAreaTop + rowIdx * (laneH + laneGap);
+        const pillGroup = svgEl('g', { opacity: '0' });
+
+        // Lane stripe
+        if (rowIdx % 2 === 1) {
+            pillGroup.appendChild(svgEl('rect', {
+                x: String(config.padL), y: String(laneY),
+                width: String(config.plotW), height: String(laneH),
+                fill: isLight ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.02)',
+                'pointer-events': 'none',
+            }));
+        }
+
+        // Build dose envelope for this substance
+        const entries = snapshot.step;
+        const sorted = [...entries].sort((a, b) => a.day - b.day);
+        const doseAtDay = new Map<number, { doseMg: number; label: string }>();
+        let maxDoseMg = 0;
+        for (const entry of sorted) {
+            const baseMg = parseDoseToMg(entry.dose || '') ?? 100;
+            const effectiveMg = baseMg * (entry.doseMultiplier || 1.0);
+            const endDay = protocolPhases
+                ? (protocolPhases.find(p => p.name === entry.phase)?.endDay || durationDays)
+                : durationDays;
+            for (let d = entry.day; d <= endDay; d++) {
+                if (entry.frequency === 'alternate' && (d - entry.day) % 2 !== 0) continue;
+                doseAtDay.set(d, { doseMg: effectiveMg, label: entry.dose || '' });
+            }
+            if (effectiveMg > maxDoseMg) maxDoseMg = effectiveMg;
+        }
+        if (maxDoseMg <= 0) maxDoseMg = 100;
+
+        const activeDays = [...doseAtDay.keys()].sort((a, b) => a - b);
+        if (activeDays.length > 0) {
+            const laneBottom = laneY + laneH;
+            // Build contiguous runs
+            const runs: number[][] = [];
+            let currentRun = [activeDays[0]];
+            for (let i = 1; i < activeDays.length; i++) {
+                if (activeDays[i] === activeDays[i - 1] + 1) currentRun.push(activeDays[i]);
+                else { runs.push(currentRun); currentRun = [activeDays[i]]; }
+            }
+            runs.push(currentRun);
+
+            for (const run of runs) {
+                const x1 = extendedChartX(run[0] - 0.4, config);
+                const x2 = extendedChartX(run[run.length - 1] + 0.4, config);
+                const topPoints: { x: number; y: number }[] = [];
+                let prevDose = -1;
+                for (const day of run) {
+                    const info = doseAtDay.get(day)!;
+                    const frac = 0.25 + 0.75 * (info.doseMg / maxDoseMg);
+                    const topY = laneY + laneH * (1 - frac);
+                    if (prevDose >= 0 && Math.abs(info.doseMg - prevDose) > 0.01) {
+                        const rampX = extendedChartX(day - 0.5, config);
+                        const prevFrac = 0.25 + 0.75 * (prevDose / maxDoseMg);
+                        topPoints.push({ x: rampX, y: laneY + laneH * (1 - prevFrac) });
+                    }
+                    topPoints.push({ x: extendedChartX(day, config), y: topY });
+                    prevDose = info.doseMg;
+                }
+                if (topPoints.length === 0) continue;
+                const ftY = topPoints[0].y;
+                const ltY = topPoints[topPoints.length - 1].y;
+                let fillD = `M${x1.toFixed(1)},${laneBottom.toFixed(1)} L${x1.toFixed(1)},${ftY.toFixed(1)}`;
+                for (const pt of topPoints) fillD += ` L${pt.x.toFixed(1)},${pt.y.toFixed(1)}`;
+                fillD += ` L${x2.toFixed(1)},${ltY.toFixed(1)} L${x2.toFixed(1)},${laneBottom.toFixed(1)} Z`;
+                pillGroup.appendChild(svgEl('path', { d: fillD, fill: subColor, 'fill-opacity': '0.22', 'pointer-events': 'none' }));
+                let strokeD = `M${x1.toFixed(1)},${laneBottom.toFixed(1)} L${x1.toFixed(1)},${ftY.toFixed(1)}`;
+                for (const pt of topPoints) strokeD += ` L${pt.x.toFixed(1)},${pt.y.toFixed(1)}`;
+                strokeD += ` L${x2.toFixed(1)},${ltY.toFixed(1)} L${x2.toFixed(1)},${laneBottom.toFixed(1)}`;
+                pillGroup.appendChild(svgEl('path', { d: strokeD, fill: 'none', stroke: subColor, 'stroke-opacity': '0.55', 'stroke-width': '0.75', 'pointer-events': 'none' }));
+            }
+
+            // Dose annotations
+            let lastLabel = '';
+            for (const day of activeDays) {
+                const info = doseAtDay.get(day)!;
+                if (info.label !== lastLabel) {
+                    const annY = Math.min(laneY + laneH * (1 - (0.25 + 0.75 * (info.doseMg / maxDoseMg))) + 9, laneY + laneH - 2);
+                    pillGroup.appendChild(svgEl('text', {
+                        x: String(extendedChartX(day, config) + (day === activeDays[0] ? 4 : 0)),
+                        y: String(annY),
+                        fill: isLight ? 'rgba(20,30,50,0.8)' : 'rgba(255,255,255,0.75)',
+                        'font-family': "'IBM Plex Mono', monospace", 'font-size': '7', 'font-weight': '500',
+                    })).textContent = info.label;
+                    lastLabel = info.label;
+                }
+            }
+        }
+
+        // Left-side pill label
+        const pillW = config.padL - 20;
+        const shortName = subName.length > 16 ? subName.slice(0, 14) + '..' : subName;
+        pillGroup.appendChild(svgEl('rect', {
+            x: '10', y: String(laneY), width: String(pillW), height: String(laneH),
+            rx: '3', ry: '3', fill: subColor, 'fill-opacity': '0.22',
+            stroke: subColor, 'stroke-opacity': '0.45', 'stroke-width': '0.75',
+        }));
+        const nameLabel = svgEl('text', {
+            x: '15', y: String(laneY + laneH / 2 + 3),
+            fill: isLight ? 'rgba(20,30,50,0.95)' : 'rgba(255,255,255,0.92)',
+            'font-family': "'IBM Plex Mono', monospace", 'font-size': '9', 'font-weight': '500',
+        });
+        nameLabel.textContent = shortName;
+        if (regStatus === 'rx' || regStatus === 'controlled') {
+            const rx = svgEl('tspan', { fill: '#e11d48', 'font-size': '7', 'font-weight': '700', dy: '-0.5' });
+            rx.textContent = ' Rx';
+            nameLabel.appendChild(rx);
+        }
+        pillGroup.appendChild(nameLabel);
+        gSubstanceBars.appendChild(pillGroup);
+
+        // Fade pill in
+        await animateSvgOpacity(pillGroup, 0, 1, isTurboActive() ? 0 : 400);
+
+        // ── 2. Morph Lx overlay curves ──
+        const morphDur = isTurboActive() ? 0 : 600;
+        const morphPromises: Promise<void>[] = [];
+        for (let ei = 0; ei < effectRoster.length; ei++) {
+            const targetPts = snapshot.overlay[ei]?.points || currentOverlayPts[ei];
+            morphPromises.push(_morphPath(lxPaths[ei], currentOverlayPts[ei], targetPts, config, morphDur));
+            // Show Lx paths on first substance
+            if (si === 0) {
+                animateSvgOpacity(lxPaths[ei], 0, 0.85, morphDur);
+            }
+            currentOverlayPts[ei] = targetPts;
+        }
+
+        // ── 3. AUC contribution band (wide fade-in) ──
+        if (activeDays.length > 0) {
+            const prevOverlay = si > 0 ? lxSnapshots[si - 1].overlay : null;
+            for (let ei = 0; ei < effectRoster.length; ei++) {
+                const newPts = snapshot.overlay[ei]?.points || [];
+                const oldPts = prevOverlay ? (prevOverlay[ei]?.points || effectRoster[ei].baseline) : effectRoster[ei].baseline;
+                if (newPts.length > 0 && oldPts.length > 0) {
+                    const bandPath =
+                        buildSmoothPath(newPts, config) +
+                        ' L' + extendedChartX(oldPts[oldPts.length - 1].day, config).toFixed(1) +
+                        ',' + extendedChartY(oldPts[oldPts.length - 1].value, config).toFixed(1) +
+                        ' ' + buildSmoothPath([...oldPts].reverse(), config).replace(/^M/, 'L') + ' Z';
+                    const band = svgEl('path', {
+                        d: bandPath, fill: subColor, opacity: '0', 'pointer-events': 'none',
+                    });
+                    gLxBands.appendChild(band);
+                    morphPromises.push(animateSvgOpacity(band, 0, 0.15, isTurboActive() ? 0 : 500));
+                }
+            }
+        }
+
+        await Promise.all(morphPromises);
+        if (si < lxSnapshots.length - 1) await sleep(800);
+        rowIdx++;
+    }
+}
+
+/** rAF-based path morph between two point arrays. */
+function _morphPath(
+    pathEl: SVGPathElement,
+    fromPts: { day: number; value: number }[],
+    toPts: { day: number; value: number }[],
+    config: ExtendedChartConfig,
+    durationMs: number,
+): Promise<void> {
+    if (durationMs <= 0 || isTurboActive()) {
+        pathEl.setAttribute('d', buildSmoothPath(toPts, config));
+        return Promise.resolve();
+    }
+    const start = performance.now();
+    const len = Math.min(fromPts.length, toPts.length);
+    return new Promise<void>(resolve => {
+        (function tick(now: number) {
+            const rawT = Math.min(1, (now - start) / durationMs);
+            const t = rawT * rawT * (3 - 2 * rawT); // smoothstep
+            const interp: { day: number; value: number }[] = [];
+            for (let i = 0; i < len; i++) {
+                interp.push({
+                    day: fromPts[i].day,
+                    value: fromPts[i].value + (toPts[i].value - fromPts[i].value) * t,
+                });
+            }
+            pathEl.setAttribute('d', buildSmoothPath(interp, config));
+            if (rawT < 1) requestAnimationFrame(tick);
+            else resolve();
+        })(performance.now());
+    });
+}
+
+/** Internal: render scaffolding (sections 1-5). Extracted for reuse by Phase A. */
+function _renderScaffolding(
+    svg: SVGSVGElement,
+    config: ExtendedChartConfig,
+    durationDays: number,
+    effectRoster: ExtendedCurveData[],
+    phaseSpotlights: PhaseSpotlight[],
+    protocolPhases?: ProtocolPhase[],
+): void {
+    const isLight = isLightMode();
+    const gDayBands = ensureGroup(svg, GROUP_IDS.dayBands);
+    const gPhaseBands = ensureGroup(svg, GROUP_IDS.phaseBands);
+    const gAxes = ensureGroup(svg, GROUP_IDS.axes);
+    const gYAxis = ensureGroup(svg, GROUP_IDS.yAxis);
+
+    // 1. Day column bands
+    for (let d = config.startUnit; d <= config.endUnit; d++) {
+        const x1 = extendedChartX(d - 0.5, config);
+        const x2 = extendedChartX(d + 0.5, config);
+        if (d % 2 === 0) {
+            gDayBands.appendChild(svgEl('rect', {
+                x: String(Math.max(x1, config.padL)), y: String(config.padT),
+                width: String(Math.min(x2 - x1, config.padL + config.plotW - Math.max(x1, config.padL))),
+                height: String(config.plotH),
+                fill: isLight ? 'rgba(0,0,0,0.025)' : 'rgba(255,255,255,0.02)', 'pointer-events': 'none',
+            }));
+        }
+    }
+
+    // 2. Phase boundary dividers
+    const allPhases = protocolPhases || phaseSpotlights;
+    for (let pi = 1; pi < allPhases.length; pi++) {
+        const x = extendedChartX(allPhases[pi].startDay - 0.5, config);
+        gDayBands.appendChild(svgEl('line', {
+            x1: String(x), y1: String(config.padT), x2: String(x), y2: String(config.padT + config.plotH),
+            stroke: isLight ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.08)',
+            'stroke-width': '1', 'stroke-dasharray': '4 4', 'pointer-events': 'none',
+        }));
+    }
+
+    // 3. Phase bands with effect dots
+    const phaseBandY = 2;
+    const phaseBandH = 14;
+    for (const phase of allPhases) {
+        const x1 = extendedChartX(phase.startDay - 0.5, config);
+        const x2 = extendedChartX(phase.endDay + 0.5, config);
+        const phaseXL = Math.max(x1, config.padL);
+        const w = Math.max(0, Math.min(x2, config.padL + config.plotW) - phaseXL);
+        const color = phase.color || '#60a5fa';
+        gPhaseBands.appendChild(svgEl('rect', {
+            x: String(phaseXL), y: String(phaseBandY), width: String(w), height: String(phaseBandH),
+            fill: color, opacity: isLight ? '0.12' : '0.18', rx: '3', 'pointer-events': 'none',
+        }));
+        const spotEffects = 'effects' in phase ? (phase as PhaseSpotlight).effects : [];
+        const cx = phaseXL + w / 2;
+        if (w > 30) {
+            const name = ('name' in phase ? (phase as ProtocolPhase).name : phase.phase).toUpperCase();
+            gPhaseBands.appendChild(svgEl('text', {
+                x: String(cx), y: String(phaseBandY + 10),
+                fill: isLight ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.65)', 'text-anchor': 'middle',
+                'font-family': "'IBM Plex Mono', monospace", 'font-size': '7', 'font-weight': '600', 'letter-spacing': '0.05em',
+            })).textContent = name;
+            const dotX = cx + name.length * 2.2 + 6;
+            for (let si = 0; si < spotEffects.length; si++) {
+                const effColor = effectRoster.find(c => c.effect === spotEffects[si])?.color || color;
+                gPhaseBands.appendChild(svgEl('circle', {
+                    cx: String(dotX + si * 8), cy: String(phaseBandY + 7), r: '2.5',
+                    fill: effColor, opacity: '0.7', 'pointer-events': 'none',
+                }));
+            }
+        }
+    }
+
+    // 4. X-axis day labels
+    const axisY = config.padT + config.plotH;
+    const dayLabelY = phaseBandY + phaseBandH + 12;
+    gAxes.appendChild(svgEl('line', {
+        x1: String(config.padL), y1: String(axisY), x2: String(config.padL + config.plotW), y2: String(axisY),
+        stroke: isLight ? 'rgba(0,0,0,0.15)' : 'rgba(174,201,237,0.12)', 'stroke-width': '0.5',
+    }));
+    gAxes.appendChild(svgEl('line', {
+        x1: String(config.padL), y1: String(config.padT), x2: String(config.padL + config.plotW), y2: String(config.padT),
+        stroke: isLight ? 'rgba(0,0,0,0.15)' : 'rgba(174,201,237,0.12)', 'stroke-width': '0.5',
+    }));
+    const skip = durationDays > 14 ? 2 : 1;
+    for (let d = config.startUnit; d <= config.endUnit; d++) {
+        if (skip > 1 && d % skip !== 1 && d !== config.endUnit) continue;
+        const x = extendedChartX(d, config);
+        gAxes.appendChild(svgEl('line', {
+            x1: String(x), y1: String(config.padT - 4), x2: String(x), y2: String(config.padT),
+            stroke: isLight ? 'rgba(0,0,0,0.15)' : 'rgba(174,201,237,0.2)', 'stroke-width': '0.5',
+        }));
+        gAxes.appendChild(svgEl('text', {
+            x: String(x), y: String(dayLabelY),
+            fill: isLight ? 'rgba(0,0,0,0.45)' : 'rgba(174,201,237,0.55)', 'text-anchor': 'middle',
+            'font-family': "'IBM Plex Mono', monospace", 'font-size': durationDays > 14 ? '7.5' : '8.5', 'font-weight': '400',
+        })).textContent = `${d}`;
+    }
+
+    // 5. Y-axis
+    for (const val of [0, 25, 50, 75, 100]) {
+        const y = extendedChartY(val, config);
+        gYAxis.appendChild(svgEl('line', {
+            x1: String(config.padL), y1: String(y), x2: String(config.padL + config.plotW), y2: String(y),
+            stroke: isLight ? 'rgba(0,0,0,0.06)' : 'rgba(174,201,237,0.06)', 'stroke-width': '0.5', 'pointer-events': 'none',
+        }));
+        gYAxis.appendChild(svgEl('text', {
+            x: String(config.padL - 8), y: String(y + 3),
+            fill: isLight ? 'rgba(0,0,0,0.4)' : 'rgba(174,201,237,0.5)', 'text-anchor': 'end',
+            'font-family': "'IBM Plex Mono', monospace", 'font-size': '8', 'font-weight': '400',
+        })).textContent = String(val);
     }
 }
 
