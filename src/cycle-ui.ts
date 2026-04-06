@@ -9,7 +9,7 @@
 import { LLMCache } from './llm-cache';
 import { PhaseState, AppState, TimelineState, MultiDayState } from './state';
 import { settingsStore, sessionSettingsStore, STORAGE_KEYS } from './settings-store';
-import { generateCycleIconSvg, generateCycleIconFromBundle } from './cycle-icon';
+import { generateCycleIconSvg, generateCycleIconFromBundle, generateWideIconFromBundle } from './cycle-icon';
 import {
     getCycleIndex,
     saveCycle,
@@ -71,7 +71,15 @@ async function handleSave(): Promise<void> {
         .slice(0, 3)
         .map((e: any) => (typeof e === 'string' ? e : e.name || ''));
 
-    const iconSvg = generateCycleIconSvg(MultiDayState.days, PhaseState.curvesData || []);
+    const isExtendedCycle = PhaseState.timeHorizon && PhaseState.timeHorizon.mode !== 'daily';
+    // For extended (28-day) cycles, try the panoramic wide icon first
+    let iconSvg: string | null = null;
+    if (isExtendedCycle) {
+        iconSvg = generateWideIconFromBundle(bundle);
+    }
+    if (!iconSvg) {
+        iconSvg = generateCycleIconSvg(MultiDayState.days, PhaseState.curvesData || []);
+    }
 
     // Extract recommended biometric devices from the Spotter stage
     const bioRecPayload = bundle.stages?.['biometric-rec-model']?.payload;
@@ -81,8 +89,7 @@ async function handleSave(): Promise<void> {
     // Extract unique substance classes from the intervention protocol
     // Fallback to extended intervention stage if daily one is missing
     const ivPayload =
-        bundle.stages?.['intervention-model']?.payload ||
-        bundle.stages?.['extended-intervention']?.payload;
+        bundle.stages?.['intervention-model']?.payload || bundle.stages?.['extended-intervention']?.payload;
     const ivList: any[] = ivPayload?.interventions || [];
     const substanceClasses = [
         ...new Set(
