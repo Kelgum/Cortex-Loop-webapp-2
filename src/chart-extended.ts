@@ -425,14 +425,14 @@ export function renderExtendedChart(opts: {
             defs.appendChild(mask);
         }
 
-        // ── Base layer: full 28-day curve at reduced emphasis ──
+        // ── Base layer: full 28-day curve at reduced emphasis (same width, just dimmer) ──
         gCurves.appendChild(
             svgEl('path', {
                 d: desiredPath,
                 fill: 'none',
                 stroke: curve.color,
-                'stroke-width': '2',
-                opacity: '0.25',
+                'stroke-width': '3',
+                opacity: '0.2',
                 'pointer-events': 'none',
             }),
         );
