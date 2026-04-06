@@ -617,24 +617,48 @@ export function renderExtendedChart(opts: {
                 ).textContent = ann.label;
             }
 
-            // ── Left-side substance name label ──
+            // ── Left-side substance pill label (24h style) ──
+            const pillW = config.padL - 20;
+            const pillX = 10;
             const shortName = subName.length > 16 ? subName.slice(0, 14) + '..' : subName;
+
+            // Pill background: fill + stroke layering (matching 24h substance-timeline.ts)
+            gSubstanceBars.appendChild(
+                svgEl('rect', {
+                    x: String(pillX),
+                    y: String(laneY),
+                    width: String(pillW),
+                    height: String(laneH),
+                    rx: String(3),
+                    ry: String(3),
+                    fill: subColor,
+                    'fill-opacity': '0.22',
+                    stroke: subColor,
+                    'stroke-opacity': '0.45',
+                    'stroke-width': '0.75',
+                    'pointer-events': 'none',
+                }),
+            );
+
+            // Label text inside pill
             const nameLabel = svgEl('text', {
-                x: String(config.padL - 12),
+                x: String(pillX + 5),
                 y: String(laneY + laneH / 2 + 3),
-                fill: isLight ? 'rgba(0,0,0,0.5)' : 'rgba(200,218,245,0.6)',
-                'text-anchor': 'end',
+                fill: isLight ? 'rgba(20,30,50,0.95)' : 'rgba(255,255,255,0.92)',
                 'font-family': "'IBM Plex Mono', monospace",
-                'font-size': '8',
+                'font-size': '9',
                 'font-weight': '500',
+                'letter-spacing': '0.02em',
+                'pointer-events': 'none',
             });
             nameLabel.textContent = shortName;
-            // Rx badge after name
+            // Rx badge
             if (regStatus === 'rx' || regStatus === 'controlled') {
                 const rxSpan = svgEl('tspan', {
                     fill: '#e11d48',
-                    'font-size': '6.5',
+                    'font-size': '7',
                     'font-weight': '700',
+                    dy: '-0.5',
                 });
                 rxSpan.textContent = ' Rx';
                 nameLabel.appendChild(rxSpan);
