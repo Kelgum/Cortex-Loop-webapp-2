@@ -38,18 +38,51 @@ function ensureGroup(svg: SVGSVGElement, id: string): SVGGElement {
     return g;
 }
 
+/** Cubic interpolation between day-level data points for silky-smooth curves. */
+function upsamplePoints(
+    points: { day: number; value: number }[],
+    samplesPerDay: number = 4,
+): { day: number; value: number }[] {
+    if (points.length < 2) return points;
+    const result: { day: number; value: number }[] = [];
+    for (let i = 0; i < points.length - 1; i++) {
+        const p0 = points[Math.max(0, i - 1)];
+        const p1 = points[i];
+        const p2 = points[i + 1];
+        const p3 = points[Math.min(points.length - 1, i + 2)];
+        for (let s = 0; s < samplesPerDay; s++) {
+            const t = s / samplesPerDay;
+            const t2 = t * t;
+            const t3 = t2 * t;
+            // Catmull-Rom interpolation
+            const v = 0.5 * (
+                (2 * p1.value) +
+                (-p0.value + p2.value) * t +
+                (2 * p0.value - 5 * p1.value + 4 * p2.value - p3.value) * t2 +
+                (-p0.value + 3 * p1.value - 3 * p2.value + p3.value) * t3
+            );
+            result.push({ day: p1.day + (p2.day - p1.day) * t, value: v });
+        }
+    }
+    result.push(points[points.length - 1]);
+    return result;
+}
+
 function buildSmoothPath(
     points: { day: number; value: number }[],
     config: ExtendedChartConfig,
 ): string {
     if (points.length === 0) return '';
-    const mapped = points.map(p => ({
+
+    // Upsample for silky curves — 4 sub-samples per day gap
+    const upsampled = upsamplePoints(points, 4);
+    const mapped = upsampled.map(p => ({
         x: extendedChartX(p.day, config),
         y: extendedChartY(p.value, config),
     }));
     if (mapped.length === 1) return `M${mapped[0].x.toFixed(1)},${mapped[0].y.toFixed(1)}`;
 
-    // Catmull-Rom to cubic Bezier for smooth curves
+    // Catmull-Rom to cubic Bezier for smooth rendering
     let d = `M${mapped[0].x.toFixed(1)},${mapped[0].y.toFixed(1)}`;
     for (let i = 0; i < mapped.length - 1; i++) {
         const p0 = mapped[Math.max(0, i - 1)];
@@ -57,7 +90,7 @@ function buildSmoothPath(
         const p2 = mapped[i + 1];
         const p3 = mapped[Math.min(mapped.length - 1, i + 2)];
 
-        const tension = 0.35;
+        const tension = 0.25;
         const cp1x = p1.x + (p2.x - p0.x) * tension;
         const cp1y = p1.y + (p2.y - p0.y) * tension;
         const cp2x = p2.x - (p3.x - p1.x) * tension;
@@ -151,12 +184,10 @@ export function renderExtendedChart(opts: {
         }
     }
 
-    // ── 3. Protocol phase bands with effect swimlanes ──
+    // ── 3. Protocol phase bands with effect indicators ──
     const phases = protocolPhases || phaseSpotlights;
     const phaseBandY = 2;
-    const phaseBandH = 12;
-    const subLaneH = 9;
-    const subLaneGap = 1;
+    const phaseBandH = 14;
 
     for (const phase of phases) {
         const x1 = extendedChartX(phase.startDay - 0.5, config);
@@ -166,7 +197,7 @@ export function renderExtendedChart(opts: {
         const w = Math.max(0, phaseXR - phaseXL);
         const color = phase.color || '#60a5fa';
 
-        // Phase name band
+        // Phase band
         gPhaseBands.appendChild(
             svgEl('rect', {
                 x: String(phaseXL),
@@ -174,69 +205,52 @@ export function renderExtendedChart(opts: {
                 width: String(w),
                 height: String(phaseBandH),
                 fill: color,
-                opacity: isLight ? '0.15' : '0.2',
+                opacity: isLight ? '0.12' : '0.18',
                 rx: '3',
                 'pointer-events': 'none',
             }),
         );
+
+        // Phase name + effect dots on one line
+        const spotEffects = 'effects' in phase ? (phase as PhaseSpotlight).effects : [];
         const cx = phaseXL + w / 2;
         if (w > 30) {
+            const phaseName = ('name' in phase ? (phase as ProtocolPhase).name : phase.phase).toUpperCase();
             gPhaseBands.appendChild(
                 svgEl('text', {
                     x: String(cx),
-                    y: String(phaseBandY + 9),
-                    fill: isLight ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.7)',
+                    y: String(phaseBandY + 10),
+                    fill: isLight ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.65)',
                     'text-anchor': 'middle',
                     'font-family': "'IBM Plex Mono', monospace",
                     'font-size': '7',
                     'font-weight': '600',
-                    'letter-spacing': '0.06em',
+                    'letter-spacing': '0.05em',
                 }),
-            ).textContent = ('name' in phase ? (phase as ProtocolPhase).name : phase.phase).toUpperCase();
-        }
+            ).textContent = phaseName;
 
-        // Effect sub-lanes below the phase name band
-        const spotEffects = 'effects' in phase ? (phase as PhaseSpotlight).effects : [];
-        for (let si = 0; si < spotEffects.length; si++) {
-            const effName = spotEffects[si];
-            const effCurve = effectRoster.find(c => c.effect === effName);
-            const effColor = effCurve?.color || color;
-            const subY = phaseBandY + phaseBandH + si * (subLaneH + subLaneGap);
-
-            // Sub-lane background tinted with effect color
-            gPhaseBands.appendChild(
-                svgEl('rect', {
-                    x: String(phaseXL),
-                    y: String(subY),
-                    width: String(w),
-                    height: String(subLaneH),
-                    fill: effColor,
-                    opacity: isLight ? '0.08' : '0.10',
-                    rx: '2',
-                    'pointer-events': 'none',
-                }),
-            );
-
-            // Effect name label
-            if (w > 40) {
+            // Small colored dots for active effects (right of phase name)
+            const dotStartX = cx + phaseName.length * 2.2 + 6;
+            for (let si = 0; si < spotEffects.length; si++) {
+                const effCurve = effectRoster.find(c => c.effect === spotEffects[si]);
+                const effColor = effCurve?.color || color;
                 gPhaseBands.appendChild(
-                    svgEl('text', {
-                        x: String(phaseXL + 4),
-                        y: String(subY + 7),
+                    svgEl('circle', {
+                        cx: String(dotStartX + si * 8),
+                        cy: String(phaseBandY + 7),
+                        r: '2.5',
                         fill: effColor,
-                        'font-family': "'IBM Plex Mono', monospace",
-                        'font-size': '6.5',
-                        'font-weight': '500',
-                        opacity: '0.8',
+                        opacity: '0.7',
+                        'pointer-events': 'none',
                     }),
-                ).textContent = effName;
+                );
             }
         }
     }
 
     // ── 4. X-axis: day labels (at TOP, just below phase bands) ──
     const axisY = config.padT + config.plotH;
-    const dayLabelY = phaseBandY + phaseBandH + 14; // just below phase bands, above plot area
+    const dayLabelY = phaseBandY + phaseBandH + 12; // just below phase bands, above plot area
 
     // Bottom boundary line of plot area
     gAxes.appendChild(
