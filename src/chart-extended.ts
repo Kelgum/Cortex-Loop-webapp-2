@@ -320,17 +320,19 @@ export function renderExtendedChart(opts: {
         ).textContent = String(val);
     }
 
-    // ── 6. Curves — full-span with emphasis modulation ──
+    // ── 6. Curves — full-span with smooth emphasis modulation ──
     // Both curves always visible across all 28 days.
-    // Spotlight phases get: full opacity, thick stroke, glow, AUC fill.
-    // Non-spotlight phases get: reduced opacity, thinner stroke, no fill.
+    // Spotlight phases get emphasis via SVG <mask> with gradient fade edges.
 
-    // Ensure a <defs> element exists for clip-paths
+    // Ensure a <defs> element exists
     let defs = svg.querySelector('defs');
     if (!defs) {
         defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
         svg.insertBefore(defs, svg.firstChild);
     }
+
+    const fadeDays = 2; // days over which emphasis fades in/out
+    const maskH = config.padT + config.plotH + 60;
 
     for (let ei = 0; ei < effectRoster.length; ei++) {
         const curve = effectRoster[ei];
@@ -339,32 +341,74 @@ export function renderExtendedChart(opts: {
         const desiredPath = buildSmoothPath(curve.desired, config);
         if (!desiredPath) continue;
 
-        // Find which phases spotlight this effect (for emphasis)
+        // Find which phases spotlight this effect
         const spotlightRanges = phaseSpotlights
             .filter(ps => ps.effects.includes(effectName))
             .map(ps => ({ start: ps.startDay, end: ps.endDay }));
 
-        // Create clip-path for spotlight emphasis zones
-        const clipId = `ext-spotlight-clip-${ei}`;
-        const oldClip = defs.querySelector(`#${clipId}`);
-        if (oldClip) oldClip.remove();
+        // Build a gradient mask for smooth fade transitions
+        const maskId = `ext-emphasis-mask-${ei}`;
+        const oldMask = defs.querySelector(`#${maskId}`);
+        if (oldMask) oldMask.remove();
 
         if (spotlightRanges.length > 0) {
-            const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
-            clipPath.id = clipId;
-            for (const range of spotlightRanges) {
-                const rx1 = extendedChartX(range.start - 0.5, config);
-                const rx2 = extendedChartX(range.end + 0.5, config);
-                clipPath.appendChild(
-                    svgEl('rect', {
-                        x: String(Math.max(rx1, config.padL)),
-                        y: '0',
-                        width: String(Math.min(rx2, config.padL + config.plotW) - Math.max(rx1, config.padL)),
-                        height: String(config.padT + config.plotH + 60),
-                    }),
-                );
+            const mask = document.createElementNS('http://www.w3.org/2000/svg', 'mask');
+            mask.id = maskId;
+            mask.setAttribute('maskUnits', 'userSpaceOnUse');
+            mask.setAttribute('x', '0');
+            mask.setAttribute('y', '0');
+            mask.setAttribute('width', String(config.viewW));
+            mask.setAttribute('height', String(maskH));
+
+            for (let ri = 0; ri < spotlightRanges.length; ri++) {
+                const range = spotlightRanges[ri];
+                const solidX1 = extendedChartX(range.start, config);
+                const solidX2 = extendedChartX(range.end, config);
+                const fadeInX = extendedChartX(Math.max(1, range.start - fadeDays), config);
+                const fadeOutX = extendedChartX(Math.min(durationDays, range.end + fadeDays), config);
+
+                // Fade-in gradient
+                const fadeInId = `ext-fi-${ei}-${ri}`;
+                const fiGrad = svgEl('linearGradient', {
+                    id: fadeInId,
+                    x1: String(fadeInX), y1: '0',
+                    x2: String(solidX1), y2: '0',
+                    gradientUnits: 'userSpaceOnUse',
+                });
+                fiGrad.appendChild(svgEl('stop', { offset: '0', 'stop-color': 'white', 'stop-opacity': '0' }));
+                fiGrad.appendChild(svgEl('stop', { offset: '1', 'stop-color': 'white', 'stop-opacity': '1' }));
+                defs.appendChild(fiGrad);
+                mask.appendChild(svgEl('rect', {
+                    x: String(fadeInX), y: '0',
+                    width: String(Math.max(1, solidX1 - fadeInX)), height: String(maskH),
+                    fill: `url(#${fadeInId})`,
+                }));
+
+                // Solid spotlight zone
+                mask.appendChild(svgEl('rect', {
+                    x: String(solidX1), y: '0',
+                    width: String(Math.max(1, solidX2 - solidX1)), height: String(maskH),
+                    fill: 'white',
+                }));
+
+                // Fade-out gradient
+                const fadeOutId = `ext-fo-${ei}-${ri}`;
+                const foGrad = svgEl('linearGradient', {
+                    id: fadeOutId,
+                    x1: String(solidX2), y1: '0',
+                    x2: String(fadeOutX), y2: '0',
+                    gradientUnits: 'userSpaceOnUse',
+                });
+                foGrad.appendChild(svgEl('stop', { offset: '0', 'stop-color': 'white', 'stop-opacity': '1' }));
+                foGrad.appendChild(svgEl('stop', { offset: '1', 'stop-color': 'white', 'stop-opacity': '0' }));
+                defs.appendChild(foGrad);
+                mask.appendChild(svgEl('rect', {
+                    x: String(solidX2), y: '0',
+                    width: String(Math.max(1, fadeOutX - solidX2)), height: String(maskH),
+                    fill: `url(#${fadeOutId})`,
+                }));
             }
-            defs.appendChild(clipPath);
+            defs.appendChild(mask);
         }
 
         // ── Base layer: full 28-day curve at reduced emphasis ──
@@ -373,15 +417,17 @@ export function renderExtendedChart(opts: {
                 d: desiredPath,
                 fill: 'none',
                 stroke: curve.color,
-                'stroke-width': '1.5',
-                opacity: '0.3',
+                'stroke-width': '2',
+                opacity: '0.25',
                 'pointer-events': 'none',
             }),
         );
 
-        // ── Emphasis layer: clipped to spotlight ranges ──
+        // ── Emphasis layer: masked with gradient fades ──
         if (spotlightRanges.length > 0) {
-            // AUC fill between baseline and desired in spotlight zones
+            const maskRef = `url(#${maskId})`;
+
+            // AUC fill
             if (curve.baseline.length > 0 && curve.desired.length > 0) {
                 const fillPath =
                     buildSmoothPath(curve.desired, config) +
@@ -394,7 +440,7 @@ export function renderExtendedChart(opts: {
                         d: fillPath,
                         fill: curve.color,
                         opacity: '0.10',
-                        'clip-path': `url(#${clipId})`,
+                        mask: maskRef,
                         'pointer-events': 'none',
                     }),
                 );
@@ -408,7 +454,7 @@ export function renderExtendedChart(opts: {
                     stroke: curve.color,
                     'stroke-width': '6',
                     opacity: '0.12',
-                    'clip-path': `url(#${clipId})`,
+                    mask: maskRef,
                     'pointer-events': 'none',
                 }),
             );
@@ -420,8 +466,8 @@ export function renderExtendedChart(opts: {
                     fill: 'none',
                     stroke: curve.color,
                     'stroke-width': '3',
-                    opacity: '1',
-                    'clip-path': `url(#${clipId})`,
+                    opacity: '0.9',
+                    mask: maskRef,
                     'pointer-events': 'none',
                 }),
             );
