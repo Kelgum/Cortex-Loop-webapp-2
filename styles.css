@@ -2724,7 +2724,7 @@ body.mode-stream #prompt-submit {
     width: 100%;
     max-width: 1100px;
     margin: 0 auto;
-    padding: 20px 24px 40px;
+    padding: 20px 24px 140px;
     opacity: 0;
     transform: translateY(12px);
     transition: opacity 0.45s ease, transform 0.45s ease;
@@ -12109,10 +12109,10 @@ body.light-mode .preset-row.loaded {
    ══════════════════════════════════════════════════════════════════ */
 
 .ms-container {
-    padding: 12px 22px 10px;
-    margin: 14px auto 6px;
+    padding: 10px 22px 12px;
+    margin: 6px auto 14px;
     position: sticky;
-    top: 10px;
+    bottom: 14px;
     z-index: 40;
     width: calc(100% - 32px);
     max-width: 1100px;
@@ -12122,9 +12122,10 @@ body.light-mode .preset-row.loaded {
     background: linear-gradient(180deg, rgba(18, 26, 38, 0.42) 0%, rgba(12, 18, 28, 0.32) 100%);
     border: 1px solid rgba(146, 186, 255, 0.14);
     box-shadow:
-        0 14px 38px rgba(0, 0, 0, 0.3),
-        0 2px 10px rgba(0, 0, 0, 0.18),
-        inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        0 -14px 38px rgba(0, 0, 0, 0.3),
+        0 -2px 10px rgba(0, 0, 0, 0.18),
+        inset 0 -1px 0 rgba(255, 255, 255, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
     display: none;
 }
 
