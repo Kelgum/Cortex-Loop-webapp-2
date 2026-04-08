@@ -20,11 +20,7 @@ import {
     removeGamificationOverlay,
     syncGamificationOverlayFrame,
 } from '../gamification-overlay';
-import {
-    transmuteDesiredCurves,
-    animatePhaseChartViewBoxHeight,
-    computeDoseBarWidth,
-} from '../lx-system';
+import { transmuteDesiredCurves, animatePhaseChartViewBoxHeight, computeDoseBarWidth } from '../lx-system';
 
 function brightenTowardWhite(color: string, intensity: number): string {
     const t = clamp(intensity, 0, 1);
@@ -528,7 +524,8 @@ export function createSubstanceSweepSegment(
                 if (lxFills[ci]) lxFills[ci].setAttribute('d', phasePointsToFillPath(morphed, true));
                 morphedCurves.push({
                     ...(ctx.incrementalSnapshots?.[stepIdx]?.lxCurves?.[ci] || {}),
-                    baseline: ctx.incrementalSnapshots?.[stepIdx]?.lxCurves?.[ci]?.baseline || ctx.curvesData?.[ci]?.baseline,
+                    baseline:
+                        ctx.incrementalSnapshots?.[stepIdx]?.lxCurves?.[ci]?.baseline || ctx.curvesData?.[ci]?.baseline,
                     points: morphed,
                 });
             }

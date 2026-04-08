@@ -1,6 +1,6 @@
 /**
  * Constants — Layout dimensions, color palettes, model option tables, and API endpoint URLs.
- * Exports: PHASE_CHART, TIMELINE_ZONE, COMPILE_ZONE, BIOMETRIC_ZONE, MODEL_OPTIONS, API_ENDPOINTS, WORD_CLOUD_PALETTE, PHASE_STEPS
+ * Exports: PHASE_CHART, TIMELINE_ZONE, COMPILE_ZONE, BIOMETRIC_ZONE, MY_STREAM, MODEL_OPTIONS, API_ENDPOINTS, WORD_CLOUD_PALETTE, PHASE_STEPS
  * Depends on: (none — leaf module)
  */
 export const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -113,7 +113,14 @@ export const MODEL_OPTIONS: any = {
         { key: 'opus', model: 'claude-opus-4-6', label: 'Opus 4.6', type: 'anthropic', tier: 2 },
     ],
     openai: [
-        { key: '5.3-instant', model: 'gpt-5.3-chat-latest', label: '5.3 Instant', type: 'openai', tier: 0, maxOutput: 8192 },
+        {
+            key: '5.3-instant',
+            model: 'gpt-5.3-chat-latest',
+            label: '5.3 Instant',
+            type: 'openai',
+            tier: 0,
+            maxOutput: 8192,
+        },
         { key: '5.4', model: 'gpt-5.4', label: '5.4', type: 'openai', tier: 1 },
         {
             key: '5.4-thinking',
@@ -125,7 +132,14 @@ export const MODEL_OPTIONS: any = {
         },
     ],
     grok: [
-        { key: 'fast', model: 'grok-4-1-fast-non-reasoning', label: '4.1 Fast', type: 'openai', tier: 0, maxOutput: 8192 },
+        {
+            key: 'fast',
+            model: 'grok-4-1-fast-non-reasoning',
+            label: '4.1 Fast',
+            type: 'openai',
+            tier: 0,
+            maxOutput: 8192,
+        },
         { key: 'full', model: 'grok-4-0709', label: '4', type: 'openai', tier: 2 },
     ],
     gemini: [
@@ -392,6 +406,35 @@ export const BADGE_CATEGORY_CSS: Record<BadgeCategory, string> = {
     GUT: 'badge-gut',
     BEAUTY: 'badge-beauty',
     ADDICTION: 'badge-addiction',
+};
+
+// ── My Stream (28-cartridge waveform strip) ──────────────────────
+export const MY_STREAM = {
+    days: 28, // total cartridges in the strip
+    spokeCount: 26, // radial spokes per cartridge (25 substance + 1 empty)
+    substanceSlots: 25, // usable slots (spokeCount - 1)
+    emptySpokeDeg: 207.7, // angle of the mechanical empty spoke (~15th spoke from 12 o'clock)
+    spokeDeg: 360 / 26, // 13.846° per spoke
+    cartridgeDiameter: 36, // px — icon diameter (R = 18)
+    spokeInnerR: 7.7, // px — spoke starts here (hub boundary, 43% of R — matches 3D carousel)
+    hubDotR: 2, // px — central hub dot radius
+    gapY: 1.5, // px — vertical gap between top and bottom halves
+    fillOpacity: 0.7, // substance fill opacity
+    fillDelay: 30, // ms — stagger between slot fills
+    spokeStroke: 'rgba(255,255,255,0.18)',
+    hubColor: '#10b981',
+    emptySlotStroke: 'rgba(255,255,255,0.10)',
+    // S-wave: step = 2*R (diameter), top halves offset right by R
+    // (derived at runtime from cartridgeDiameter, no extra constants needed)
+
+    // Capsule vs tablet
+    capsuleThresholdMg: 300, // dose > this = capsule (full spoke)
+    tabletsPerSpoke: 5, // max tablets sharing one spoke
+    capsuleW: 4, // px — capsule oval width (tangential)
+    capsuleH: 1.8, // px — capsule oval height (radial)
+    tabletR: 1.2, // px — tablet dot radius
+    slotRadius: 2.5, // px — empty slot circle radius (structural outline)
+    tabletHalfSpan: 5, // degrees — half the angular width of a tablet wedge (~70% of half-spoke-width)
 };
 
 export const COMPOSITE_SLEEP = {

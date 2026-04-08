@@ -20,11 +20,7 @@ import { phaseChartY, clamp } from './utils';
 import { placePeakDescriptors } from './phase-chart';
 import { reportRuntimeBug } from './runtime-error-banner';
 import { syncGamificationOverlayFrame } from './gamification-overlay';
-import {
-    getRuntimeReplaySnapshot,
-    isRuntimeReplayActive,
-    recordBioCorrectedReplayState,
-} from './replay-snapshot';
+import { getRuntimeReplaySnapshot, isRuntimeReplayActive, recordBioCorrectedReplayState } from './replay-snapshot';
 import type { CurveData, CurvePoint, LxSnapshot } from './types';
 import type { BiometricRuntime } from './biometric';
 

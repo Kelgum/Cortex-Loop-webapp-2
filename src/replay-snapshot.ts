@@ -35,7 +35,11 @@ function cloneSerializable<T>(value: T): T {
 }
 
 function isRuntimeReplaySnapshot(value: unknown): value is RuntimeReplaySnapshot {
-    return !!value && typeof value === 'object' && Number((value as RuntimeReplaySnapshot).schema) === RUNTIME_REPLAY_SCHEMA;
+    return (
+        !!value &&
+        typeof value === 'object' &&
+        Number((value as RuntimeReplaySnapshot).schema) === RUNTIME_REPLAY_SCHEMA
+    );
 }
 
 function readPersistedSnapshot(): RuntimeReplaySnapshot | null {

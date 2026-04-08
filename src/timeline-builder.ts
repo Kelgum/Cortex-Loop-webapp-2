@@ -342,7 +342,10 @@ export function buildPhase3Segments(
 
     const overlayPresenceSegment = engine.getContext()._gamificationOverlayPresenceSegment;
     if (overlayPresenceSegment) {
-        overlayPresenceSegment.duration = Math.max(overlayPresenceSegment.duration, t - overlayPresenceSegment.startTime);
+        overlayPresenceSegment.duration = Math.max(
+            overlayPresenceSegment.duration,
+            t - overlayPresenceSegment.startTime,
+        );
     }
 
     return t;
@@ -357,7 +360,10 @@ export function buildPhase3BioCorrectionSegments(engine: TimelineEngine, startTi
 
     const overlayPresenceSegment = engine.getContext()._gamificationOverlayPresenceSegment;
     if (overlayPresenceSegment) {
-        overlayPresenceSegment.duration = Math.max(overlayPresenceSegment.duration, t - overlayPresenceSegment.startTime);
+        overlayPresenceSegment.duration = Math.max(
+            overlayPresenceSegment.duration,
+            t - overlayPresenceSegment.startTime,
+        );
     }
 
     return t;
@@ -404,7 +410,10 @@ export function buildPhase4Segments(engine: TimelineEngine, startTime: number, d
 
     const overlayPresenceSegment = engine.getContext()._gamificationOverlayPresenceSegment;
     if (overlayPresenceSegment) {
-        overlayPresenceSegment.duration = Math.max(overlayPresenceSegment.duration, t - overlayPresenceSegment.startTime);
+        overlayPresenceSegment.duration = Math.max(
+            overlayPresenceSegment.duration,
+            t - overlayPresenceSegment.startTime,
+        );
     }
 
     return t;

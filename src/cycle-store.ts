@@ -35,6 +35,13 @@ export interface SavedCycleIndexEntry {
     recommendedDevices?: string[];
     substanceClasses?: string[];
     timeHorizon?: TimeHorizon;
+    /** 7D average gap-closure % per effect (0..2 entries, aligned to topEffects). */
+    effectScores?: number[];
+    /**
+     * Schema version of the effect-score formula. Used to invalidate cached
+     * scores when the metric changes (see EFFECT_SCORE_FORMULA_VERSION).
+     */
+    effectScoresVersion?: number;
 }
 
 export interface SavedCycleRecord extends SavedCycleIndexEntry {
@@ -106,6 +113,8 @@ export async function patchCycle(
         recommendedDevices?: string[];
         substanceClasses?: string[];
         timeHorizon?: TimeHorizon;
+        effectScores?: number[];
+        effectScoresVersion?: number;
     },
 ): Promise<void> {
     const res = await fetch(`/__cycles/${encodeURIComponent(id)}`, {
@@ -127,6 +136,10 @@ export async function patchCycle(
             if (typeof patch.iconSvg !== 'undefined') entry.iconSvg = patch.iconSvg;
             if (patch.recommendedDevices) entry.recommendedDevices = patch.recommendedDevices;
             if (patch.substanceClasses) entry.substanceClasses = patch.substanceClasses;
+            if (patch.effectScores) entry.effectScores = patch.effectScores;
+            if (typeof patch.effectScoresVersion === 'number') {
+                entry.effectScoresVersion = patch.effectScoresVersion;
+            }
         }
     }
 }

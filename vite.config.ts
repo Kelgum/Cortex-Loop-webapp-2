@@ -240,7 +240,13 @@ function toSavedCycleIndexEntry(record: any) {
         savedAt: record.savedAt,
         hookSentence: record.hookSentence,
         topEffects: record.topEffects,
+        badgeCategory: record.badgeCategory ?? null,
         iconSvg: record.iconSvg ?? null,
+        recommendedDevices: record.recommendedDevices,
+        substanceClasses: record.substanceClasses,
+        timeHorizon: record.timeHorizon,
+        effectScores: record.effectScores,
+        effectScoresVersion: record.effectScoresVersion,
     };
     if (record.badgeCategory) entry.badgeCategory = record.badgeCategory;
     if (record.recommendedDevices) entry.recommendedDevices = record.recommendedDevices;
@@ -332,6 +338,14 @@ function cycleStoragePlugin() {
                     if (body?.timeHorizon && typeof body.timeHorizon === 'object') {
                         record.timeHorizon = body.timeHorizon;
                     }
+                    if (Array.isArray(body?.effectScores)) {
+                        record.effectScores = body.effectScores
+                            .map((n: any) => Number(n))
+                            .filter((n: number) => Number.isFinite(n));
+                    }
+                    if (typeof body?.effectScoresVersion === 'number') {
+                        record.effectScoresVersion = body.effectScoresVersion;
+                    }
 
                     await writeFile(filePath, JSON.stringify(record), 'utf8');
 
@@ -343,6 +357,10 @@ function cycleStoragePlugin() {
                         if (record.substanceClasses) entry.substanceClasses = record.substanceClasses;
                         if (record.recommendedDevices) entry.recommendedDevices = record.recommendedDevices;
                         if (record.timeHorizon) entry.timeHorizon = record.timeHorizon;
+                        if (record.effectScores) entry.effectScores = record.effectScores;
+                        if (typeof record.effectScoresVersion === 'number') {
+                            entry.effectScoresVersion = record.effectScoresVersion;
+                        }
                     }
                     await writeCyclesIndex(index);
                     return index;

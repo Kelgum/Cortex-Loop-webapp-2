@@ -82,11 +82,11 @@ export function getChartLevelDesc(curve: any, val: number): string {
  */
 export function renderExtendedAxes(durationDays: number): void {
     setXAxisFormat({
-        format: (day) => `${day}`,
+        format: day => `${day}`,
         fontFamily: "'IBM Plex Mono', monospace",
         fontSize: durationDays > 14 ? 8 : 9.5,
         fontWeight: '400',
-        shouldLabel: (day) => {
+        shouldLabel: day => {
             if (durationDays <= 14) return true;
             // For 15-28 days, label odd days + last day
             return day % 2 === 1 || day === durationDays;

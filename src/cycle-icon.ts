@@ -767,10 +767,7 @@ function buildGanttChart(
     if (!interventions?.length) return '';
 
     // Group by substance key, collecting all active day ranges
-    const substanceMap = new Map<
-        string,
-        { color: string; ranges: { start: number; end: number }[] }
-    >();
+    const substanceMap = new Map<string, { color: string; ranges: { start: number; end: number }[] }>();
 
     for (const iv of interventions) {
         if (!iv.key) continue;

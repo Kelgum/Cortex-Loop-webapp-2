@@ -29,9 +29,14 @@ export function extractTimeHorizon(raw: unknown): TimeHorizon {
     if (typeof mode !== 'string' || !VALID_TIME_HORIZON_MODES.includes(mode as TimeHorizonMode)) {
         return DEFAULT_TIME_HORIZON;
     }
-    const durationDays = typeof obj.durationDays === 'number' && obj.durationDays >= 1
-        ? Math.min(Math.round(obj.durationDays), 28)
-        : mode === 'daily' ? 1 : mode === 'weekly' ? 7 : 28;
+    const durationDays =
+        typeof obj.durationDays === 'number' && obj.durationDays >= 1
+            ? Math.min(Math.round(obj.durationDays), 28)
+            : mode === 'daily'
+              ? 1
+              : mode === 'weekly'
+                ? 7
+                : 28;
     return {
         mode: mode as TimeHorizonMode,
         durationDays,

@@ -6,12 +6,18 @@ export const morrisAgent = {
         creatorName: 'Hamilton Morris',
         avatarUrl: '/avatars/morris.jpg',
         tagline: 'Chemistry is the language the universe uses to speak to itself — and to us',
-        domainTags: ['Psychedelic Chemistry', 'Harm Reduction', 'Pharmacology', 'Research Chemicals', 'Cognitive Enhancement'],
+        domainTags: [
+            'Psychedelic Chemistry',
+            'Harm Reduction',
+            'Pharmacology',
+            'Research Chemicals',
+            'Cognitive Enhancement',
+        ],
         targetPopulation:
             'Scientifically literate adults who approach psychoactive compounds as pharmacological tools requiring precision chemistry knowledge, rigorous harm reduction, and deep mechanistic understanding',
-        followerProxy: '500K YouTube + Hamilton\'s Pharmacopeia (Vice/Viceland) + academic chemistry network',
+        followerProxy: "500K YouTube + Hamilton's Pharmacopeia (Vice/Viceland) + academic chemistry network",
         credentials:
-            'Journalist, chemist, and documentary filmmaker; creator and host of Hamilton\'s Pharmacopeia; research associate with experience in novel psychedelic synthesis; one of the most chemically rigorous voices in psychedelic media',
+            "Journalist, chemist, and documentary filmmaker; creator and host of Hamilton's Pharmacopeia; research associate with experience in novel psychedelic synthesis; one of the most chemically rigorous voices in psychedelic media",
         createdAt: '2026-01-15',
     },
     mandate:
@@ -75,7 +81,7 @@ export const morrisAgent = {
         'NMDA',
         '5-HT2A',
         'reagent testing',
-        'Hamilton\'s Pharmacopeia',
+        "Hamilton's Pharmacopeia",
         'nootropics',
         'mechanistic',
         'neuropharmacology',

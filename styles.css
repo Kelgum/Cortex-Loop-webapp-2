@@ -12103,3 +12103,418 @@ body.light-mode .preset-row.loaded {
         grid-template-columns: 100px 1fr 40px;
     }
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   MY STREAM — 28-cartridge waveform strip
+   ══════════════════════════════════════════════════════════════════ */
+
+.ms-container {
+    padding: 10px 24px 6px;
+    margin: 0 auto;
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    width: 100%;
+    max-width: 1100px;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    background: rgba(7, 11, 17, 0.75);
+    border-bottom: 1px solid var(--housing-border, rgba(255, 255, 255, 0.08));
+    display: none;
+}
+
+body.mode-stream .ms-container {
+    display: block;
+}
+
+.ms-container.ms-collapsed .ms-strip {
+    max-height: 0;
+    opacity: 0;
+    margin: 0;
+}
+
+.ms-container.ms-collapsed .ms-collapse-btn svg {
+    transform: rotate(180deg);
+}
+
+/* Header */
+.ms-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 0 4px 4px;
+}
+
+.ms-header-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.ms-header-count {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: #10b981;
+    min-width: 12px;
+}
+
+.ms-collapse-btn {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.3);
+    cursor: pointer;
+    padding: 2px;
+    line-height: 0;
+    margin-left: auto;
+    transition: color 0.2s;
+}
+
+.ms-collapse-btn:hover {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.ms-collapse-btn svg {
+    transition: transform 0.2s ease;
+}
+
+/* SVG strip */
+.ms-strip {
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-height: 120px;
+    transition: max-height 0.3s ease, opacity 0.3s ease, margin 0.3s ease;
+    margin-bottom: 2px;
+    scrollbar-width: none; /* Firefox */
+}
+
+.ms-strip::-webkit-scrollbar {
+    display: none;
+}
+
+.ms-svg {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+/* Capsule + tablet fill elements */
+.ms-capsule-fill,
+.ms-tablet-fill {
+    transition: fill-opacity 0.3s ease, opacity 0.3s ease;
+}
+
+/* Day labels */
+.ms-day-label {
+    user-select: none;
+    pointer-events: none;
+}
+
+/* Summary */
+.ms-summary {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.25);
+    letter-spacing: 0.04em;
+    padding: 2px 0 0 4px;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   CARD EXPANSION — inline detail panel for every card type
+   ══════════════════════════════════════════════════════════════════ */
+
+.cg-card-expanded {
+    z-index: 10;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.cg-card-expand-panel {
+    padding: 10px 12px 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    animation: cg-expand-reveal 0.25s ease-out;
+}
+
+@keyframes cg-expand-reveal {
+    from {
+        opacity: 0;
+        max-height: 0;
+    }
+    to {
+        opacity: 1;
+        max-height: 300px;
+    }
+}
+
+/* Effects tags */
+.cg-expand-effects {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.cg-expand-effect-tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.5);
+    letter-spacing: 0.03em;
+}
+
+/* Duration */
+.cg-expand-duration {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9.5px;
+    color: rgba(255, 255, 255, 0.35);
+    margin-bottom: 8px;
+}
+
+/* Substance list */
+.cg-expand-substances {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    margin-bottom: 10px;
+    min-height: 20px;
+}
+
+.cg-expand-loading {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    color: rgba(255, 255, 255, 0.2);
+    font-style: italic;
+}
+
+.cg-expand-class-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    color: rgba(255, 255, 255, 0.45);
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.cg-expand-class-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.cg-expand-substance-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.cg-expand-substance-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.cg-expand-substance-name {
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cg-expand-substance-dose {
+    color: rgba(255, 255, 255, 0.25);
+    font-size: 8px;
+}
+
+/* Actions row */
+.cg-expand-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 4px;
+}
+
+.cg-expand-add {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.5);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    padding: 0;
+}
+
+.cg-expand-add:hover {
+    border-color: rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.cg-expand-add.cg-expand-add-active {
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+}
+
+.cg-expand-add.cg-expand-add-loading {
+    opacity: 0.5;
+    cursor: wait;
+}
+
+.cg-expand-design-link {
+    background: none;
+    border: none;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    color: rgba(255, 255, 255, 0.25);
+    cursor: pointer;
+    padding: 4px 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    transition: color 0.2s;
+}
+
+.cg-expand-design-link:hover {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+/* Meta row (effect count + saved date) — in expand panel only */
+.cg-expand-meta {
+    display: flex;
+    gap: 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    color: rgba(255, 255, 255, 0.38);
+    padding: 6px 0 4px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    margin-top: 4px;
+    letter-spacing: 0.02em;
+}
+
+.cg-expand-effect-count,
+.cg-expand-date {
+    display: inline-flex;
+    align-items: center;
+}
+
+/* Device icons row — in expand panel only */
+.cg-expand-devices {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding-bottom: 4px;
+}
+
+.cg-expand-device-icon {
+    opacity: 0.55;
+    filter: grayscale(25%);
+    transition: opacity 0.2s;
+}
+.cg-expand-device-icon:hover {
+    opacity: 0.85;
+}
+
+/* Card "in stream" indicator */
+.cg-card-in-stream {
+    border-color: rgba(16, 185, 129, 0.25) !important;
+}
+
+.cg-card-in-stream::after {
+    content: '';
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #10b981;
+    opacity: 0.7;
+}
+
+/* ── Effect score line — sits directly under the thumbnail ──────────── */
+/* Value above (big %), effect name below (small caps). Dual-effect       */
+/* cards put one stack left + one stack right on the same row.            */
+.cg-card-score-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 9px 14px 6px;
+    font-family: 'IBM Plex Mono', monospace;
+    overflow: hidden;
+}
+
+.cg-card-score-line-single {
+    justify-content: flex-start;
+}
+
+.cg-card-score-line-dual {
+    justify-content: space-between;
+}
+
+.cg-card-score-entry {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    color: var(--score-color, #94a3b8);
+    white-space: nowrap;
+    min-width: 0;
+    line-height: 1;
+}
+
+/* Dual-effect: right-hand entry mirrors its internal alignment to the right */
+.cg-card-score-line-dual .cg-card-score-entry + .cg-card-score-entry {
+    align-items: flex-end;
+    text-align: right;
+}
+
+.cg-card-score-entry-name {
+    font-size: 8px;
+    font-weight: 600;
+    letter-spacing: 0.75px;
+    opacity: 0.78;
+    text-transform: uppercase;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    display: block;
+}
+
+.cg-card-score-entry-value {
+    font-size: 18px;
+    font-weight: 700;
+    text-shadow: 0 1px 5px color-mix(in srgb, var(--score-color, #94a3b8) 32%, transparent);
+}
+
+/* Wide cards have more room — bigger numbers + wider labels */
+.cg-card-wide .cg-card-score-line {
+    padding: 10px 16px 8px;
+    gap: 18px;
+}
+
+.cg-card-wide .cg-card-score-entry-name {
+    font-size: 9px;
+}
+
+.cg-card-wide .cg-card-score-entry-value {
+    font-size: 22px;
+}
+
+body.light-mode .cg-card-score-entry-value {
+    text-shadow: 0 1px 3px color-mix(in srgb, var(--score-color, #64748b) 20%, transparent);
+}
