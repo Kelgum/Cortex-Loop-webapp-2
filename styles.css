@@ -12109,18 +12109,48 @@ body.light-mode .preset-row.loaded {
    ══════════════════════════════════════════════════════════════════ */
 
 .ms-container {
-    padding: 10px 24px 6px;
-    margin: 0 auto;
+    padding: 12px 22px 10px;
+    margin: 14px auto 6px;
     position: sticky;
-    top: 0;
+    top: 10px;
     z-index: 40;
-    width: 100%;
+    width: calc(100% - 32px);
     max-width: 1100px;
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-    background: rgba(7, 11, 17, 0.75);
-    border-bottom: 1px solid var(--housing-border, rgba(255, 255, 255, 0.08));
+    border-radius: 18px;
+    backdrop-filter: blur(22px) saturate(1.15);
+    -webkit-backdrop-filter: blur(22px) saturate(1.15);
+    background: linear-gradient(180deg, rgba(18, 26, 38, 0.42) 0%, rgba(12, 18, 28, 0.32) 100%);
+    border: 1px solid rgba(146, 186, 255, 0.14);
+    box-shadow:
+        0 14px 38px rgba(0, 0, 0, 0.3),
+        0 2px 10px rgba(0, 0, 0, 0.18),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
     display: none;
+}
+
+body.light-mode .ms-container {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.72) 0%, rgba(248, 250, 252, 0.58) 100%);
+    border-color: rgba(100, 130, 170, 0.22);
+    box-shadow:
+        0 14px 38px rgba(20, 40, 70, 0.12),
+        0 2px 10px rgba(20, 40, 70, 0.06),
+        inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+body.light-mode .ms-header-label {
+    color: rgba(30, 42, 60, 0.6);
+}
+
+body.light-mode .ms-collapse-btn {
+    color: rgba(30, 42, 60, 0.4);
+}
+
+body.light-mode .ms-collapse-btn:hover {
+    color: rgba(30, 42, 60, 0.75);
+}
+
+body.light-mode .ms-summary {
+    color: rgba(30, 42, 60, 0.45);
 }
 
 body.mode-stream .ms-container {
