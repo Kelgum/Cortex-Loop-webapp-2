@@ -97,7 +97,7 @@ function classesCompatible(oldIv: any, newIv: any): boolean {
     if (oldClass === newClass) return true;
 
     const focusClasses = new Set(['Stimulant', 'Nootropic']);
-    const supportClasses = new Set(['Mineral/Electrolyte', 'Vitamin/Amino']);
+    const supportClasses = new Set(['Mineral/Electrolyte', 'Vitamin/Amino', 'Essential Fatty Acid']);
     const calmingClasses = new Set(['Adaptogen', 'Depressant/Sleep']);
 
     return (
