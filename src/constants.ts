@@ -20,6 +20,7 @@ export const CLASS_PALETTE: Record<string, string[]> = {
     'Psychedelic/Atypical': ['#9b59b6', '#e056fd', '#fd79a8', '#be2edd', '#d980fa', '#6c5ce7', '#a55eea', '#f8a5c2'],
     'Mineral/Electrolyte': ['#ffa502', '#ff793f', '#f6e58d', '#fab1a0', '#f0932b', '#ffda79', '#cc8e35', '#ffbe76'],
     'Vitamin/Amino': ['#eccc68', '#e77f67', '#f6e58d', '#f8c291', '#badc58', '#fdcb6e', '#f9ca24', '#ffeaa7'],
+    'Essential Fatty Acid': ['#00b8d4', '#0097a7', '#26a69a', '#4dd0e1', '#00838f', '#80deea', '#006064', '#b2ebf2'],
     'Psychiatric/Other': ['#747d8c', '#778beb', '#cf6a87', '#a4b0be', '#70a1ff', '#95afc0', '#636e72', '#57606f'],
     unknown: ['#94a3b8', '#778ca3', '#a4b0be', '#70a1ff', '#636e72', '#b2bec3', '#95afc0', '#c8d6e5'],
 };

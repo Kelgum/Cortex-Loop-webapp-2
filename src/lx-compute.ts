@@ -146,8 +146,8 @@ export function mapSubstanceToEffectAxis(substanceKey: any, curvesData: any) {
         ) {
             mapping.push(i);
         }
-        // Minerals/Vitamins → general support, affects all
-        else if (['Mineral/Electrolyte', 'Vitamin/Amino'].includes(cls)) {
+        // Minerals/Vitamins/EFAs → general support, affects all
+        else if (['Mineral/Electrolyte', 'Vitamin/Amino', 'Essential Fatty Acid'].includes(cls)) {
             mapping.push(i);
         }
     }

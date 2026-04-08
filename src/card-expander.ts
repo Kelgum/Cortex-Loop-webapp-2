@@ -333,6 +333,7 @@ function getClassHeroColor(className: string): string {
         'Psychedelic/Atypical': '#9b59b6',
         'Mineral/Electrolyte': '#ffa502',
         'Vitamin/Amino': '#eccc68',
+        'Essential Fatty Acid': '#00b8d4',
         'Psychiatric/Other': '#747d8c',
     };
     return palettes[className] || '#94a3b8';
