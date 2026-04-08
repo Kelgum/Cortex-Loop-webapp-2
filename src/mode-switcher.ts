@@ -28,6 +28,9 @@ import { settingsStore, sessionSettingsStore, STORAGE_KEYS } from './settings-st
 import { BIOMETRIC_DEVICES } from './biometric-devices';
 import { BADGE_CATEGORIES, BADGE_CATEGORY_CSS, type BadgeCategory } from './constants';
 import { getCustomSections, saveCustomSection, patchCustomSection, deleteCustomSection } from './custom-sections-store';
+import { mountMyStream, refreshMyStream, teardownMyStream } from './my-stream';
+import { expandCard, collapseExpandedCard } from './card-expander';
+import { isInStream } from './my-stream-store';
 import type { CustomSectionEntry } from './custom-sections-store';
 import { SUBSTANCE_DB } from './substances';
 
@@ -170,6 +173,15 @@ export function initModeSwitcher(): void {
     // Persistent card click handler on grid
     if (_gridEl) {
         _gridEl.addEventListener('click', handleCardClick);
+
+        // Handle "Open in Design" from expanded cards
+        _gridEl.addEventListener('card-open-design', ((e: CustomEvent) => {
+            const id = e.detail?.id;
+            if (id) {
+                collapseExpandedCard();
+                void handleStreamLoad(id);
+            }
+        }) as EventListener);
     }
 
     // Stream edit-mode toggle (3-dot button)
@@ -295,6 +307,7 @@ function applyMode(mode: AppMode, animated = false): void {
             document.body.classList.remove('mode-design');
             morphPrompt();
             renderStreamContent('');
+            ensureMyStreamMounted();
 
             if (animated) {
                 requestAnimationFrame(() => {
@@ -602,6 +615,58 @@ const BADGE_PALETTE_MAP: Record<string, BadgePalette> = {
         textHex: '#be8c78',
     },
 };
+
+/**
+ * Loose keyword → badge-class mapping for effect names not explicitly listed in
+ * BADGE_EFFECT_MAP. Lets e.g. "Rhythm" / "Anxiety" / "Inflammation" pick up a
+ * sensible color family without requiring the LLM to emit canonical effect names.
+ */
+const EFFECT_KEYWORD_CLASS: { keywords: string[]; cssClass: string }[] = [
+    { keywords: ['sleep', 'rem', 'circadian', 'rhythm', 'insomnia'], cssClass: 'badge-sleep' },
+    { keywords: ['focus', 'cogniti', 'attention', 'alert', 'executive', 'dopamine', 'wake'], cssClass: 'badge-neuro' },
+    { keywords: ['mood', 'anxiety', 'stress', 'depress', 'calm', 'craving', 'withdraw', 'nausea'], cssClass: 'badge-mood' },
+    { keywords: ['glucose', 'insulin', 'metabol', 'glycog', 'energy', 'appet'], cssClass: 'badge-metabolic' },
+    { keywords: ['inflamm', 'immune', 'cytokine'], cssClass: 'badge-immune' },
+    { keywords: ['cardio', 'heart', 'blood pressure', 'circulation'], cssClass: 'badge-cardio' },
+    { keywords: ['hormon', 'estrogen', 'testosterone', 'cortisol', 'thermo', 'vasomotor'], cssClass: 'badge-hormonal' },
+    { keywords: ['recover', 'repair', 'regener'], cssClass: 'badge-recovery' },
+    { keywords: ['pain', 'ache', 'nocicept'], cssClass: 'badge-pain' },
+    { keywords: ['longev', 'aging', 'senolyt'], cssClass: 'badge-longevity' },
+    { keywords: ['gut', 'digest', 'bloat', 'microbiome'], cssClass: 'badge-gut' },
+    { keywords: ['performance', 'endurance', 'strength', 'power'], cssClass: 'badge-performance' },
+    { keywords: ['beauty', 'skin', 'hair', 'collagen'], cssClass: 'badge-beauty' },
+    { keywords: ['addict'], cssClass: 'badge-addiction' },
+];
+
+/**
+ * Pick a display color for an effect name by walking BADGE_EFFECT_MAP, then
+ * EFFECT_KEYWORD_CLASS, then the LLM-assigned badgeCategory. Falls back to a
+ * neutral color. Used to tint the 7D score pills on wide cards.
+ */
+function getEffectColor(effectName: string, fallbackBadgeCategory?: string | null): string {
+    // 1. Exact match in BADGE_EFFECT_MAP
+    for (const def of BADGE_EFFECT_MAP) {
+        if (def.effects.includes(effectName)) {
+            const pal = BADGE_PALETTE_MAP[def.cssClass];
+            if (pal) return pal.textHex;
+        }
+    }
+    // 2. Loose keyword match
+    const lc = effectName.toLowerCase();
+    for (const entry of EFFECT_KEYWORD_CLASS) {
+        if (entry.keywords.some(k => lc.includes(k))) {
+            const pal = BADGE_PALETTE_MAP[entry.cssClass];
+            if (pal) return pal.textHex;
+        }
+    }
+    // 3. Fall back to the LLM-assigned badge category color
+    if (fallbackBadgeCategory) {
+        const cssClass = BADGE_CATEGORY_CSS[fallbackBadgeCategory as BadgeCategory];
+        const pal = cssClass && BADGE_PALETTE_MAP[cssClass];
+        if (pal) return pal.textHex;
+    }
+    return '#94a3b8';
+}
 
 function computeBadges(entry: SavedCycleIndexEntry): BadgeInfo[] {
     // 1. Prefer LLM-assigned badge category (new cycles)
@@ -1052,13 +1117,42 @@ function buildPhaseBarHtml(entry: SavedCycleIndexEntry): string {
     return `<div class="cg-card-phase-bar">${spans}</div>`;
 }
 
+/**
+ * Build the one-line score row rendered immediately under the card thumbnail.
+ * For dual-effect cards, the two entries sit on the same line with one on the
+ * left and one on the right. For single-effect cards, the single entry is
+ * left-aligned. Applies to every card type (wide + 24h).
+ */
+function buildScoreLineHtml(entry: SavedCycleIndexEntry): string {
+    const scores = entry.effectScores;
+    if (!scores || scores.length === 0) return '';
+    const names = entry.topEffects || [];
+    const maxShown = Math.min(scores.length, Math.max(1, names.length) || 1, 2);
+
+    const entries: string[] = [];
+    for (let i = 0; i < maxShown; i++) {
+        const score = scores[i];
+        if (!Number.isFinite(score) || score <= 0) continue;
+        const name = names[i] || '';
+        const color = getEffectColor(name, entry.badgeCategory || null);
+        const displayName = name.length > 11 ? name.slice(0, 10) + '…' : name;
+        entries.push(
+            `<span class="cg-card-score-entry" style="--score-color:${color}">` +
+                `<span class="cg-card-score-entry-value">+${Math.round(score)}%</span>` +
+                `<span class="cg-card-score-entry-name">${escHtml(displayName.toUpperCase())}</span>` +
+                `</span>`,
+        );
+    }
+    if (entries.length === 0) return '';
+    const countClass = entries.length === 1 ? ' cg-card-score-line-single' : ' cg-card-score-line-dual';
+    return `<div class="cg-card-score-line${countClass}">${entries.join('')}</div>`;
+}
+
 // ── Card Builder ───────────────────────────────────────────────────────
 
 function buildCardHtml(entry: SavedCycleIndexEntry, activeId: string | null): string {
     const isActive = entry.id === activeId;
     const wide = isWideCard(entry);
-    const effectStr = entry.maxEffects === 1 ? '1 effect' : '2 effects';
-    const dateStr = formatDate(entry.savedAt);
     const prompt = entry.prompt ? escHtml(entry.prompt.slice(0, 80)) + (entry.prompt.length > 80 ? '...' : '') : '';
 
     const fallbackW = wide ? 400 : 200;
@@ -1076,7 +1170,6 @@ function buildCardHtml(entry: SavedCycleIndexEntry, activeId: string | null): st
     const overlayTitleClass = getOverlayTitleClass(overlayTitleText);
     const overlayTitle = escHtml(overlayTitleText);
     const titleColor = getTitleColor(entry);
-    const deviceIconsHtml = renderDeviceIcons(entry.recommendedDevices);
 
     const isRx = entry.rxMode === 'rx' || entry.rxMode === 'rx-only';
     const rxHtml = isRx ? `<span class="cg-card-rx">Rx</span>` : '';
@@ -1089,15 +1182,22 @@ function buildCardHtml(entry: SavedCycleIndexEntry, activeId: string | null): st
         ? `<span class="cg-card-duration-badge">${escHtml(durationBadgeLabel(entry))}</span>`
         : '';
     const phaseBarHtml = wide ? buildPhaseBarHtml(entry) : '';
+    // Score line appears immediately under the thumbnail for ALL card types (wide + 24h)
+    const scoreLineHtml = buildScoreLineHtml(entry);
     const wideClass = wide ? ' cg-card-wide' : '';
 
-    // Enriched meta for wide cards: "28-day program · 2 effects · Mar 12"
+    // All cards drop effect count + date + device icons from the face; those move
+    // into the expand panel (which opens on click for both wide and narrow cards).
     const metaStr = wide
-        ? `${entry.timeHorizon?.durationDays ?? 28}-day program · ${effectStr} · ${isActive ? 'loaded' : dateStr}`
-        : `${effectStr} · ${isActive ? 'loaded' : dateStr}`;
+        ? `${entry.timeHorizon?.durationDays ?? 28}-day program${isActive ? ' · loaded' : ''}`
+        : isActive
+          ? 'loaded'
+          : '';
+
+    const inStreamClass = isInStream(entry.id) ? ' cg-card-in-stream' : '';
 
     return (
-        `<div class="cg-card${isActive ? ' cg-card-active' : ''}${wideClass}" data-cycle-id="${escHtml(entry.id)}">` +
+        `<div class="cg-card${isActive ? ' cg-card-active' : ''}${wideClass}${inStreamClass}" data-cycle-id="${escHtml(entry.id)}">` +
         cardDeleteHtml +
         `<div class="cg-card-icon">` +
         iconHtml +
@@ -1107,10 +1207,9 @@ function buildCardHtml(entry: SavedCycleIndexEntry, activeId: string | null): st
         rxHtml +
         phaseBarHtml +
         `</div>` +
-        `<h3 class="cg-card-name">${escHtml(entry.filename)}</h3>` +
+        scoreLineHtml +
         (prompt ? `<p class="cg-card-prompt">${prompt}</p>` : '') +
-        `<div class="cg-card-meta">${metaStr}</div>` +
-        deviceIconsHtml +
+        (metaStr ? `<div class="cg-card-meta">${metaStr}</div>` : '') +
         `</div>`
     );
 }
@@ -1133,6 +1232,22 @@ function rerenderStreamImmediate(): void {
     });
 }
 
+// ── My Stream mounting ────────────────────────────────────────────────
+
+let _myStreamMounted = false;
+
+function ensureMyStreamMounted(): void {
+    const container = document.getElementById('my-stream-container');
+    if (!container || _myStreamMounted) {
+        if (_myStreamMounted) refreshMyStream();
+        return;
+    }
+    mountMyStream(container);
+    _myStreamMounted = true;
+}
+
+// ── Content Orchestrator ─────────────────────────────────────────────
+
 function renderStreamContent(filter: string): void {
     if (!_gridEl) return;
     const query = filter.trim();
@@ -1145,6 +1260,64 @@ function renderStreamContent(filter: string): void {
         _gridEl.classList.add('stream-sections-mode');
         renderStreamSections();
     }
+    // Fire-and-forget: compute missing 7D scores from stored bundles and re-render those cards
+    void lazyComputeMissingScores(getCycleIndex());
+}
+
+// ── Lazy 7D score compute for cycles saved before the feature existed ──
+
+let _lazyScoreComputePromise: Promise<void> | null = null;
+const _lazyScoreComputed = new Set<string>();
+
+async function lazyComputeMissingScores(entries: SavedCycleIndexEntry[]): Promise<void> {
+    if (_lazyScoreComputePromise) return _lazyScoreComputePromise;
+    _lazyScoreComputePromise = (async () => {
+        try {
+            const { compute7DScoresFromBundle, EFFECT_SCORE_FORMULA_VERSION } = await import('./effect-score');
+            for (const entry of entries) {
+                const hasScores = entry.effectScores && entry.effectScores.length > 0;
+                const versionCurrent = entry.effectScoresVersion === EFFECT_SCORE_FORMULA_VERSION;
+                // Skip only if we have scores AND they were computed with the current formula
+                if (hasScores && versionCurrent) continue;
+                if (_lazyScoreComputed.has(entry.id)) continue;
+                _lazyScoreComputed.add(entry.id);
+
+                try {
+                    const bundle = await loadCycleBundle(entry.id);
+                    if (!bundle) continue;
+                    const scores = compute7DScoresFromBundle(bundle);
+                    if (!scores || scores.length === 0) continue;
+
+                    entry.effectScores = scores;
+                    entry.effectScoresVersion = EFFECT_SCORE_FORMULA_VERSION;
+                    await patchCycle(entry.id, {
+                        effectScores: scores,
+                        effectScoresVersion: EFFECT_SCORE_FORMULA_VERSION,
+                    });
+
+                    // Update just this card in place (no full re-render).
+                    // Score line lives between the .cg-card-icon and the .cg-card-name.
+                    const cardEls = document.querySelectorAll(`[data-cycle-id="${entry.id}"]`);
+                    cardEls.forEach(cardEl => {
+                        const existingLine = cardEl.querySelector(':scope > .cg-card-score-line');
+                        const newHtml = buildScoreLineHtml(entry);
+                        if (existingLine) {
+                            existingLine.outerHTML = newHtml;
+                        } else if (newHtml) {
+                            const iconEl = cardEl.querySelector(':scope > .cg-card-icon');
+                            if (iconEl) iconEl.insertAdjacentHTML('afterend', newHtml);
+                        }
+                    });
+                } catch {
+                    // swallow and continue
+                }
+                await new Promise(r => setTimeout(r, 120));
+            }
+        } finally {
+            _lazyScoreComputePromise = null;
+        }
+    })();
+    return _lazyScoreComputePromise;
 }
 
 // ── Netflix Sections (browse mode) ─────────────────────────────────────
@@ -1477,7 +1650,13 @@ function handleCardClick(e: Event): void {
         e.stopPropagation();
         enterCardEdit(card, id);
     } else {
-        void handleStreamLoad(id);
+        // All cards (wide + narrow): expand inline. "Open in Design" inside the
+        // expand panel triggers card-open-design → handleStreamLoad for full load.
+        e.preventDefault();
+        e.stopPropagation();
+        const index = getCycleIndex();
+        const entry = index.find(ent => ent.id === id);
+        if (entry) expandCard(card, entry);
     }
 }
 

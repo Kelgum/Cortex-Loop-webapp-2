@@ -28,6 +28,7 @@ import { getCompletedStageClassesForPhase } from './cache-policy';
 import { SUBSTANCE_DB } from './substances';
 import { initCustomSectionsStore } from './custom-sections-store';
 import { initSectionOrder } from './mode-switcher';
+import { compute7DEffectScores, computeDesignEffectScores, EFFECT_SCORE_FORMULA_VERSION } from './effect-score';
 
 let _saveBtn: HTMLButtonElement | null = null;
 let _breakBtn: HTMLButtonElement | null = null;
@@ -102,6 +103,15 @@ async function handleSave(): Promise<void> {
         ),
     ];
 
+    // Pre-compute effect scores — prefer 7D multi-day pipeline, fall back to 24h design state
+    let effectScores: number[] | undefined;
+    if (MultiDayState.days && MultiDayState.days.length >= 2 && PhaseState.curvesData) {
+        effectScores = compute7DEffectScores(MultiDayState.days, PhaseState.curvesData);
+    } else if (PhaseState.lxCurves && PhaseState.curvesData) {
+        effectScores = computeDesignEffectScores(PhaseState.lxCurves, PhaseState.curvesData);
+    }
+    if (effectScores && !effectScores.some(s => s > 0)) effectScores = undefined;
+
     const record: SavedCycleRecord = {
         id,
         filename,
@@ -117,6 +127,8 @@ async function handleSave(): Promise<void> {
         recommendedDevices,
         substanceClasses,
         timeHorizon: PhaseState.timeHorizon || undefined,
+        effectScores,
+        effectScoresVersion: effectScores ? EFFECT_SCORE_FORMULA_VERSION : undefined,
         bundle,
     };
 

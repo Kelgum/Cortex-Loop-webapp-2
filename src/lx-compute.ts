@@ -525,10 +525,7 @@ export function computeStackingPeaks(interventions: any[], curvesData: any[]): S
  * then expresses each substance as a percentage of the total positive contribution.
  * Averaged across all curves (effects).
  */
-export function computeSubstanceContributions(
-    interventions: any[],
-    curvesData: any[],
-): Map<string, number> {
+export function computeSubstanceContributions(interventions: any[], curvesData: any[]): Map<string, number> {
     const result = new Map<string, number>();
     if (!interventions?.length || !curvesData?.length) return result;
 
@@ -607,7 +604,7 @@ function detectClusters(tacticalInterventions: any[]): Cluster[] {
     if (tacticalInterventions.length === 0) return [];
 
     // Build active zones: [doseTime + onset, doseTime + duration * 0.6]
-    const zones: ActiveZone[] = tacticalInterventions.map((iv) => {
+    const zones: ActiveZone[] = tacticalInterventions.map(iv => {
         const pharma = iv.substance?.pharma || { onset: 30, duration: 240 };
         const doseMin = iv.timeMinutes || 0;
         return {
@@ -731,25 +728,18 @@ export function pruneConcurrentOverload(
         if (cluster.members.length <= concurrentMax) {
             const startH = (cluster.start / 60).toFixed(1);
             const endH = (cluster.end / 60).toFixed(1);
-            console.log(
-                `[Density] Cluster ${startH}h-${endH}h: ${cluster.members.length} tactical substances — OK`,
-            );
+            console.log(`[Density] Cluster ${startH}h-${endH}h: ${cluster.members.length} tactical substances — OK`);
             continue;
         }
 
-        const contributions = computeClusterContributions(
-            cluster.members,
-            cluster.start,
-            cluster.end,
-            curvesData,
-        );
+        const contributions = computeClusterContributions(cluster.members, cluster.start, cluster.end, curvesData);
 
         // Sort by contribution ascending (weakest first)
         const sorted = [...cluster.members]
-            .filter((iv) => !removedSet.has(iv))
+            .filter(iv => !removedSet.has(iv))
             .sort((a, b) => (contributions.get(a) || 0) - (contributions.get(b) || 0));
 
-        const activeInCluster = sorted.filter((iv) => !removedSet.has(iv));
+        const activeInCluster = sorted.filter(iv => !removedSet.has(iv));
         let excess = activeInCluster.length - concurrentMax;
 
         for (const iv of sorted) {
@@ -777,11 +767,9 @@ export function pruneConcurrentOverload(
 
         const startH = (cluster.start / 60).toFixed(1);
         const endH = (cluster.end / 60).toFixed(1);
-        const removedInCluster = cluster.members.filter((iv) => removedSet.has(iv));
+        const removedInCluster = cluster.members.filter(iv => removedSet.has(iv));
         if (removedInCluster.length > 0) {
-            const removedNames = removedInCluster
-                .map((iv) => `${iv.key} (${contributions.get(iv) || 0}%)`)
-                .join(', ');
+            const removedNames = removedInCluster.map(iv => `${iv.key} (${contributions.get(iv) || 0}%)`).join(', ');
             console.log(
                 `[Density] Cluster ${startH}h-${endH}h: ${cluster.members.length} tactical, cap=${concurrentMax} → removing ${removedNames}`,
             );
@@ -793,7 +781,7 @@ export function pruneConcurrentOverload(
     }
 
     // Combine surviving substances
-    let surviving = interventions.filter((iv) => !removedSet.has(iv));
+    let surviving = interventions.filter(iv => !removedSet.has(iv));
 
     // Apply daily max cap (background + tactical combined)
     if (surviving.length > dailyMax) {
@@ -810,19 +798,17 @@ export function pruneConcurrentOverload(
                 reason: `daily cap (${surviving.length} > ${dailyMax})`,
                 peakContribution: globalContribs.get(weakest.key) || 0,
             });
-            surviving = surviving.filter((iv) => iv !== weakest);
+            surviving = surviving.filter(iv => iv !== weakest);
         }
     }
 
     // Rescale surviving substances to absorb freed budget
     if (removedInfo.length > 0 && surviving.length > 0) {
         rescaleSurvivors(surviving, interventions, curvesData);
-        console.log(
-            `[Density] Rescaled ${surviving.length} surviving substances to absorb freed budget`,
-        );
+        console.log(`[Density] Rescaled ${surviving.length} surviving substances to absorb freed budget`);
     }
 
-    const totalBg = surviving.filter((iv) => background.includes(iv)).length;
+    const totalBg = surviving.filter(iv => background.includes(iv)).length;
     const totalTac = surviving.length - totalBg;
     console.log(
         `[Density] Total: ${surviving.length} substances (${totalBg} background + ${totalTac} tactical), daily cap=${dailyMax} — ${surviving.length <= dailyMax ? 'OK' : 'OVER'}`,
@@ -871,10 +857,7 @@ function rescaleSurvivors(surviving: any[], original: any[], curvesData: any[]):
                     // Find the matching impact key and scale it, capping at 1.0
                     for (const effectKey of Object.keys(iv.impacts)) {
                         if (matchImpactToCurve({ [effectKey]: 1 }, curveName) !== 0) {
-                            iv.impacts[effectKey] = Math.min(
-                                1.0,
-                                iv.impacts[effectKey] * scaleFactor,
-                            );
+                            iv.impacts[effectKey] = Math.min(1.0, iv.impacts[effectKey] * scaleFactor);
                         }
                     }
                 }
@@ -917,7 +900,7 @@ export function computeExtendedLxOverlay(
     }[],
     durationDays: number,
 ): { effect: string; overlay: { day: number; value: number }[] }[] {
-    return effectRoster.map((curve) => {
+    return effectRoster.map(curve => {
         const effectName = (curve.effect || '').toLowerCase().trim();
         const overlay: { day: number; value: number }[] = [];
 
@@ -945,9 +928,7 @@ export function computeExtendedLxOverlay(
                 if (!isActiveOnDay(iv, day, durationDays)) continue;
 
                 // Match this intervention to the current effect curve
-                const impactValue = iv.impacts
-                    ? matchImpactToCurve(iv.impacts, effectName)
-                    : 0;
+                const impactValue = iv.impacts ? matchImpactToCurve(iv.impacts, effectName) : 0;
                 if (impactValue === 0) continue;
 
                 activeKeys.add(iv.key);
@@ -982,11 +963,7 @@ export function computeExtendedLxOverlay(
 }
 
 /** Check if an intervention is active on a given day based on its start day and frequency. */
-function isActiveOnDay(
-    iv: { day: number; frequency?: string },
-    day: number,
-    _durationDays: number,
-): boolean {
+function isActiveOnDay(iv: { day: number; frequency?: string }, day: number, _durationDays: number): boolean {
     if (day < iv.day) return false;
     const freq = iv.frequency || 'daily';
     if (freq === 'daily') return true;

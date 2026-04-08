@@ -58,7 +58,7 @@ const STACKING_BAR_MIN_SEGMENT = 2;
 // Per-effect improvement % — Cmax shift from baseline (peak % change)
 // ---------------------------------------------------------------------------
 
-function computeEffectImprovement(
+export function computeEffectImprovement(
     lxPoints: CurvePoint[],
     baselinePoints: CurvePoint[],
     _desiredPoints: CurvePoint[],
@@ -689,7 +689,12 @@ function resolveSmoothingAlpha(dtMs: number): number {
     return 1 - Math.exp((-Math.log(2) * dtMs) / SMOOTHING_HALF_LIFE_MS);
 }
 
-function applyResolvedFrame(track: TrackedEffect, frame: ResolvedFrame, options: FrameRenderOptions, now: number): void {
+function applyResolvedFrame(
+    track: TrackedEffect,
+    frame: ResolvedFrame,
+    options: FrameRenderOptions,
+    now: number,
+): void {
     ensureEffectDom(track, frame.color);
     if (!track.frameGroup || !track.boxGroupEl || !track.connectorPath || !track.anchorDot) return;
 
@@ -968,8 +973,7 @@ export function computePeakFromData(
         const candidate = positiveCandidates[i];
         const isMoreRelevant =
             polarity === 'higher_is_worse'
-                ? candidate.value < anchor.value ||
-                  (candidate.value === anchor.value && candidate.gain > anchor.gain)
+                ? candidate.value < anchor.value || (candidate.value === anchor.value && candidate.gain > anchor.gain)
                 : candidate.value > anchor.value || (candidate.value === anchor.value && candidate.gain > anchor.gain);
         if (isMoreRelevant) anchor = candidate;
     }
@@ -1031,7 +1035,7 @@ function readElementBounds(el: Element | null): { x: number; y: number; width: n
         }
     }
 
-    const tagName = String((anyEl.tagName || '')).toLowerCase();
+    const tagName = String(anyEl.tagName || '').toLowerCase();
     if (tagName === 'rect') {
         return {
             x: parseNumericAttr(el, 'x'),
@@ -1533,7 +1537,12 @@ function sampleCurveFootprintPressure(
     };
 }
 
-function buildConnectorPoints(boxX: number, boxY: number, anchorX: number, anchorY: number): { x: number; y: number }[] {
+function buildConnectorPoints(
+    boxX: number,
+    boxY: number,
+    anchorX: number,
+    anchorY: number,
+): { x: number; y: number }[] {
     const origin = chooseConnectorOrigin(boxX, boxY, anchorX, anchorY);
     if (origin.side === 'left' || origin.side === 'right') {
         const elbowX = origin.x + (anchorX - origin.x) * 0.55;
@@ -1554,7 +1563,12 @@ function buildConnectorPoints(boxX: number, boxY: number, anchorX: number, ancho
     ];
 }
 
-function sampleConnectorPoints(boxX: number, boxY: number, anchorX: number, anchorY: number): { x: number; y: number }[] {
+function sampleConnectorPoints(
+    boxX: number,
+    boxY: number,
+    anchorX: number,
+    anchorY: number,
+): { x: number; y: number }[] {
     const vertices = buildConnectorPoints(boxX, boxY, anchorX, anchorY);
     const samples: { x: number; y: number }[] = [];
 
@@ -1603,7 +1617,8 @@ function computeConnectorDensityCost(
         }
 
         if (sample.x < PHASE_CHART.padL || sample.x > PHASE_CHART.padL + PHASE_CHART.plotW) continue;
-        const hour = (PHASE_CHART.startMin + ((sample.x - PHASE_CHART.padL) / PHASE_CHART.plotW) * PHASE_CHART.totalMin) / 60;
+        const hour =
+            (PHASE_CHART.startMin + ((sample.x - PHASE_CHART.padL) / PHASE_CHART.plotW) * PHASE_CHART.totalMin) / 60;
         const curveYs: number[] = [];
         if (lxPoints) curveYs.push(phaseChartY(interpolatePointsAtTime(lxPoints, hour)));
         if (baselinePoints) curveYs.push(phaseChartY(interpolatePointsAtTime(baselinePoints, hour)));
@@ -1718,7 +1733,16 @@ function buildPlacementField(
             const x = xPositions[col];
             const y = yPositions[row];
             const upperBand = y <= upperBandMaxY + 0.001;
-            const evaluation = evaluatePlacementBase(x, y, profile, bounds, obstacles, lxPoints, baselinePoints, upperBand);
+            const evaluation = evaluatePlacementBase(
+                x,
+                y,
+                profile,
+                bounds,
+                obstacles,
+                lxPoints,
+                baselinePoints,
+                upperBand,
+            );
             cells.push({
                 x,
                 y,
@@ -1767,7 +1791,9 @@ function buildPlacementField(
 }
 
 function extractBestPlacementBasin(field: PlacementField, upperBand: boolean): PlacementBasin | null {
-    const eligible = field.cells.filter(cell => cell.valid && cell.upperBand === upperBand && Number.isFinite(cell.totalCost));
+    const eligible = field.cells.filter(
+        cell => cell.valid && cell.upperBand === upperBand && Number.isFinite(cell.totalCost),
+    );
     if (eligible.length === 0) return null;
 
     let bestCell = eligible[0];
@@ -1838,7 +1864,10 @@ function extractBestPlacementBasin(field: PlacementField, upperBand: boolean): P
     };
 }
 
-function choosePreferredBasin(upperBasin: PlacementBasin | null, lowerBasin: PlacementBasin | null): PlacementBasin | null {
+function choosePreferredBasin(
+    upperBasin: PlacementBasin | null,
+    lowerBasin: PlacementBasin | null,
+): PlacementBasin | null {
     if (upperBasin) {
         if (!lowerBasin) return upperBasin;
         return lowerBasin.meanCost <= upperBasin.meanCost * (1 - LOWER_BAND_ADVANTAGE_RATIO) ? lowerBasin : upperBasin;
@@ -1958,7 +1987,11 @@ function acceptPlacement(memory: PlacementMemory, placement: ResolvedPlacementTa
     };
 }
 
-function keepCurrentPlacement(memory: PlacementMemory, placement: ResolvedPlacementTarget, currentCost: number): PlacementResolution {
+function keepCurrentPlacement(
+    memory: PlacementMemory,
+    placement: ResolvedPlacementTarget,
+    currentCost: number,
+): PlacementResolution {
     return {
         placement,
         memory: {
@@ -1998,7 +2031,14 @@ function resolveBoxPlacement(
     memory: PlacementMemory = createEmptyPlacementMemory(),
     now = performance.now(),
 ): PlacementResolution {
-    const { field, obstacles } = buildPlacementField(profile, effectIdx, effectCount, otherPlacement, lxPoints, baselinePoints);
+    const { field, obstacles } = buildPlacementField(
+        profile,
+        effectIdx,
+        effectCount,
+        otherPlacement,
+        lxPoints,
+        baselinePoints,
+    );
     const invalid = createInvalidPlacement();
     if (!field) {
         return { placement: invalid, memory: createEmptyPlacementMemory() };
@@ -2011,7 +2051,14 @@ function resolveBoxPlacement(
 
     if (!preferredBasin) {
         if (currentPlacement) {
-            const currentEval = evaluatePlacementFromField(field, currentPlacement.box, profile, obstacles, lxPoints, baselinePoints);
+            const currentEval = evaluatePlacementFromField(
+                field,
+                currentPlacement.box,
+                profile,
+                obstacles,
+                lxPoints,
+                baselinePoints,
+            );
             if (currentEval.valid) return keepCurrentPlacement(memory, currentPlacement, currentEval.cost);
         }
         return { placement: invalid, memory: createEmptyPlacementMemory() };
@@ -2020,11 +2067,23 @@ function resolveBoxPlacement(
     const candidatePlacement = placementFromBasin(preferredBasin);
     if (!currentPlacement) return acceptPlacement(memory, candidatePlacement);
 
-    const currentEval = evaluatePlacementFromField(field, currentPlacement.box, profile, obstacles, lxPoints, baselinePoints);
+    const currentEval = evaluatePlacementFromField(
+        field,
+        currentPlacement.box,
+        profile,
+        obstacles,
+        lxPoints,
+        baselinePoints,
+    );
     if (!currentEval.valid) return acceptPlacement(memory, candidatePlacement);
 
     if (
-        areBasinsEquivalent(memory.currentBasinBounds, candidatePlacement.basinBounds, memory.currentTarget, candidatePlacement.box)
+        areBasinsEquivalent(
+            memory.currentBasinBounds,
+            candidatePlacement.basinBounds,
+            memory.currentTarget,
+            candidatePlacement.box,
+        )
     ) {
         return acceptPlacement(memory, candidatePlacement);
     }
@@ -2072,11 +2131,7 @@ function resolveBoxPlacement(
     };
 }
 
-export function ensureGamificationOverlayPresence(
-    lxCurves: any[],
-    curvesData: any[],
-    source: OverlaySource,
-): void {
+export function ensureGamificationOverlayPresence(lxCurves: any[], curvesData: any[], source: OverlaySource): void {
     if (!Array.isArray(curvesData) || curvesData.length === 0) return;
     const container = ensureContainer(source);
     if (!container) return;
@@ -2161,7 +2216,10 @@ export const __testing = {
             basinId: track.currentBasinId,
             score: track.currentBasinCost,
             box: track.lastResolvedBox,
-            target: track.targetBoxX != null && track.targetBoxY != null ? { x: track.targetBoxX, y: track.targetBoxY } : null,
+            target:
+                track.targetBoxX != null && track.targetBoxY != null
+                    ? { x: track.targetBoxX, y: track.targetBoxY }
+                    : null,
             basinBounds: track.currentBasinBounds,
             pendingBasinId: track.pendingBasinId,
             pendingBasinSince: track.pendingBasinSince,

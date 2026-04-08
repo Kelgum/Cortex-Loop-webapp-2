@@ -1052,9 +1052,7 @@ export function showSherlock7DStack(beats: Sherlock7DBeat[], activeDayIdx: numbe
         existingCards.forEach(el => el.remove());
 
         const cards: SherlockCardData[] = beats.map(beat => {
-            const subColor = beat.topSubstanceKey
-                ? SUBSTANCE_DB[beat.topSubstanceKey]?.color
-                : undefined;
+            const subColor = beat.topSubstanceKey ? SUBSTANCE_DB[beat.topSubstanceKey]?.color : undefined;
             return {
                 id: `day7d-${beat.day}`,
                 text: beat.text,
@@ -1102,7 +1100,7 @@ export function showSherlock7DStack(beats: Sherlock7DBeat[], activeDayIdx: numbe
             // Below active
             let y = activeTop + activeH + gap;
             for (let s = 1; s < offset; s++) {
-                const si = ((activeIdx + s) % n + n) % n;
+                const si = (((activeIdx + s) % n) + n) % n;
                 y += cardH[si] + gap;
             }
             top = y;
@@ -1110,7 +1108,7 @@ export function showSherlock7DStack(beats: Sherlock7DBeat[], activeDayIdx: numbe
             // Above active
             let y = activeTop;
             for (let s = -1; s >= offset; s--) {
-                const si = ((activeIdx + s) % n + n) % n;
+                const si = (((activeIdx + s) % n) + n) % n;
                 y -= cardH[si] + gap;
             }
             top = y;

@@ -5647,7 +5647,12 @@ async function launchMultiDayPipeline() {
         }
 
         // If bio strips were cleared (e.g. by timeline engine exit), re-render them
-        if (bioGroup && bioGroup.children.length === 0 && BiometricState.channels && BiometricState.channels.length > 0) {
+        if (
+            bioGroup &&
+            bioGroup.children.length === 0 &&
+            BiometricState.channels &&
+            BiometricState.channels.length > 0
+        ) {
             renderBiometricStrips(BiometricState.channels, true);
         }
 

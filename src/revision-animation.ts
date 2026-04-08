@@ -425,9 +425,7 @@ function prepareRevisionPillMorph(
             const newGeo = entry.newIv ? newGeoMap.get(entry.newIv) : null;
             if (newGeo) {
                 // Find the pre-rendered pill from renderSubstanceTimeline
-                const existingPill = entry.newIv
-                    ? findPillByIntervention(entry.newIv, timelineGroup, true)
-                    : null;
+                const existingPill = entry.newIv ? findPillByIntervention(entry.newIv, timelineGroup, true) : null;
                 if (existingPill) {
                     const doseMorph = parseDoseFromZero(entry.newIv);
                     plan.added.push({ geo: newGeo, el: existingPill as SVGGElement, doseMorph });
@@ -448,9 +446,7 @@ function prepareRevisionPillMorph(
             }
             const newGeo = entry.newIv ? newGeoMap.get(entry.newIv) : null;
             if (newGeo) {
-                const existingPill = entry.newIv
-                    ? findPillByIntervention(entry.newIv, timelineGroup, true)
-                    : null;
+                const existingPill = entry.newIv ? findPillByIntervention(entry.newIv, timelineGroup, true) : null;
                 if (existingPill) {
                     const doseMorph = parseDoseFromZero(entry.newIv);
                     plan.added.push({ geo: newGeo, el: existingPill as SVGGElement, doseMorph });
@@ -487,9 +483,7 @@ function revisionRemoveTick(el: SVGGElement, geo: PillGeometry, t: number): void
     const dot = el.querySelector('.timeline-curve-dot') as SVGCircleElement | null;
     if (connector) {
         const connY1 = parseFloat(connector.getAttribute('y1') || '0');
-        const origY2 = parseFloat(
-            connector.getAttribute('data-orig-y2') || connector.getAttribute('y2') || '0',
-        );
+        const origY2 = parseFloat(connector.getAttribute('data-orig-y2') || connector.getAttribute('y2') || '0');
         const connDist = origY2 - connY1;
         const connStartOpacity = 0.25;
         const BRIGHTEN_END = 0.2;
@@ -1030,21 +1024,17 @@ export async function animateRevisionScan(
                 if (cards.length > i) showSherlockStack(cards, i);
             });
             for (let mi = 0; mi < morphEntries.length; mi++) {
-                await Promise.resolve(
-                    options.morphLxStep?.(morphEntries[mi], morphEntries[mi]._origIdx ?? mi, 0),
-                );
+                await Promise.resolve(options.morphLxStep?.(morphEntries[mi], morphEntries[mi]._origIdx ?? mi, 0));
             }
             if (bioGroupEl && bioDeltaY !== 0) {
                 const finalTY = bioStartTY + bioDeltaY;
                 bioGroupEl.setAttribute('transform', `translate(0,${finalTY.toFixed(2)})`);
-                if (spotterGroupEl)
-                    spotterGroupEl.setAttribute('transform', `translate(0,${finalTY.toFixed(2)})`);
+                if (spotterGroupEl) spotterGroupEl.setAttribute('transform', `translate(0,${finalTY.toFixed(2)})`);
             }
             svgEl_.setAttribute('viewBox', `0 0 ${PHASE_CHART.viewW} ${startViewBoxH + bioDeltaY}`);
         } else {
             // Move scan line to first trigger position
-            const firstX =
-                sherlockTriggers.length > 0 ? sherlockTriggers[0].x - 8 : PHASE_CHART.padL;
+            const firstX = sherlockTriggers.length > 0 ? sherlockTriggers[0].x - 8 : PHASE_CHART.padL;
             await dayScan.moveTo(firstX);
 
             // ── SINGLE rAF LOOP — constant speed, 5 seconds ──
@@ -1072,9 +1062,7 @@ export async function animateRevisionScan(
             const BIO_ANIM_DUR = 400;
             const pois: any[] = (BiometricState as any)._pois || [];
             const poiContainer = document.getElementById('phase-poi-connectors');
-            const poiGroups = poiContainer
-                ? Array.from(poiContainer.querySelectorAll('.poi-connector-group'))
-                : [];
+            const poiGroups = poiContainer ? Array.from(poiContainer.querySelectorAll('.poi-connector-group')) : [];
             const poiBioStartYs = pois.map((p: any) => p.bioSvgY as number);
 
             await new Promise<void>(resolve => {
@@ -1126,15 +1114,10 @@ export async function animateRevisionScan(
                         const bioEase = 1 - Math.pow(1 - bioT, 3); // ease-out cubic
                         const bioDelta = bioDeltaY * bioEase;
                         const ty = bioStartTY + bioDelta;
-                        if (bioGroupEl)
-                            bioGroupEl.setAttribute('transform', `translate(0,${ty.toFixed(2)})`);
-                        if (spotterGroupEl)
-                            spotterGroupEl.setAttribute('transform', `translate(0,${ty.toFixed(2)})`);
+                        if (bioGroupEl) bioGroupEl.setAttribute('transform', `translate(0,${ty.toFixed(2)})`);
+                        if (spotterGroupEl) spotterGroupEl.setAttribute('transform', `translate(0,${ty.toFixed(2)})`);
                         const newH = startViewBoxH + bioDelta;
-                        svgEl_.setAttribute(
-                            'viewBox',
-                            `0 0 ${PHASE_CHART.viewW} ${newH.toFixed(1)}`,
-                        );
+                        svgEl_.setAttribute('viewBox', `0 0 ${PHASE_CHART.viewW} ${newH.toFixed(1)}`);
 
                         // Shift POI bio-side dots + connector paths to track bio strip
                         for (let pi = 0; pi < pois.length; pi++) {

@@ -57,9 +57,14 @@ import {
     callExtendedSherlock,
 } from './llm-pipeline';
 import {
-    validateInterventions, computeIncrementalLxOverlay, animateSequentialLxReveal,
-    renderLxCurves, renderSubstanceTimeline, revealTimelinePillsInstant,
-    renderLxBandsStatic, animatePhaseChartViewBoxHeight,
+    validateInterventions,
+    computeIncrementalLxOverlay,
+    animateSequentialLxReveal,
+    renderLxCurves,
+    renderSubstanceTimeline,
+    revealTimelinePillsInstant,
+    renderLxBandsStatic,
+    animatePhaseChartViewBoxHeight,
 } from './lx-system';
 import {
     showBiometricTrigger,
@@ -871,12 +876,7 @@ configureBiometricRuntime({
         TimelineState.cursor = buildPhase3BioCorrectionSegments(timelineEngine, TimelineState.cursor);
         _bioCorrectionEndTime = TimelineState.cursor;
         engine.advanceTimeTo(correctionStartTime);
-        startBioCorrectionPlayheadTracker(
-            engine,
-            correctionStartTime,
-            BIO_CORRECTION_MORPH_MS,
-            _bioCorrectionEndTime,
-        );
+        startBioCorrectionPlayheadTracker(engine, correctionStartTime, BIO_CORRECTION_MORPH_MS, _bioCorrectionEndTime);
     },
     onBioCorrectionStop: () => {
         const engine = TimelineState.engine;
@@ -925,11 +925,7 @@ configureBiometricRuntime({
 // EXTENDED TIMELINE PIPELINE
 // ============================================
 
-async function runExtendedPipeline(
-    prompt: string,
-    timeHorizon: TimeHorizon,
-    _engine: any,
-): Promise<void> {
+async function runExtendedPipeline(prompt: string, timeHorizon: TimeHorizon, _engine: any): Promise<void> {
     const { durationDays } = timeHorizon;
     const svg = document.getElementById('phase-chart-svg') as unknown as SVGSVGElement;
 
@@ -937,11 +933,20 @@ async function runExtendedPipeline(
 
     // Clear ALL daily-specific SVG groups so we start with a clean chart
     const groupsToClear = [
-        'phase-x-axis', 'phase-y-axis-left', 'phase-y-axis-right',
-        'phase-grid', 'phase-baseline-curves', 'phase-desired-curves',
-        'phase-lx-curves', 'phase-substance-timeline', 'phase-scan-line',
-        'phase-mission-arrows', 'phase-word-cloud', 'phase-biometric-strips',
-        'phase-spotter-highlights', 'phase-legend',
+        'phase-x-axis',
+        'phase-y-axis-left',
+        'phase-y-axis-right',
+        'phase-grid',
+        'phase-baseline-curves',
+        'phase-desired-curves',
+        'phase-lx-curves',
+        'phase-substance-timeline',
+        'phase-scan-line',
+        'phase-mission-arrows',
+        'phase-word-cloud',
+        'phase-biometric-strips',
+        'phase-spotter-highlights',
+        'phase-legend',
     ];
     for (const id of groupsToClear) {
         const g = svg.getElementById(id) || document.getElementById(id);
@@ -1014,12 +1019,7 @@ async function runExtendedPipeline(
     // ── Step 3: Call Extended Chess Player ──
     let extInterventionResult: any;
     try {
-        extInterventionResult = await callExtendedIntervention(
-            prompt,
-            durationDays,
-            effectRoster,
-            phaseSpotlights,
-        );
+        extInterventionResult = await callExtendedIntervention(prompt, durationDays, effectRoster, phaseSpotlights);
     } catch (err) {
         console.error('[Extended Pipeline] Extended Chess Player failed:', err);
         // Still show curves even if intervention fails
@@ -1049,20 +1049,15 @@ async function runExtendedPipeline(
     PhaseState.viewingPhase = 2;
 
     // ── Step 5: Call Extended Sherlock (non-blocking narration) ──
-    callExtendedSherlock(
-        prompt,
-        durationDays,
-        effectRoster,
-        phaseSpotlights,
-        interventions,
-        protocolPhases,
-    ).then((narrationResult) => {
-        if (narrationResult?.beats) {
-            console.log(`[Extended Pipeline] Sherlock narration: ${narrationResult.beats.length} phase beats`);
-        }
-    }).catch((err) => {
-        console.warn('[Extended Pipeline] Extended Sherlock failed (non-critical):', err);
-    });
+    callExtendedSherlock(prompt, durationDays, effectRoster, phaseSpotlights, interventions, protocolPhases)
+        .then(narrationResult => {
+            if (narrationResult?.beats) {
+                console.log(`[Extended Pipeline] Sherlock narration: ${narrationResult.beats.length} phase beats`);
+            }
+        })
+        .catch(err => {
+            console.warn('[Extended Pipeline] Extended Sherlock failed (non-critical):', err);
+        });
 
     // Finalize LLM cache so the cycle can be saved
     LLMCache.markFlowComplete();
@@ -1325,8 +1320,7 @@ export async function handlePromptSubmit(e) {
                     cyclical: `${PhaseState.timeHorizon.durationDays}-Day Cycle`,
                     program: `${PhaseState.timeHorizon.durationDays}-Day Program`,
                 };
-                badgeEl.innerHTML =
-                    `<span class="badge-icon">\u{1F4C5}</span>${modeLabels[PhaseState.timeHorizon.mode] || ''}`;
+                badgeEl.innerHTML = `<span class="badge-icon">\u{1F4C5}</span>${modeLabels[PhaseState.timeHorizon.mode] || ''}`;
                 badgeEl.classList.remove('hidden');
                 requestAnimationFrame(() => badgeEl.classList.add('visible'));
             }
@@ -1989,11 +1983,7 @@ function buildVisualControlsMarkup(mode: SettingsVisualMode): string {
     ].join('');
 }
 
-function bindVisualSlider(
-    sliderId: string,
-    onInput: (value: number) => void,
-    valueId = `${sliderId}-value`,
-): void {
+function bindVisualSlider(sliderId: string, onInput: (value: number) => void, valueId = `${sliderId}-value`): void {
     const slider = document.getElementById(sliderId) as HTMLInputElement | null;
     const valueEl = document.getElementById(valueId);
     if (!slider || !valueEl) return;

@@ -593,7 +593,9 @@ async function refereeCorrectDay(
     const postDensityIvs = densityRemoved.length > 0 ? densityPruned : interventions;
 
     const correctionPrompt = buildStackingCorrectionPrompt(
-        densityRemoved.length > 0 ? validateInterventions(JSON.parse(JSON.stringify(densityPruned)), curvesData) : validated,
+        densityRemoved.length > 0
+            ? validateInterventions(JSON.parse(JSON.stringify(densityPruned)), curvesData)
+            : validated,
         curvesData,
     );
     if (!correctionPrompt) {

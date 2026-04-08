@@ -38,10 +38,7 @@ function ensureGroup(svg: SVGSVGElement, id: string): SVGGElement {
     return g;
 }
 
-function buildSmoothPath(
-    points: { day: number; value: number }[],
-    config: ExtendedChartConfig,
-): string {
+function buildSmoothPath(points: { day: number; value: number }[], config: ExtendedChartConfig): string {
     if (points.length === 0) return '';
     const mapped = points.map(p => ({
         x: extendedChartX(p.day, config),
@@ -83,9 +80,7 @@ export function renderExtendedChart(opts: {
     const isLight = isLightMode();
 
     // Expand viewBox to fit substance lanes below the plot area
-    const substanceCount = interventions
-        ? new Set(interventions.map(iv => iv.key)).size
-        : 0;
+    const substanceCount = interventions ? new Set(interventions.map(iv => iv.key)).size : 0;
     const laneH = 16;
     const laneGap = 2;
     const substanceAreaHeight = substanceCount > 0 ? 10 + substanceCount * (laneH + laneGap) : 0;
@@ -385,9 +380,12 @@ export function renderExtendedChart(opts: {
             if (curve.baseline.length > 0 && curve.desired.length > 0) {
                 const fillPath =
                     buildSmoothPath(curve.desired, config) +
-                    ' L' + extendedChartX(curve.baseline[curve.baseline.length - 1].day, config).toFixed(1) +
-                    ',' + extendedChartY(curve.baseline[curve.baseline.length - 1].value, config).toFixed(1) +
-                    ' ' + buildSmoothPath([...curve.baseline].reverse(), config).replace(/^M/, 'L') +
+                    ' L' +
+                    extendedChartX(curve.baseline[curve.baseline.length - 1].day, config).toFixed(1) +
+                    ',' +
+                    extendedChartY(curve.baseline[curve.baseline.length - 1].value, config).toFixed(1) +
+                    ' ' +
+                    buildSmoothPath([...curve.baseline].reverse(), config).replace(/^M/, 'L') +
                     ' Z';
                 gCurves.appendChild(
                     svgEl('path', {
@@ -480,7 +478,7 @@ export function renderExtendedChart(opts: {
             // Resolve substance from DB
             const sub = resolveSubstance(key, {});
             const subName = sub ? sub.name : key.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-            const subColor = sub ? (sub.color || '#60a5fa') : '#60a5fa';
+            const subColor = sub ? sub.color || '#60a5fa' : '#60a5fa';
             const regStatus = sub ? ((sub as any).regulatoryStatus || '').toLowerCase() : '';
 
             // Lane stripe (alternating odd rows)
@@ -507,7 +505,7 @@ export function renderExtendedChart(opts: {
                 const baseMg = parseDoseToMg(entry.dose || '') ?? 100;
                 const effectiveMg = baseMg * (entry.doseMultiplier || 1.0);
                 const endDay = protocolPhases
-                    ? (protocolPhases.find(p => p.name === entry.phase)?.endDay || durationDays)
+                    ? protocolPhases.find(p => p.name === entry.phase)?.endDay || durationDays
                     : durationDays;
                 for (let d = entry.day; d <= endDay; d++) {
                     if (entry.frequency === 'alternate' && (d - entry.day) % 2 !== 0) continue;
@@ -519,7 +517,10 @@ export function renderExtendedChart(opts: {
 
             // ── Find contiguous runs and render dose envelopes ──
             const activeDays = [...doseAtDay.keys()].sort((a, b) => a - b);
-            if (activeDays.length === 0) { rowIdx++; continue; }
+            if (activeDays.length === 0) {
+                rowIdx++;
+                continue;
+            }
 
             const laneBottom = laneY + laneH;
             const doseAnnotations: { x: number; y: number; label: string }[] = [];
@@ -549,7 +550,10 @@ export function renderExtendedChart(opts: {
                 const runEndDay = run[run.length - 1];
                 const x1 = extendedChartX(runStartDay - 0.4, config);
                 const x2 = extendedChartX(runEndDay + 0.4, config);
-                if (isFirstRun) { firstBarX1 = x1; isFirstRun = false; }
+                if (isFirstRun) {
+                    firstBarX1 = x1;
+                    isFirstRun = false;
+                }
 
                 // Build top-edge points for envelope
                 const topPoints: { x: number; y: number }[] = [];

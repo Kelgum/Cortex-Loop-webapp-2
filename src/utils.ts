@@ -165,7 +165,10 @@ export function phaseChartY(effectVal: any) {
 }
 
 /** Map a day number (1..N) to pixel X within the existing plot area — for extended timeline charts. */
-export function extendedChartX(day: number, config: { startUnit: number; endUnit: number; padL: number; plotW: number }): number {
+export function extendedChartX(
+    day: number,
+    config: { startUnit: number; endUnit: number; padL: number; plotW: number },
+): number {
     const range = config.endUnit - config.startUnit;
     if (range <= 0) return config.padL;
     const fraction = (day - config.startUnit) / range;

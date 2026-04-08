@@ -79,7 +79,12 @@ function selectCoherentLxCurveSource(fromCurve: any, toCurve: any, t: number): a
     return preferred || alternate || null;
 }
 
-function buildMorphedGamificationCurves(fromDay: DaySnapshot, toDay: DaySnapshot, t: number, curveCount: number): any[] {
+function buildMorphedGamificationCurves(
+    fromDay: DaySnapshot,
+    toDay: DaySnapshot,
+    t: number,
+    curveCount: number,
+): any[] {
     const morphedCurves: any[] = new Array(curveCount);
 
     for (let ci = 0; ci < curveCount; ci++) {
