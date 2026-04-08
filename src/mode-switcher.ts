@@ -683,11 +683,93 @@ const EDITORIAL_TITLE_TONES = {
     sand: { hue: 40, saturation: 48, lightness: 77 },
 } as const satisfies Record<string, EditorialTitleTone>;
 
+/**
+ * Darken + saturate a color for light-mode readability. Parses #rrggbb / rgb()
+ * and converts through HSL. Returns a dark, vivid version preserving hue.
+ */
+function darkenForLightMode(color: string): string {
+    // Parse to HSL. Accepts hsl(), rgb(), #rrggbb
+    let h = 0;
+    let s = 0;
+    const hslMatch = color.match(
+        /hsl\(\s*([\d.]+)\s*(?:deg)?\s*[,\s]\s*([\d.]+)\s*%?\s*[,\s]\s*([\d.]+)\s*%?\s*\)/i,
+    );
+    if (hslMatch) {
+        h = Number(hslMatch[1]);
+        s = Number(hslMatch[2]) / 100;
+    } else {
+        // Parse rgb(r, g, b) or #rrggbb → RGB → HSL
+        let r: number, g: number, b: number;
+        const rgbMatch = color.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+        if (rgbMatch) {
+            r = Number(rgbMatch[1]);
+            g = Number(rgbMatch[2]);
+            b = Number(rgbMatch[3]);
+        } else {
+            const hexMatch = color.match(/^#?([0-9a-fA-F]{6})$/);
+            if (hexMatch) {
+                const hx = hexMatch[1];
+                r = parseInt(hx.slice(0, 2), 16);
+                g = parseInt(hx.slice(2, 4), 16);
+                b = parseInt(hx.slice(4, 6), 16);
+            } else {
+                return color;
+            }
+        }
+        const rn = r / 255,
+            gn = g / 255,
+            bn = b / 255;
+        const max = Math.max(rn, gn, bn);
+        const min = Math.min(rn, gn, bn);
+        const l = (max + min) / 2;
+        if (max !== min) {
+            const d = max - min;
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+            switch (max) {
+                case rn:
+                    h = (gn - bn) / d + (gn < bn ? 6 : 0);
+                    break;
+                case gn:
+                    h = (bn - rn) / d + 2;
+                    break;
+                case bn:
+                    h = (rn - gn) / d + 4;
+                    break;
+            }
+            h *= 60;
+        }
+    }
+    // Target: vivid and readable on light bg
+    const newS = Math.min(100, Math.max(55, s * 100 + 30));
+    const newL = 28;
+    // HSL → RGB
+    const c = (1 - Math.abs((2 * newL) / 100 - 1)) * (newS / 100);
+    const hp = h / 60;
+    const x = c * (1 - Math.abs((hp % 2) - 1));
+    let r1 = 0,
+        g1 = 0,
+        b1 = 0;
+    if (hp >= 0 && hp < 1) [r1, g1, b1] = [c, x, 0];
+    else if (hp < 2) [r1, g1, b1] = [x, c, 0];
+    else if (hp < 3) [r1, g1, b1] = [0, c, x];
+    else if (hp < 4) [r1, g1, b1] = [0, x, c];
+    else if (hp < 5) [r1, g1, b1] = [x, 0, c];
+    else [r1, g1, b1] = [c, 0, x];
+    const m = newL / 100 - c / 2;
+    const rf = Math.round((r1 + m) * 255);
+    const gf = Math.round((g1 + m) * 255);
+    const bf = Math.round((b1 + m) * 255);
+    return `rgb(${rf}, ${gf}, ${bf})`;
+}
+
+function isLightModeActive(): boolean {
+    return typeof document !== 'undefined' && document.body.classList.contains('light-mode');
+}
+
 function getTitleColor(entry: SavedCycleIndexEntry): string {
     const prominentBand = getProminentBandTitleColor(entry.iconSvg);
-    if (prominentBand) return prominentBand;
-
-    return getSemanticTitleColor(entry);
+    const base = prominentBand ?? getSemanticTitleColor(entry);
+    return isLightModeActive() ? darkenForLightMode(base) : base;
 }
 
 function getSemanticTitleColor(entry: SavedCycleIndexEntry): string {

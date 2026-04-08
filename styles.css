@@ -2717,6 +2717,38 @@ body.mode-stream #prompt-submit {
     color: #8db5d8;
 }
 
+/* Light mode — stream search bar: match the light theme instead of dark gradient */
+body.light-mode.mode-stream #prompt-form {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(247, 250, 253, 0.82) 100%);
+    border-color: rgba(72, 140, 156, 0.28);
+    box-shadow:
+        0 14px 34px rgba(60, 80, 110, 0.1),
+        0 0 20px rgba(72, 140, 156, 0.06),
+        0 0 0 1px rgba(72, 140, 156, 0.08) inset;
+}
+
+body.light-mode.mode-stream #prompt-form:focus-within {
+    border-color: rgba(72, 140, 156, 0.48);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(249, 252, 254, 0.92) 100%);
+    box-shadow:
+        0 0 0 3px rgba(72, 140, 156, 0.14),
+        0 18px 38px rgba(60, 80, 110, 0.12),
+        0 0 22px rgba(72, 140, 156, 0.08),
+        0 0 0 1px rgba(72, 140, 156, 0.12) inset;
+}
+
+body.light-mode.mode-stream #prompt-input {
+    color: #2a3444;
+}
+
+body.light-mode.mode-stream #prompt-input::placeholder {
+    color: #8494a7;
+}
+
+body.light-mode.mode-stream #prompt-submit {
+    color: #4a8294;
+}
+
 /* ---- Stream Grid Container ---- */
 
 .stream-grid-container {
@@ -11045,6 +11077,129 @@ body.light-mode .cg-card-active {
 
 body.light-mode .cg-card-tag {
     background: rgba(0, 0, 0, 0.05);
+}
+
+/* Light mode — overlay title: keep per-card color from inline style, add thick white halo for punch.
+   Per-card color is computed in JS via darkenForLightMode() to produce dark, saturated hues. */
+body.light-mode .cg-card-overlay-title {
+    opacity: 1 !important;
+    -webkit-text-stroke: 0.9px rgba(255, 255, 255, 1) !important;
+    text-shadow:
+        0 0 3px rgba(255, 255, 255, 1),
+        0 0 6px rgba(255, 255, 255, 1),
+        0 0 10px rgba(255, 255, 255, 0.9),
+        0 1px 0 rgba(255, 255, 255, 1),
+        0 2px 4px rgba(255, 255, 255, 0.85),
+        0 0 18px rgba(255, 255, 255, 0.55) !important;
+}
+
+/* Light mode — category badges: inverted (pale tinted bg, darker ink of same hue)
+   Uses !important to force override regardless of stylesheet load order (dev HMR quirk). */
+body.light-mode .cg-card-badge {
+    box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.04) !important;
+}
+body.light-mode .cg-card-badge.badge-neuro {
+    background: rgba(228, 231, 250, 0.92) !important;
+    border-color: rgba(99, 113, 196, 0.26) !important;
+    color: #3f4db3 !important;
+}
+body.light-mode .cg-card-badge.badge-sleep {
+    background: rgba(235, 228, 250, 0.92) !important;
+    border-color: rgba(132, 100, 192, 0.26) !important;
+    color: #6a4bb3 !important;
+}
+body.light-mode .cg-card-badge.badge-cardio {
+    background: rgba(248, 232, 218, 0.92) !important;
+    border-color: rgba(170, 110, 58, 0.26) !important;
+    color: #9c5e2c !important;
+}
+body.light-mode .cg-card-badge.badge-metabolic {
+    background: rgba(247, 241, 214, 0.92) !important;
+    border-color: rgba(158, 144, 50, 0.26) !important;
+    color: #846e1a !important;
+}
+body.light-mode .cg-card-badge.badge-mood {
+    background: rgba(248, 228, 240, 0.92) !important;
+    border-color: rgba(175, 80, 142, 0.26) !important;
+    color: #9a3a77 !important;
+}
+body.light-mode .cg-card-badge.badge-rx {
+    background: rgba(250, 228, 232, 0.92) !important;
+    border-color: rgba(185, 78, 92, 0.26) !important;
+    color: #9c2a3a !important;
+}
+body.light-mode .cg-card-badge.badge-hormonal {
+    background: rgba(250, 228, 236, 0.92) !important;
+    border-color: rgba(175, 80, 120, 0.26) !important;
+    color: #9a3363 !important;
+}
+body.light-mode .cg-card-badge.badge-recovery {
+    background: rgba(222, 244, 230, 0.92) !important;
+    border-color: rgba(60, 150, 95, 0.26) !important;
+    color: #246b42 !important;
+}
+body.light-mode .cg-card-badge.badge-immune {
+    background: rgba(220, 240, 246, 0.92) !important;
+    border-color: rgba(50, 140, 160, 0.26) !important;
+    color: #185f73 !important;
+}
+body.light-mode .cg-card-badge.badge-pain {
+    background: rgba(248, 238, 214, 0.92) !important;
+    border-color: rgba(175, 130, 38, 0.26) !important;
+    color: #8a5a14 !important;
+}
+body.light-mode .cg-card-badge.badge-performance {
+    background: rgba(224, 234, 250, 0.92) !important;
+    border-color: rgba(68, 118, 200, 0.26) !important;
+    color: #284d94 !important;
+}
+body.light-mode .cg-card-badge.badge-longevity {
+    background: rgba(235, 246, 218, 0.92) !important;
+    border-color: rgba(100, 150, 60, 0.26) !important;
+    color: #456e1c !important;
+}
+body.light-mode .cg-card-badge.badge-gut {
+    background: rgba(232, 245, 218, 0.92) !important;
+    border-color: rgba(95, 140, 60, 0.26) !important;
+    color: #426a1c !important;
+}
+body.light-mode .cg-card-badge.badge-beauty {
+    background: rgba(250, 232, 246, 0.92) !important;
+    border-color: rgba(180, 110, 160, 0.26) !important;
+    color: #9a3f7a !important;
+}
+body.light-mode .cg-card-badge.badge-addiction {
+    background: rgba(250, 232, 222, 0.92) !important;
+    border-color: rgba(180, 100, 70, 0.26) !important;
+    color: #9a4528 !important;
+}
+
+/* Light mode — center-weighted scrim: light vignette to lift title readability */
+body.light-mode .stream-grid .cg-card-icon::after {
+    background:
+        linear-gradient(
+            180deg,
+            rgba(255, 255, 255, 0.06) 0%,
+            rgba(255, 255, 255, 0.04) 28%,
+            rgba(255, 255, 255, 0.18) 62%,
+            rgba(255, 255, 255, 0.22) 100%
+        ),
+        radial-gradient(
+            ellipse at 50% 54%,
+            rgba(255, 255, 255, 0.42) 0%,
+            rgba(255, 255, 255, 0.16) 52%,
+            transparent 82%
+        );
+}
+
+/* Light mode — right-edge scroll fade: light gradient matching bg-base */
+body.light-mode .stream-section-row-wrap::after {
+    background: linear-gradient(
+        to right,
+        rgba(240, 243, 247, 0),
+        rgba(240, 243, 247, 0.72) 72%,
+        var(--bg-base)
+    );
 }
 
 /* Responsive */

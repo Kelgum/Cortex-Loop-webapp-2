@@ -1084,6 +1084,8 @@ export default defineConfig({
         camTrackerPlugin(),
     ],
     server: {
+        port: process.env.PORT ? Number(process.env.PORT) : undefined,
+        strictPort: !!process.env.PORT,
         watch: {
             ignored: [
                 '**/.cortex-debug/**',
