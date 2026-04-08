@@ -5670,14 +5670,6 @@ async function launchMultiDayPipeline() {
         const day0LanesBottom = TIMELINE_ZONE.top + day0Lanes * laneStep + TIMELINE_ZONE.bottomPad;
         MultiDayState.lockedViewBoxHeight = Math.max(day0LanesBottom + bioZoneH + BIOMETRIC_ZONE.bottomPad, 500);
 
-        // Pipeline complete — mark Phase 5 reached and reveal save checkmark immediately
-        PhaseState.maxPhaseReached = 5;
-        PhaseState.viewingPhase = 5;
-        const saveBtn = document.getElementById('cycle-save-btn');
-        if (saveBtn && !saveBtn.classList.contains('saved')) {
-            saveBtn.style.display = '';
-        }
-
         // Render the first visible computed day and build the week strip BEFORE
         // the viewBox animation.
         // This way the substance pills, curves, and week strip change once, and the
@@ -5766,6 +5758,17 @@ async function launchMultiDayPipeline() {
             SherlockState.sherlock7dNarration = buildFallbackSherlock7D(days);
         }
         MultiDayState.sherlock7dReady = true;
+
+        // Pipeline complete — Sherlock 7D bundle stage is now populated. Mark Phase 5
+        // reached and reveal the save checkmark only AFTER sherlock7d has resolved,
+        // so the persisted SavedCycleRecord.bundle includes the sherlock7d-model stage
+        // (added by callGenericForStage → LLMCache.set when the promise resolved above).
+        PhaseState.maxPhaseReached = 5;
+        PhaseState.viewingPhase = 5;
+        const saveBtn = document.getElementById('cycle-save-btn');
+        if (saveBtn && !saveBtn.classList.contains('saved')) {
+            saveBtn.style.display = '';
+        }
 
         // Show Sherlock 7D panel with Day 0 card before playback begins
         if (SherlockState.sherlock7dNarration && SherlockState.sherlock7dNarration.beats.length > 0) {
