@@ -1227,11 +1227,10 @@ function buildScoreLineHtml(entry: SavedCycleIndexEntry): string {
         if (!Number.isFinite(score)) continue;
         const name = names[i] || `Effect ${i + 1}`;
         const color = getEffectColor(name, entry.badgeCategory || null);
-        const displayName = name.length > 11 ? name.slice(0, 10) + '…' : name;
         entries.push(
             `<span class="cg-card-score-entry" style="--score-color:${color}">` +
                 `<span class="cg-card-score-entry-value">+${Math.round(score)}%</span>` +
-                `<span class="cg-card-score-entry-name">${escHtml(displayName.toUpperCase())}</span>` +
+                `<span class="cg-card-score-entry-name">${escHtml(name.toUpperCase())}</span>` +
                 `</span>`,
         );
     }
