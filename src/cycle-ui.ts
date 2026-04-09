@@ -68,9 +68,21 @@ async function handleSave(): Promise<void> {
     const id = `cycle-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const filename =
         PhaseState.cycleFilename || (PhaseState.userGoal ? PhaseState.userGoal.slice(0, 40).trim() : 'Untitled Cycle');
+    // topEffects feeds SECTION MATCHING in mode-switcher.ts (matchCustomSection
+    // filters saved cycles by topEffects/substanceClasses against category tag
+    // lists like "Focus", "Alertness"). Keep it sourced from the Scout word cloud
+    // so those broader category tags survive into the saved entry — replacing
+    // them with Strategist curve names would strip cycles out of their categories.
     const topEffects = (PhaseState.wordCloudEffects || PhaseState.effects || [])
         .slice(0, 3)
         .map((e: any) => (typeof e === 'string' ? e : e.name || ''));
+
+    // curveEffects is for CARD BADGE DISPLAY only — aligned 1:1 with effectScores
+    // indices (max 2) so the big % label reflects the actual curve it came from.
+    const curveEffects = (PhaseState.curvesData || [])
+        .slice(0, 2)
+        .map((c: any) => (c && typeof c.effect === 'string' ? c.effect : ''))
+        .filter((s: string) => s.length > 0);
 
     const isExtendedCycle = PhaseState.timeHorizon && PhaseState.timeHorizon.mode !== 'daily';
     // For extended (28-day) cycles, try the panoramic wide icon first
@@ -122,6 +134,7 @@ async function handleSave(): Promise<void> {
         savedAt: new Date().toISOString(),
         hookSentence: PhaseState.hookSentence || null,
         topEffects,
+        curveEffects: curveEffects.length > 0 ? curveEffects : undefined,
         badgeCategory: PhaseState.badgeCategory || null,
         iconSvg,
         recommendedDevices,

@@ -1208,14 +1208,24 @@ function buildPhaseBarHtml(entry: SavedCycleIndexEntry): string {
 function buildScoreLineHtml(entry: SavedCycleIndexEntry): string {
     const scores = entry.effectScores;
     if (!scores || scores.length === 0) return '';
-    const names = entry.topEffects || [];
-    const maxShown = Math.min(scores.length, Math.max(1, names.length) || 1, 2);
+    // Prefer curveEffects (Strategist curve names aligned 1:1 with scores) over
+    // topEffects (Scout word-cloud category tags used for section matching).
+    // Falling back to topEffects keeps the badge working for legacy saves until
+    // the lazy migration repairs them.
+    const names =
+        entry.curveEffects && entry.curveEffects.length > 0
+            ? entry.curveEffects
+            : entry.topEffects || [];
+    // Always render every score we have up to 2 — never silently drop the second
+    // effect because its score happens to be 0 or because names is shorter than
+    // effectScores (stale entries from before curveEffects existed).
+    const maxShown = Math.min(scores.length, 2);
 
     const entries: string[] = [];
     for (let i = 0; i < maxShown; i++) {
         const score = scores[i];
-        if (!Number.isFinite(score) || score <= 0) continue;
-        const name = names[i] || '';
+        if (!Number.isFinite(score)) continue;
+        const name = names[i] || `Effect ${i + 1}`;
         const color = getEffectColor(name, entry.badgeCategory || null);
         const displayName = name.length > 11 ? name.slice(0, 10) + '…' : name;
         entries.push(
@@ -1351,6 +1361,69 @@ function renderStreamContent(filter: string): void {
 let _lazyScoreComputePromise: Promise<void> | null = null;
 const _lazyScoreComputed = new Set<string>();
 
+/**
+ * Pull the authoritative Strategist curve effect names (max 2) out of a saved bundle.
+ * Prefers runtime-replay design curves, then falls back to main-model curves.
+ * Populates the `curveEffects` badge field (aligned 1:1 with effectScores).
+ */
+function deriveCurveEffectNamesFromBundle(bundle: any): string[] {
+    const stages = bundle?.stages || {};
+    const replayCurves = stages['runtime-replay-state']?.payload?.design?.curvesData;
+    if (Array.isArray(replayCurves) && replayCurves.length > 0) {
+        const names = replayCurves
+            .slice(0, 2)
+            .map((c: any) => (c && typeof c.effect === 'string' ? c.effect : ''))
+            .filter((s: string) => s.length > 0);
+        if (names.length > 0) return names;
+    }
+    const mainCurves = stages['main-model']?.payload?.curves;
+    if (Array.isArray(mainCurves) && mainCurves.length > 0) {
+        return mainCurves
+            .slice(0, 2)
+            .map((c: any) => (c && typeof c.effect === 'string' ? c.effect : ''))
+            .filter((s: string) => s.length > 0);
+    }
+    return [];
+}
+
+/**
+ * Pull the Scout (fast-model) word-cloud effects out of a saved bundle and
+ * normalize them to the same [{name, relevance}|string] → string shape that
+ * cycle-ui.ts handleSave used to write into topEffects. Used to HEAL entries
+ * whose topEffects was overwritten by an earlier buggy migration run.
+ */
+function deriveWordCloudEffectsFromBundle(bundle: any): string[] {
+    const stages = bundle?.stages || {};
+    const raw = stages['fast-model']?.payload?.effects;
+    if (!Array.isArray(raw) || raw.length === 0) return [];
+    return raw
+        .slice(0, 3)
+        .map((e: any) => (typeof e === 'string' ? e : e?.name || ''))
+        .filter((s: string) => s.length > 0);
+}
+
+/**
+ * Detect entries where a prior buggy migration overwrote topEffects with the
+ * Strategist curve names (≤2 entries, exactly matching curveEffects). Section
+ * matching in matchCustomSection depends on topEffects containing the broader
+ * Scout category tags, so those have to be restored.
+ */
+function topEffectsWasOverwrittenWithCurveNames(
+    entry: SavedCycleIndexEntry,
+    derivedCurveNames: string[],
+): boolean {
+    if (derivedCurveNames.length === 0) return false;
+    const current = entry.topEffects || [];
+    if (current.length === 0 || current.length > 2) return false;
+    if (current.length !== derivedCurveNames.length) return false;
+    for (let i = 0; i < derivedCurveNames.length; i++) {
+        if ((current[i] || '').toLowerCase() !== derivedCurveNames[i].toLowerCase()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 async function lazyComputeMissingScores(entries: SavedCycleIndexEntry[]): Promise<void> {
     if (_lazyScoreComputePromise) return _lazyScoreComputePromise;
     _lazyScoreComputePromise = (async () => {
@@ -1359,23 +1432,63 @@ async function lazyComputeMissingScores(entries: SavedCycleIndexEntry[]): Promis
             for (const entry of entries) {
                 const hasScores = entry.effectScores && entry.effectScores.length > 0;
                 const versionCurrent = entry.effectScoresVersion === EFFECT_SCORE_FORMULA_VERSION;
-                // Skip only if we have scores AND they were computed with the current formula
-                if (hasScores && versionCurrent) continue;
+                const scoresHealthy = hasScores && versionCurrent;
                 if (_lazyScoreComputed.has(entry.id)) continue;
                 _lazyScoreComputed.add(entry.id);
 
                 try {
                     const bundle = await loadCycleBundle(entry.id);
                     if (!bundle) continue;
-                    const scores = compute7DScoresFromBundle(bundle);
-                    if (!scores || scores.length === 0) continue;
 
-                    entry.effectScores = scores;
-                    entry.effectScoresVersion = EFFECT_SCORE_FORMULA_VERSION;
-                    await patchCycle(entry.id, {
-                        effectScores: scores,
-                        effectScoresVersion: EFFECT_SCORE_FORMULA_VERSION,
-                    });
+                    let patched = false;
+                    const patch: Parameters<typeof patchCycle>[1] = {};
+
+                    if (!scoresHealthy) {
+                        const scores = compute7DScoresFromBundle(bundle);
+                        if (scores && scores.length > 0) {
+                            entry.effectScores = scores;
+                            entry.effectScoresVersion = EFFECT_SCORE_FORMULA_VERSION;
+                            patch.effectScores = scores;
+                            patch.effectScoresVersion = EFFECT_SCORE_FORMULA_VERSION;
+                            patched = true;
+                        }
+                    }
+
+                    // Populate curveEffects (badge display) from the bundle's
+                    // curvesData if the entry doesn't already have it. This is the
+                    // correct replacement for the old mis-feature that overwrote
+                    // topEffects with Strategist curve names.
+                    const derivedCurveNames = deriveCurveEffectNamesFromBundle(bundle);
+                    if (derivedCurveNames.length > 0) {
+                        const current = entry.curveEffects || [];
+                        const sameLen = current.length === derivedCurveNames.length;
+                        const sameItems =
+                            sameLen &&
+                            derivedCurveNames.every(
+                                (name, i) => (current[i] || '').toLowerCase() === name.toLowerCase(),
+                            );
+                        if (!sameItems) {
+                            entry.curveEffects = derivedCurveNames;
+                            patch.curveEffects = derivedCurveNames;
+                            patched = true;
+                        }
+                    }
+
+                    // Heal entries whose topEffects was overwritten with the
+                    // Strategist curve names by an earlier buggy migration run —
+                    // restore the Scout word-cloud effects so section matching
+                    // works again.
+                    if (topEffectsWasOverwrittenWithCurveNames(entry, derivedCurveNames)) {
+                        const wordCloud = deriveWordCloudEffectsFromBundle(bundle);
+                        if (wordCloud.length > 0) {
+                            entry.topEffects = wordCloud;
+                            patch.topEffects = wordCloud;
+                            patched = true;
+                        }
+                    }
+
+                    if (!patched) continue;
+                    await patchCycle(entry.id, patch);
 
                     // Update just this card in place (no full re-render).
                     // Score line lives between the .cg-card-icon and the .cg-card-name.
