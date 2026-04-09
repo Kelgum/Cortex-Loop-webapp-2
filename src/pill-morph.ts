@@ -45,9 +45,22 @@ export interface PillMorphPlan {
         el: SVGGElement;
         doseMorph: DoseMorphInfo | null;
         ghost: SVGGElement | null; // destination ghost for portal-distance moves
+        /** True when `ghost` is a real pre-rendered pill (with rich label/tspans) that
+         *  should be left fully intact — no dose-label mutation, no position drift.
+         *  Revision animation uses this so the ghost IS the final new pill and no
+         *  post-scan DOM rebuild is needed. */
+        ghostIsRealPill?: boolean;
     }>;
     removed: Array<{ geo: PillGeometry; el: SVGGElement }>;
-    added: Array<{ geo: PillGeometry; el: SVGGElement; doseMorph: DoseMorphInfo | null }>;
+    added: Array<{
+        geo: PillGeometry;
+        el: SVGGElement;
+        doseMorph: DoseMorphInfo | null;
+        /** True when `el` is a real pre-rendered pill with rich label (tspans for Rx
+         *  badge, contribution %). The dose animation will update only the first text
+         *  node, preserving tspans so the final state matches a fresh render. */
+        preserveRichLabel?: boolean;
+    }>;
 }
 
 /** Lightweight curve context for tickPillMorph — avoids DaySnapshot dependency */
@@ -64,6 +77,10 @@ export interface PillMorphOptions {
     /** Per-pill ease: given a pill's X position, return the local eased progress [0,1].
      *  When provided, overrides the global lxEase for each pill individually. */
     easeForX?: (x: number) => number;
+    /** Override for TELEPORT.driftFraction on a per-call basis. Revision animation
+     *  sets this to 0 so origin pills fade out in place (no intermediate-lane drift)
+     *  while the destination ghost fades in at its target. */
+    teleportDriftFraction?: number;
 }
 
 // ============================================
@@ -316,16 +333,17 @@ export function tickPillMorph(
     options?: PillMorphOptions,
 ): void {
     const efx = options?.easeForX;
+    const driftFraction = options?.teleportDriftFraction ?? TELEPORT.driftFraction;
 
     // ── Matched pills: glide to new position + interpolate dose ──
-    for (const { from, to, el, doseMorph, ghost } of plan.matched) {
+    for (const { from, to, el, doseMorph, ghost, ghostIsRealPill } of plan.matched) {
         const pillEase = efx ? efx(from.x) : lxEase;
         const totalDx = to.x - from.x;
         const totalDy = to.y - from.y;
 
         if (ghost) {
             // ── Portal: origin fades out + drifts, destination ghost fades in + drifts — in parallel ──
-            const tf = teleportInterpolation(pillEase, TELEPORT.driftFraction);
+            const tf = teleportInterpolation(pillEase, driftFraction);
 
             // Origin element: drift slightly toward destination, fade out
             const originDx = totalDx * tf.originPos;
@@ -339,21 +357,37 @@ export function tickPillMorph(
             if (connector) connector.setAttribute('stroke-opacity', (0.25 * tf.originOpacity).toFixed(3));
             if (dot) dot.setAttribute('fill-opacity', (0.65 * tf.originOpacity).toFixed(3));
 
-            // Destination ghost: drift into final position, fade in
-            const ghostDriftDx = totalDx * (tf.destPos - 1);
-            const ghostDriftDy = totalDy * (tf.destPos - 1);
-            ghost.setAttribute('transform', `translate(${ghostDriftDx.toFixed(2)}, ${ghostDriftDy.toFixed(2)})`);
-            ghost.setAttribute('opacity', tf.destOpacity.toFixed(3));
+            if (ghostIsRealPill) {
+                // Ghost IS the real pre-rendered new pill, already positioned at `to`.
+                // Don't touch its transform (no drift), don't mutate its label (preserves
+                // rich tspans like Rx badge and contribution %). Just fade it in and make
+                // sure it's not still hidden from the Phase 0b pre-render.
+                if (ghost.classList.contains('revision-prehidden')) {
+                    ghost.classList.remove('revision-prehidden');
+                    ghost.removeAttribute('visibility');
+                }
+                ghost.setAttribute('opacity', tf.destOpacity.toFixed(3));
+            } else {
+                // Destination ghost: drift into final position, fade in
+                const ghostDriftDx = totalDx * (tf.destPos - 1);
+                const ghostDriftDy = totalDy * (tf.destPos - 1);
+                ghost.setAttribute(
+                    'transform',
+                    `translate(${ghostDriftDx.toFixed(2)}, ${ghostDriftDy.toFixed(2)})`,
+                );
+                ghost.setAttribute('opacity', tf.destOpacity.toFixed(3));
 
-            // Ghost connector + dot fade
-            const gConn = ghost.querySelector('.timeline-connector') as SVGLineElement | null;
-            const gDot = ghost.querySelector('.timeline-curve-dot') as SVGCircleElement | null;
-            if (gConn) gConn.setAttribute('stroke-opacity', (0.25 * tf.destOpacity).toFixed(3));
-            if (gDot) gDot.setAttribute('fill-opacity', (0.65 * tf.destOpacity).toFixed(3));
+                // Ghost connector + dot fade
+                const gConn = ghost.querySelector('.timeline-connector') as SVGLineElement | null;
+                const gDot = ghost.querySelector('.timeline-curve-dot') as SVGCircleElement | null;
+                if (gConn) gConn.setAttribute('stroke-opacity', (0.25 * tf.destOpacity).toFixed(3));
+                if (gDot) gDot.setAttribute('fill-opacity', (0.65 * tf.destOpacity).toFixed(3));
 
-            // Dose label on ghost during fade-in
-            if (doseMorph && pillEase > 0.01) {
-                _tickDoseLabel(ghost, doseMorph, pillEase);
+                // Dose label on ghost during fade-in (only on simplified ghosts — real
+                // pre-rendered pills already carry the final dose in their label).
+                if (doseMorph && pillEase > 0.01) {
+                    _tickDoseLabel(ghost, doseMorph, pillEase);
+                }
             }
         } else {
             // ── Normal smooth glide ──
@@ -415,13 +449,17 @@ export function tickPillMorph(
     }
 
     // ── Added pills: fade in + slight grow + dose count from 0 ──
-    for (const { geo, el, doseMorph } of plan.added) {
+    for (const { geo, el, doseMorph, preserveRichLabel } of plan.added) {
         const pillEase = efx ? efx(geo.x) : lxEase;
         if (pillEase < 0.3) {
             (el as SVGElement).style.setProperty('opacity', '0', 'important');
             if (doseMorph) {
-                const label = el.querySelector('.timeline-bar-label') as SVGTextElement | null;
-                if (label) label.textContent = `${doseMorph.prefix}0${doseMorph.unit}`;
+                if (preserveRichLabel) {
+                    _setDoseLabelFirstTextNode(el, `${doseMorph.prefix}0${doseMorph.unit}`);
+                } else {
+                    const label = el.querySelector('.timeline-bar-label') as SVGTextElement | null;
+                    if (label) label.textContent = `${doseMorph.prefix}0${doseMorph.unit}`;
+                }
             }
         } else {
             // Remove revision-prehidden so the pill becomes visible
@@ -445,7 +483,32 @@ export function tickPillMorph(
                 if (label) {
                     const doseT = fadeIn;
 
-                    if (doseT >= 1) {
+                    if (preserveRichLabel) {
+                        // Preserve Rx badge + contribution % tspans — only mutate the
+                        // first text node (the "Name Dose" prefix). At doseT >= 1 the
+                        // label matches what a fresh render would produce, so no final
+                        // DOM rebuild is required.
+                        if (doseT >= 1) {
+                            const finalDisplay =
+                                doseMorph.decimals > 0
+                                    ? doseMorph.newNum.toFixed(doseMorph.decimals)
+                                    : String(Math.round(doseMorph.newNum));
+                            _setDoseLabelFirstTextNode(
+                                el,
+                                `${doseMorph.prefix}${finalDisplay}${doseMorph.unit}`,
+                            );
+                        } else {
+                            const cur = doseMorph.newNum * doseT;
+                            const display =
+                                doseMorph.decimals > 0
+                                    ? cur.toFixed(doseMorph.decimals)
+                                    : String(Math.round(cur));
+                            _setDoseLabelFirstTextNode(
+                                el,
+                                `${doseMorph.prefix}${display}${doseMorph.unit}`,
+                            );
+                        }
+                    } else if (doseT >= 1) {
                         const finalDisplay =
                             doseMorph.decimals > 0
                                 ? doseMorph.newNum.toFixed(doseMorph.decimals)
@@ -484,7 +547,24 @@ export function tickPillMorph(
     }
 }
 
-// ── Private dose label interpolation helper ──
+// ── Private dose label interpolation helpers ──
+
+/** Update ONLY the first text node of a pill's label, leaving tspans (Rx badge,
+ *  contribution %) intact. Used by the revision-animation dose count-up so rich
+ *  labels survive the morph and the final state matches a fresh render exactly. */
+function _setDoseLabelFirstTextNode(el: Element, text: string): void {
+    const label = el.querySelector('.timeline-bar-label') as SVGTextElement | null;
+    if (!label) return;
+    let firstText: ChildNode | null = label.firstChild;
+    while (firstText && firstText.nodeType !== Node.TEXT_NODE) {
+        firstText = firstText.nextSibling;
+    }
+    if (firstText) {
+        firstText.nodeValue = text;
+    } else {
+        label.insertBefore(document.createTextNode(text), label.firstChild);
+    }
+}
 
 function _tickDoseLabel(el: Element, doseMorph: DoseMorphInfo, lxEase: number): void {
     const label = el.querySelector('.timeline-bar-label') as SVGTextElement | null;
