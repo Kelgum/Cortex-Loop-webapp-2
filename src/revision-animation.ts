@@ -388,16 +388,53 @@ function prepareRevisionPillMorph(
             type === 'moved+resized' ||
             type === 'retargeted'
         ) {
-            // Matched: old pill interpolates to new position
+            // Matched: old pill fades out in tempGroup, the real pre-rendered new pill
+            // from Phase 0b fades in at its final position in timelineGroup. This makes
+            // the morph end state IDENTICAL to a fresh render — no final rebuild needed,
+            // so no label/POI pop.
             const oldPill = entry.oldIv ? findPillByIntervention(entry.oldIv, tempGroup) : null;
             const oldGeo = entry.oldIv ? oldGeoMap.get(entry.oldIv) : null;
             const newGeo = entry.newIv ? newGeoMap.get(entry.newIv) : null;
+            const newPill = entry.newIv
+                ? (findPillByIntervention(entry.newIv, timelineGroup, true) as SVGGElement | null)
+                : null;
+
+            // True 'unchanged' = identical geometry, identical dose. Skip the animation
+            // entirely — just reveal the new pill and remove the old one. A cross-fade
+            // for identical pills would cause a visible opacity dip mid-ease.
+            const isTrulyUnchanged =
+                type === 'unchanged' &&
+                oldGeo &&
+                newGeo &&
+                Math.abs(oldGeo.x - newGeo.x) < 0.5 &&
+                oldGeo.laneIdx === newGeo.laneIdx &&
+                parseDoseMorph(entry.oldIv, entry.newIv) == null;
+
+            if (isTrulyUnchanged) {
+                if (oldPill) oldPill.remove();
+                if (newPill) {
+                    newPill.classList.remove('revision-prehidden');
+                    newPill.removeAttribute('visibility');
+                    (newPill as unknown as SVGElement).style.removeProperty('opacity');
+                    newPill.setAttribute('opacity', '1');
+                }
+                continue;
+            }
+
             if (oldPill && oldGeo && newGeo) {
                 const doseMorph = parseDoseMorph(entry.oldIv, entry.newIv);
-                // Portal ghost for large moves
+                // Use the real pre-rendered new pill as the "ghost" destination. It
+                // already carries the full rich label (Rx badge, contribution %) at
+                // the correct position. The morph tick only touches its opacity.
                 let ghost: SVGGElement | null = null;
-                const laneDist = Math.abs(newGeo.laneIdx - oldGeo.laneIdx);
-                if (Math.abs(newGeo.x - oldGeo.x) > teleportThresholdPx || laneDist >= TELEPORT.thresholdLanes) {
+                let ghostIsRealPill = false;
+                if (newPill) {
+                    ghost = newPill;
+                    ghost.setAttribute('opacity', '0');
+                    ghostIsRealPill = true;
+                } else {
+                    // Fallback: Phase 0b didn't render a new pill for this iv.
+                    // Build a simplified ghost and append it outside timelineGroup.
                     ghost = buildMorphPillNode(newGeo, newLxCurves);
                     ghost.setAttribute('opacity', '0');
                     ghost.removeAttribute('data-substance-key');
@@ -410,11 +447,15 @@ function prepareRevisionPillMorph(
                     el: oldPill as SVGGElement,
                     doseMorph,
                     ghost,
+                    ghostIsRealPill,
                 });
+            } else if (newPill) {
+                // No oldPill to fade out — just reveal the new pill in place.
+                newPill.classList.remove('revision-prehidden');
+                newPill.removeAttribute('visibility');
+                (newPill as unknown as SVGElement).style.removeProperty('opacity');
+                newPill.setAttribute('opacity', '1');
             }
-            // Remove the corresponding new pill from timelineGroup (we'll use the old pill's DOM)
-            const newPill = entry.newIv ? findPillByIntervention(entry.newIv, timelineGroup, true) : null;
-            if (newPill) newPill.remove();
         } else if (type === 'removed') {
             const oldPill = entry.oldIv ? findPillByIntervention(entry.oldIv, tempGroup) : null;
             const oldGeo = entry.oldIv ? oldGeoMap.get(entry.oldIv) : null;
@@ -424,15 +465,22 @@ function prepareRevisionPillMorph(
         } else if (type === 'added') {
             const newGeo = entry.newIv ? newGeoMap.get(entry.newIv) : null;
             if (newGeo) {
-                // Find the pre-rendered pill from renderSubstanceTimeline
+                // Find the pre-rendered pill from renderSubstanceTimeline. Real pills
+                // carry rich labels (Rx, contribution %) that must be preserved during
+                // the dose count-up so the final state matches a fresh render exactly.
                 const existingPill = entry.newIv
                     ? findPillByIntervention(entry.newIv, timelineGroup, true)
                     : null;
                 if (existingPill) {
                     const doseMorph = parseDoseFromZero(entry.newIv);
-                    plan.added.push({ geo: newGeo, el: existingPill as SVGGElement, doseMorph });
+                    plan.added.push({
+                        geo: newGeo,
+                        el: existingPill as SVGGElement,
+                        doseMorph,
+                        preserveRichLabel: true,
+                    });
                 } else {
-                    // Build a new pill node
+                    // Build a new pill node (simplified — no rich tspans to preserve)
                     const el = buildMorphPillNode(newGeo, newLxCurves);
                     timelineGroup.appendChild(el);
                     const doseMorph = parseDoseFromZero(entry.newIv);
@@ -453,7 +501,12 @@ function prepareRevisionPillMorph(
                     : null;
                 if (existingPill) {
                     const doseMorph = parseDoseFromZero(entry.newIv);
-                    plan.added.push({ geo: newGeo, el: existingPill as SVGGElement, doseMorph });
+                    plan.added.push({
+                        geo: newGeo,
+                        el: existingPill as SVGGElement,
+                        doseMorph,
+                        preserveRichLabel: true,
+                    });
                 } else {
                     const el = buildMorphPillNode(newGeo, newLxCurves);
                     timelineGroup.appendChild(el);
@@ -751,25 +804,43 @@ function setPoiEntryAnchor(entry: any, pill: any | null) {
     }
 }
 
+/**
+ * Resolve which pill (old or new) the POI connector should anchor to right now.
+ * Returns BOTH pills + a blend weight in [0,1] so the caller can smoothly
+ * cross-fade between them as the morph progresses, instead of an instant
+ * snap when one becomes "more visible" than the other.
+ *
+ * Without this blend, the POI connector stays glued to the old pill (cached
+ * in `_activePill`) for the entire scan and then jumps to the new pill in one
+ * frame when cleanup removes the old pill — that's the visible "pop".
+ */
 function resolvePoiAnchorPill(poi: any, oldLayer: any, newLayer: any) {
-    if (poi?._activePill && poi._activePill.isConnected) {
-        return { pill: poi._activePill, opacity: getPillVisualOpacity(poi._activePill) };
-    }
     const oldPill = poi._oldIv ? findPillByIntervention(poi._oldIv, oldLayer, true) : null;
     const newPill = poi._newIv ? findPillByIntervention(poi._newIv, newLayer, true) : null;
     const oldOpacity = getPillVisualOpacity(oldPill);
     const newOpacity = getPillVisualOpacity(newPill);
 
-    if (newPill && (newOpacity > oldOpacity + 0.08 || oldOpacity <= 0.02)) {
-        return { pill: newPill, opacity: newOpacity };
+    // Blend weight: 0 = fully on old pill, 1 = fully on new pill.
+    // Derived from the new pill's share of total visible opacity.
+    let blend: number;
+    if (!oldPill && newPill) blend = 1;
+    else if (oldPill && !newPill) blend = 0;
+    else if (!oldPill && !newPill) blend = 0;
+    else {
+        const total = oldOpacity + newOpacity;
+        blend = total > 0.001 ? newOpacity / total : 1;
     }
-    if (oldPill && oldOpacity > 0.02) {
-        return { pill: oldPill, opacity: oldOpacity };
-    }
-    if (newPill) {
-        return { pill: newPill, opacity: newOpacity };
-    }
-    return { pill: oldPill, opacity: oldOpacity };
+
+    // Drop the cached _activePill — the blend computation is the source of truth.
+    poi._activePill = newPill || oldPill;
+
+    return {
+        pill: blend >= 0.5 ? newPill || oldPill : oldPill || newPill,
+        opacity: Math.max(oldOpacity, newOpacity),
+        oldPill,
+        newPill,
+        blend,
+    };
 }
 
 function updatePoiConnectorPath(g: SVGElement, poi: any, pillX: number, pillY: number) {
@@ -799,12 +870,26 @@ function updatePoiConnectorVisuals(container: SVGElement, oldLayer: any, newLaye
     for (let i = 0; i < pois.length; i++) {
         const poi = pois[i];
         const g = groups[i] as SVGElement;
-        const { pill, opacity } = resolvePoiAnchorPill(poi, oldLayer, newLayer);
-        if (!pill) continue;
+        const resolved = resolvePoiAnchorPill(poi, oldLayer, newLayer);
+        if (!resolved.pill) continue;
 
-        const anchor = getPillPoiAnchor(pill);
-        const pillX = anchor.x;
-        const pillY = anchor.y;
+        // Linearly blend the anchor point between old and new pill positions.
+        // When `blend` is 0 the connector sits on the old pill, when 1 it sits
+        // on the new pill, and intermediate values produce a smooth cross-fade
+        // that mirrors how the pills themselves are fading. This eliminates the
+        // single-frame snap when the cached _activePill flips at cleanup.
+        const oldAnchor = resolved.oldPill ? getPillPoiAnchor(resolved.oldPill) : null;
+        const newAnchor = resolved.newPill ? getPillPoiAnchor(resolved.newPill) : null;
+        let pillX: number;
+        let pillY: number;
+        if (oldAnchor && newAnchor) {
+            pillX = oldAnchor.x + (newAnchor.x - oldAnchor.x) * resolved.blend;
+            pillY = oldAnchor.y + (newAnchor.y - oldAnchor.y) * resolved.blend;
+        } else {
+            const only = (newAnchor || oldAnchor) as { x: number; y: number };
+            pillX = only.x;
+            pillY = only.y;
+        }
         poi.pillSvgX = pillX;
         poi.pillSvgY = pillY;
 
@@ -817,7 +902,7 @@ function updatePoiConnectorVisuals(container: SVGElement, oldLayer: any, newLaye
         const pathBaseOpacity = parseFloat(
             path?.dataset.baseStrokeOpacity || path?.getAttribute('stroke-opacity') || '0.45',
         );
-        const connectorOpacity = Math.max(0.12, Math.min(1, opacity));
+        const connectorOpacity = Math.max(0.12, Math.min(1, resolved.opacity));
 
         if (path) {
             path.dataset.baseStrokeOpacity = String(pathBaseOpacity);
@@ -999,7 +1084,10 @@ export async function animateRevisionScan(
     const morphEntries = refinedDiff
         .filter((e: any) => e.type !== 'unchanged' && e.type !== 'lane-shifted')
         .sort((a: any, b: any) => (a._origIdx ?? 0) - (b._origIdx ?? 0));
-    const morphDurPerEntry = Math.max(200, Math.floor(2400 / Math.max(1, morphEntries.length)));
+    // Per-substance Lx morph duration — scaled proportionally with the 6500ms scan so
+    // that each substance's curve morph still takes the same FRACTION of the scan as
+    // before (original 2400/5000 = 48% → 3120/6500 = 48%).
+    const morphDurPerEntry = Math.max(260, Math.floor(3120 / Math.max(1, morphEntries.length)));
 
     // POI + scan line setup
     const dayScan = createRevisionDayScanLine(svg, timelineGroup, tempGroup, timelineGroup);
@@ -1025,7 +1113,10 @@ export async function animateRevisionScan(
 
         // Turbo: skip animation
         if (isTurboActive()) {
-            tickPillMorph(pillPlan, 1, curveCtx, { onRemoveTick: revisionRemoveTick });
+            tickPillMorph(pillPlan, 1, curveCtx, {
+                onRemoveTick: revisionRemoveTick,
+                teleportDriftFraction: 0,
+            });
             cards.forEach((_: any, i: number) => {
                 if (cards.length > i) showSherlockStack(cards, i);
             });
@@ -1047,19 +1138,21 @@ export async function animateRevisionScan(
                 sherlockTriggers.length > 0 ? sherlockTriggers[0].x - 8 : PHASE_CHART.padL;
             await dayScan.moveTo(firstX);
 
-            // ── SINGLE rAF LOOP — constant speed, 5 seconds ──
+            // ── SINGLE rAF LOOP — constant speed, 6.5 seconds (30% slower than the
+            // previous 5s) ──
             const plotStartX = firstX;
             const plotEndX = PHASE_CHART.padL + PHASE_CHART.plotW;
             const visualSweepDist = Math.max(1, plotEndX - plotStartX);
 
-            // Each pill's animation completes over this many px after the scan line touches it
+            // Each pill's animation completes over this many px after the scan line
+            // touches it. Pixel-based so it automatically stays in sync with the scan
+            // — a slower scan means each pill animates for a proportionally longer time.
             const PILL_ANIM_WINDOW_PX = Math.max(55, visualSweepDist * 0.17);
 
             // Extend effective sweep so rightmost pills have runway to complete animation
             const sweepDist = visualSweepDist + PILL_ANIM_WINDOW_PX;
-            const DURATION = 5000;
+            const DURATION = 6500;
 
-            let nextCard = 0;
             let nextMorph = 0;
             const morphPromises: Promise<void>[] = [];
 
@@ -1076,6 +1169,31 @@ export async function animateRevisionScan(
                 ? Array.from(poiContainer.querySelectorAll('.poi-connector-group'))
                 : [];
             const poiBioStartYs = pois.map((p: any) => p.bioSvgY as number);
+
+            // ── Sherlock narration smooth-fade setup ──
+            // Pre-populate the panel with ALL cards so the DOM is stable, then force
+            // every card to opacity 0 and strip the active/stale state classes.
+            // During the scan tick we'll drive each card's opacity directly from the
+            // scan line's X position, giving a smooth fade with zero active/stale
+            // churn (no flicker from previous cards being demoted to stale).
+            if (cards.length > 0) showSherlockStack(cards, cards.length - 1);
+            const sherlockPanel = document.querySelector(
+                '.sherlock-narration-panel',
+            ) as HTMLElement | null;
+            const sherlockCardEls = sherlockPanel
+                ? (Array.from(sherlockPanel.querySelectorAll('.waze-card')) as HTMLElement[])
+                : [];
+            // Maps sherlock panel card index → trigger X position on the scan line.
+            // refinedDiff is the same order as the cards in the panel, so idx lines up.
+            const sherlockCardTriggerXs: number[] = refinedDiff.map((e: any) =>
+                phaseChartX((e.oldIv || e.newIv)?.timeMinutes ?? PHASE_CHART.startMin),
+            );
+            // Window (in scan-pixels) over which each card fades from 0 → 1.
+            const SHERLOCK_FADE_WINDOW_PX = Math.max(60, visualSweepDist * 0.1);
+            sherlockCardEls.forEach(el => {
+                el.classList.remove('sherlock-active', 'sherlock-stale');
+                el.style.opacity = '0';
+            });
 
             await new Promise<void>(resolve => {
                 const startTs = performance.now();
@@ -1096,12 +1214,20 @@ export async function animateRevisionScan(
                     tickPillMorph(pillPlan, rawT, curveCtx, {
                         onRemoveTick: revisionRemoveTick,
                         easeForX,
+                        teleportDriftFraction: 0,
                     });
 
-                    // 3. Fire Sherlock cards as scan crosses X thresholds
-                    while (nextCard < sherlockTriggers.length && scanX >= sherlockTriggers[nextCard].x) {
-                        if (cards.length > nextCard) showSherlockStack(cards, nextCard);
-                        nextCard++;
+                    // 3. Sherlock cards: drive each card's opacity directly from the
+                    //    scan line's progress past its trigger X. This is a smooth,
+                    //    frame-by-frame fade with zero active/stale churn — previous
+                    //    cards stay at their already-faded-in opacity instead of
+                    //    dropping to a stale dim state when a new card appears.
+                    for (let ci = 0; ci < sherlockCardEls.length; ci++) {
+                        const triggerX = sherlockCardTriggerXs[ci];
+                        if (triggerX == null) continue;
+                        const localT = clamp((scanX - triggerX) / SHERLOCK_FADE_WINDOW_PX, 0, 1);
+                        const eased = easeInOutCubic(localT);
+                        sherlockCardEls[ci].style.opacity = eased.toFixed(3);
                     }
 
                     // 4. Fire morphLxStep as scan crosses each substance's X position
@@ -1159,31 +1285,60 @@ export async function animateRevisionScan(
 
             // Wait for any remaining morph steps
             await Promise.all(morphPromises);
+
+            // Ensure every Sherlock card ends the scan at full opacity. The rAF loop
+            // below drives per-card fade-in as the scan crosses each card's trigger X,
+            // but rounding/early-exit could leave the final card at <1 opacity.
+            if (sherlockCardEls.length > 0) {
+                for (const el of sherlockCardEls) {
+                    el.style.opacity = '1';
+                    el.classList.remove('sherlock-stale');
+                }
+                if (sherlockCardEls[sherlockCardEls.length - 1]) {
+                    sherlockCardEls[sherlockCardEls.length - 1].classList.add('sherlock-active');
+                }
+            }
         }
 
         // Scan sweep already covers full plot + pill animation runway; no separate sweepToDayEnd needed
 
-        // Cleanup: remove tempGroup, finalize pills
+        // Cleanup: snap opacities/transforms to their final values. The morph state
+        // is authoritative — matched "ghosts" (real pre-rendered new pills) are already
+        // in timelineGroup at opacity 1, added pills are in timelineGroup at opacity 1,
+        // removed pills have faded out. No final DOM rebuild — it would recreate fresh
+        // pill elements and cause POI connectors + labels to visibly re-anchor.
+
+        // Wipe tempGroup: origins (old pills) + any fallback simplified ghosts
         Array.from(tempGroup.children).forEach((pill: any) => {
             if (pill.classList?.contains('timeline-pill-group')) {
                 pill.remove();
             }
         });
 
-        // Move matched pills from tempGroup to timelineGroup and clear transforms
-        for (const { el, ghost } of pillPlan.matched) {
-            el.removeAttribute('transform');
-            el.setAttribute('opacity', '1');
-            if (el.parentElement !== timelineGroup && el.isConnected) {
-                timelineGroup.appendChild(el);
+        // Matched pills: finalize ghost (real new pill) state. Origin was removed via
+        // the tempGroup wipe above.
+        for (const { ghost, ghostIsRealPill } of pillPlan.matched) {
+            if (!ghost) continue;
+            if (ghostIsRealPill) {
+                // Real pre-rendered new pill — already in timelineGroup at its final
+                // position with rich label. Just ensure it's fully visible.
+                ghost.classList.remove('revision-prehidden');
+                ghost.removeAttribute('visibility');
+                (ghost as unknown as SVGElement).style.removeProperty('opacity');
+                ghost.setAttribute('opacity', '1');
+            } else {
+                // Fallback simplified ghost — discard. The matched pill has no final
+                // representation; it's an edge case when Phase 0b failed to render
+                // a corresponding new pill.
+                ghost.remove();
             }
-            if (ghost) ghost.remove();
         }
-        // Remove removed pills
+        // Removed pills: ensure they're gone (revisionRemoveTick faded them but
+        // tempGroup wipe already removed them anyway)
         for (const { el } of pillPlan.removed) {
-            el.remove();
+            if (el.isConnected) el.remove();
         }
-        // Finalize added pills
+        // Finalize added pills (already in timelineGroup from Phase 0b render)
         for (const { el } of pillPlan.added) {
             el.removeAttribute('transform');
             (el as SVGElement).style.removeProperty('opacity');
@@ -1192,17 +1347,19 @@ export async function animateRevisionScan(
             el.removeAttribute('visibility');
         }
 
-        // Final DOM rebuild: render the definitive new timeline so positions are exact.
-        // Lock the viewBox height so the re-render doesn't cause a visual jump.
-        const preRenderVB = svgEl_.getAttribute('viewBox');
-        renderSubstanceTimeline(newInterventions, newLxCurves, curvesData);
-        if (preRenderVB) {
-            const parts = preRenderVB.trim().split(/\s+/).map(Number);
-            if (parts.length === 4 && parts.every(n => Number.isFinite(n))) {
-                animatePhaseChartViewBoxHeight(svgEl_, parts[3], 0);
+        // Reveal any pre-rendered pills that were still hidden (e.g. matched pills
+        // routed through the isTrulyUnchanged instant-swap path)
+        revealTimelinePillsInstant();
+
+        // Update POI connector endpoints to anchor to the final pills in timelineGroup.
+        // (The RAF tracking loop stops in `finally`; this gives a one-time snap to the
+        // final state without the rebuild's DOM-replacement jitter.)
+        {
+            const poiContainer = document.getElementById('phase-poi-connectors');
+            if (poiContainer) {
+                updatePoiConnectorVisuals(poiContainer as unknown as SVGElement, tempGroup, timelineGroup);
             }
         }
-        revealTimelinePillsInstant();
 
         // Leave bio strip & spotter group transforms from the animation loop
         // in place. Calling preserveBiometricStrips here would do a full DOM
