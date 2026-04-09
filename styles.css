@@ -12682,7 +12682,7 @@ body.mode-stream .ms-container {
 }
 
 .cg-card-score-entry-value {
-    font-size: 18px;
+    font-size: 23px;
     font-weight: 700;
     text-shadow: 0 1px 5px color-mix(in srgb, var(--score-color, #94a3b8) 32%, transparent);
 }
@@ -12698,7 +12698,7 @@ body.mode-stream .ms-container {
 }
 
 .cg-card-wide .cg-card-score-entry-value {
-    font-size: 22px;
+    font-size: 29px;
 }
 
 body.light-mode .cg-card-score-entry-value {

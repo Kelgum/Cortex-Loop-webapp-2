@@ -240,6 +240,7 @@ function toSavedCycleIndexEntry(record: any) {
         savedAt: record.savedAt,
         hookSentence: record.hookSentence,
         topEffects: record.topEffects,
+        curveEffects: record.curveEffects,
         badgeCategory: record.badgeCategory ?? null,
         iconSvg: record.iconSvg ?? null,
         recommendedDevices: record.recommendedDevices,
@@ -346,6 +347,16 @@ function cycleStoragePlugin() {
                     if (typeof body?.effectScoresVersion === 'number') {
                         record.effectScoresVersion = body.effectScoresVersion;
                     }
+                    if (Array.isArray(body?.topEffects)) {
+                        record.topEffects = body.topEffects
+                            .filter((s: any) => typeof s === 'string')
+                            .slice(0, 3);
+                    }
+                    if (Array.isArray(body?.curveEffects)) {
+                        record.curveEffects = body.curveEffects
+                            .filter((s: any) => typeof s === 'string')
+                            .slice(0, 2);
+                    }
 
                     await writeFile(filePath, JSON.stringify(record), 'utf8');
 
@@ -361,6 +372,8 @@ function cycleStoragePlugin() {
                         if (typeof record.effectScoresVersion === 'number') {
                             entry.effectScoresVersion = record.effectScoresVersion;
                         }
+                        if (record.topEffects) entry.topEffects = record.topEffects;
+                        if (record.curveEffects) entry.curveEffects = record.curveEffects;
                     }
                     await writeCyclesIndex(index);
                     return index;

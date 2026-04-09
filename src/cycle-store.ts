@@ -30,12 +30,19 @@ export interface SavedCycleIndexEntry {
     savedAt: string;
     hookSentence: string | null;
     topEffects: string[];
+    /**
+     * Strategist-assigned curve effect names, aligned 1:1 with effectScores indices
+     * (max 2). Used ONLY for card badge display — section matching still uses the
+     * broader Scout-derived topEffects (which contains the category tags like
+     * "Focus" / "Alertness" that SECTION_DEFINITIONS looks for).
+     */
+    curveEffects?: string[];
     badgeCategory?: string | null;
     iconSvg?: string | null;
     recommendedDevices?: string[];
     substanceClasses?: string[];
     timeHorizon?: TimeHorizon;
-    /** 7D average gap-closure % per effect (0..2 entries, aligned to topEffects). */
+    /** 7D average gap-closure % per effect (0..2 entries, aligned to curveEffects/topEffects). */
     effectScores?: number[];
     /**
      * Schema version of the effect-score formula. Used to invalidate cached
@@ -115,6 +122,8 @@ export async function patchCycle(
         timeHorizon?: TimeHorizon;
         effectScores?: number[];
         effectScoresVersion?: number;
+        topEffects?: string[];
+        curveEffects?: string[];
     },
 ): Promise<void> {
     const res = await fetch(`/__cycles/${encodeURIComponent(id)}`, {
@@ -140,6 +149,8 @@ export async function patchCycle(
             if (typeof patch.effectScoresVersion === 'number') {
                 entry.effectScoresVersion = patch.effectScoresVersion;
             }
+            if (patch.topEffects) entry.topEffects = patch.topEffects;
+            if (patch.curveEffects) entry.curveEffects = patch.curveEffects;
         }
     }
 }
