@@ -470,8 +470,16 @@ function buildInterpolationCtx(fromDay: DaySnapshot, toDay: DaySnapshot, curvesD
     const lxGroup = document.getElementById('phase-lx-curves');
     const bioGroup = document.getElementById('phase-biometric-strips');
 
-    const fromBaselines = fromDay.bioCorrectedBaseline.map(bl => smoothPhaseValues(bl, PHASE_SMOOTH_PASSES));
-    const toBaselines = toDay.bioCorrectedBaseline.map(bl => smoothPhaseValues(bl, PHASE_SMOOTH_PASSES));
+    // Baseline stroke must use postInterventionBaseline to stay glued to the AUC bands
+    // (bands + Lx overlay are rooted in postInterventionBaseline via week-orchestrator.ts).
+    const fromBlSource = fromDay.postInterventionBaseline?.length
+        ? fromDay.postInterventionBaseline
+        : fromDay.bioCorrectedBaseline;
+    const toBlSource = toDay.postInterventionBaseline?.length
+        ? toDay.postInterventionBaseline
+        : toDay.bioCorrectedBaseline;
+    const fromBaselines = fromBlSource.map(bl => smoothPhaseValues(bl, PHASE_SMOOTH_PASSES));
+    const toBaselines = toBlSource.map(bl => smoothPhaseValues(bl, PHASE_SMOOTH_PASSES));
 
     // Bio strip lane shift
     const laneStep = TIMELINE_ZONE.laneH + TIMELINE_ZONE.laneGap;
@@ -939,7 +947,10 @@ export function renderDayState(day: DaySnapshot, curvesData: CurveData[], opts?:
     // Render baseline curves
     const baselineStrokes = baseGroup ? Array.from(baseGroup.querySelectorAll('.phase-baseline-path')) : [];
     for (let ci = 0; ci < curvesData.length; ci++) {
-        const bl = smoothPhaseValues(day.bioCorrectedBaseline[ci] || curvesData[ci].baseline, PHASE_SMOOTH_PASSES);
+        // Use postInterventionBaseline so the stroke matches what bands + Lx are rooted in.
+        const blSource =
+            day.postInterventionBaseline?.[ci] || day.bioCorrectedBaseline[ci] || curvesData[ci].baseline;
+        const bl = smoothPhaseValues(blSource, PHASE_SMOOTH_PASSES);
         if (baselineStrokes[ci] && bl.length > 0) {
             baselineStrokes[ci].setAttribute('d', phasePointsToPath(bl, true));
         }
