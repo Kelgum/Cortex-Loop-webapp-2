@@ -69,6 +69,11 @@
                 <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:0.04em;">Rx</span>
             </button>
 
+            <!-- Rx-SOC twin compare (shown only when a cycle is loaded, investor demo) -->
+            <button id="rx-twin-btn" class="top-control-btn hidden" aria-label="Compare Lx vs Rx standard-of-care" title="Compare Lx vs Rx standard-of-care">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:0.04em;">Lx | Rx</span>
+            </button>
+
             <!-- Theme toggle -->
             <button id="theme-toggle-btn" class="top-control-btn" aria-label="Toggle light/dark mode">
                 <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -177,11 +182,9 @@
             <select id="start-phase-select" class="llm-select">
                 <option value="0">None (default)</option>
                 <option value="1">Optimize (Phase 1)</option>
-                <option value="2">Lx Overlay (Phase 2)</option>
                 <option value="3">Biometrics (Phase 3)</option>
                 <option value="4">Revision (Phase 4)</option>
                 <option value="5">7D Cycle (Phase 5)</option>
-                <option value="6">Camera Tracking (Phase 6)</option>
             </select>
             <div class="settings-section">
                 <label for="debug-export-run-btn">Debug Bundles</label>
@@ -190,9 +193,9 @@
                 </div>
                 <label class="settings-checkbox-row" for="debug-export-autosave">
                     <input id="debug-export-autosave" type="checkbox" />
-                    <span>Auto-save pipeline bundles into <code>.cortex-debug/</code></span>
+                    <span>Auto-save pipeline bundles into <code>.lx-studio-debug/</code></span>
                 </label>
-                <p id="debug-export-status" class="settings-hint">Writes directly into <code>.cortex-debug/</code> at the repo root when running the app locally through Vite.</p>
+                <p id="debug-export-status" class="settings-hint">Writes directly into <code>.lx-studio-debug/</code> at the repo root when running the app locally through Vite.</p>
             </div>
             <div class="settings-section" id="saved-cycles-section">
                 <label>Saved Cycles</label>
@@ -287,6 +290,7 @@
         <header id="prompt-section" class="phase-centered">
             <div class="prompt-container">
                 <h1 class="logo-text">Lx.health</h1>
+                <div class="prompt-form-wrap">
                 <form id="prompt-form">
                     <input type="text" id="prompt-input" placeholder="Describe your desired outcome..."
                         autocomplete="off" spellcheck="false" />
@@ -306,13 +310,15 @@
                             <polyline points="20 6 9 17 4 12" />
                         </svg>
                     </button>
-                    <button type="button" id="cycle-break-btn" class="cycle-action-btn cycle-break-btn" aria-label="Break from cache and continue live" style="display:none;">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-                        </svg>
-                    </button>
                 </form>
+                <div id="phase-jump-band" class="phase-jump-band" aria-label="Jump to phase">
+                    <button type="button" class="phase-jump-tab" data-phase="0">Prompt</button>
+                    <button type="button" class="phase-jump-tab" data-phase="1">Optimize</button>
+                    <button type="button" class="phase-jump-tab" data-phase="3">Biometrics</button>
+                    <button type="button" class="phase-jump-tab" data-phase="4">Revision</button>
+                    <button type="button" class="phase-jump-tab" data-phase="5">7D Cycle</button>
+                </div>
+                </div>
 
                 <p id="prompt-hint" class="hint-text"><a id="hint-example" href="#">e.g. "4 hours of deep focus, no sleep
                         quality impact"</a></p>
@@ -437,7 +443,7 @@
                 </svg>
             </button>
             <div class="pipeline-timeline-header">
-                <span class="pipeline-timeline-title">Cortex Agent Pipeline</span>
+                <span class="pipeline-timeline-title">Lx.Studio Agent Pipeline</span>
                 <span id="pipeline-timeline-status" class="pipeline-timeline-status">LIVE</span>
                 <div class="pipeline-timeline-legend" aria-hidden="true">
                     <span class="pipeline-legend-item"><i class="pipeline-legend-swatch queued"></i>Queued</span>

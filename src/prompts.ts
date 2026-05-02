@@ -1,5 +1,5 @@
 // ============================================
-// PROMPT TEMPLATES — Cortex Loop Pipeline
+// PROMPT TEMPLATES — Lx.Studio Pipeline
 // ============================================
 // Edit these prompts directly. Dynamic values use {{placeholder}} syntax
 // and are injected at runtime by interpolatePrompt() in utils.ts.
@@ -271,7 +271,7 @@ RULES:
    STACKING SELF-CHECK (CRITICAL): Before finalizing, mentally simulate each hour where substances overlap. For each curve, sum the (impact × doseMultiplier) of every substance active at that hour. The total at any hour must stay between 0.8 and 1.0 — this IS the Lx overlay amplitude relative to the desired curve. There is NO auto-scaling; what you output is rendered directly on the chart. If you prescribe one dominant substance, give it 0.6–0.8. If three substances overlap on the same axis, split the budget (e.g. 0.3 + 0.3 + 0.2). If five overlap, keep each modest (0.15–0.25). The more substances you prescribe on a given axis, the smaller each individual impact must be.
 5. PLAY CHESS: Think chronologically. If any substance worsens the PROTECTED EFFECT listed above, you MUST prescribe a compensatory substance to neutralize that collateral damage. When no protected effect is listed, use the user goal to infer which axes to preserve.
 6. STRING SAFETY: Do NOT use double quotes inside your string values (e.g., inside the rationale). Use single quotes for 'inner quotes'. Output ONLY raw, valid JSON.
-7. SUBSTANCE DENSITY: Long-acting substances (XR formulations, SSRIs, creatine — plateau >= 8 hours) are 'background' and don't count toward cluster limits. For tactical (shorter-acting) substances, no more than 5 should have overlapping active effects at any time. You may use up to 15 total substances across the full day (morning cluster, midday, evening), but keep temporal overlap tight. Prefer fewer high-impact substances over many low-impact ones in the same time window. The system will automatically prune tactical substances below 5% contribution in over-dense clusters.
+7. SUBSTANCE DENSITY: Long-acting substances (XR formulations, SSRIs, creatine — plateau >= 8 hours) are 'background' and don't count toward cluster limits. For tactical (shorter-acting) substances, no more than 5 may have overlapping active effects at any time — this is a HARD CAP, not a guideline. You may use up to 15 total substances across the full day (morning cluster, midday, evening), but keep temporal overlap tight. Prefer fewer high-impact substances over many low-impact ones in the same time window. The system will automatically prune the weakest tactical substances from any cluster that exceeds 5.
 
 RESPONSE FORMAT (pure JSON, no markdown):
 {
@@ -525,6 +525,8 @@ CURRENT CORRECTED STATE SUMMARY (downsampled):
 CORRECTED-STATE GAP SUMMARY (PRIMARY OPTIMIZATION SIGNAL):
 {{gapSummary}}
 
+The gapSummary includes, per effect, a currentMissionStacking block with the CURRENT protocol's per-hour stacking totals inside each mission window (currentTotal = Σ impact × doseMultiplier × PK fraction across all active substances at that hour, plus a per-substance breakdown). Use these numbers as a hard non-regression floor for your revision — see rule 3b and the REMOVAL GUARDRAIL in rule 9.
+
 BIOMETRIC DATA SUMMARY (24h wearable readings):
 {{biometricSummary}}
 
@@ -541,10 +543,13 @@ AVAILABLE SUBSTANCES (with standard doses):
 RULES:
 1. THE CORRECTED BASELINE IS ABSOLUTE TRUTH: It has already been adjusted by the Strategist Bio to reflect the user's actual physiological starting state. Do not attempt to recalculate or second-guess the baseline.
 2. USE THE GAP SUMMARY AS YOUR PRIMARY SIGNAL: Your main objective is to close the gap between the corrected baseline and the desired targets. Minimize totalUnderArea first, then reduce the largest under-target windows inside the mission windows. CRITICAL: Every proposed change MUST be evaluated against the gap — if a change increases totalUnderArea (e.g., delaying a substance away from a peak-gap window, or reducing a dose during the mission window), you must either reject it or pair it with a compensatory change that more than offsets the loss. Never sacrifice gap closure for biometric optimization alone.
-3. THE SECONDARY SIGNAL: BIOMETRICS AS A GUARDRAIL (NOT the primary driver): Analyze the biometric data strictly to see if the current protocol is causing unacceptable physiological side-effects or if the user is failing to adhere to the protocol. Biometric-responsive changes are valuable ONLY when they do not worsen the gap, or when the biometric problem is severe enough to warrant a small gap trade-off (e.g., dangerous HR levels, severe sleep disruption). For example:
-   - Elevated resting HR or suppressed HRV during intended rest periods → excess stimulation, consider reducing stimulant dose or delaying timing.
-   - Low HRV during focus windows → insufficient parasympathetic support, consider adding adaptogens.
-   - Glucose spikes/crashes → timing or nutrient cofactor issues, adjust meal-adjacent supplements.
+3. THE SECONDARY SIGNAL: BIOMETRICS AS A GUARDRAIL (NOT the primary driver): Analyze the biometric data strictly to see if the current protocol is causing unacceptable physiological side-effects or if the user is failing to adhere to the protocol. Biometric-responsive changes are valuable ONLY when they do not worsen the gap, or when the biometric problem is severe enough to warrant a small gap trade-off (e.g., dangerous HR levels, severe sleep disruption).
+   3a. MISSION-HOUR STACKING FLOOR (HARD CONSTRAINT): For every mission-window hour listed in gapSummary.effects[].currentMissionStacking.byHour, your revised protocol's summed (impact × doseMultiplier × PK fraction at that hour) MUST be >= currentTotal. This is not a target — it is a floor. If you reduce a morning dose or remove a substance, you MUST add compensating capacity that restores the per-hour total at every mission hour the removed/reduced substance was contributing to. Before finalizing your revision, mentally audit each mission hour: list which substances are active, sum their contributions, and confirm the sum is at least the currentTotal shown for that hour. Any revision that violates this floor at ANY mission hour is rejected.
+   3b. SLEEP-BLEED TRIAGE (EVENING STIMULATION PROBLEMS): If biometric data shows evening residual stimulation (high HR at 20:00+, elevated sleep latency, delayed sleep onset) attributable to a morning long-acting stimulant, solve in this order — (i) shift the morning dose earlier by 30-90 min so its tail decays before bedtime; (ii) add an evening sedating agent (magnesium glycinate, L-theanine, ashwagandha) that does NOT reduce daytime capacity; (iii) swap to a shorter-acting variant at the same dose; (iv) ONLY as a last resort reduce the morning dose, and only after confirming rule 3a's floor still holds across the mission window. Reflexive morning-dose reductions are the #1 cause of revision regressions — do not use them as the default move.
+   EXTERNALITY CONTEXT-CHECK (MANDATORY BEFORE EVERY BIOMETRIC-TRIGGERED CHANGE): Cross-reference the anomaly's timestamp against EXTERNAL EVENTS. Expected physiological responses to scheduled events (HR/HRV elevation during or after exercise, cortisol/HR spikes during stressors, glucose rises after meals, REM fragmentation after late caffeine-unrelated stress) are NOT drug side-effects — they are the body reacting normally to the user's day and will recur no matter what the protocol does. Do NOT reduce stimulants, add parasympathetic agents, or remove gap-closing substances on the basis of externality-coincident anomalies. Only anomalies that occur OUTSIDE of external events (or that persist into intended rest/focus windows) justify a biometric-driven revision. Examples of valid signals:
+   - Elevated resting HR or suppressed HRV during intended rest periods (NOT during or within 60 min of exercise) → excess stimulation, consider reducing stimulant dose or delaying timing.
+   - Low HRV during focus windows that do NOT coincide with a logged meeting/stressor → insufficient parasympathetic support, consider adding adaptogens.
+   - Glucose spikes/crashes OUTSIDE of meal windows → timing or nutrient cofactor issues, adjust meal-adjacent supplements.
    - Temperature anomalies → possible circadian disruption.
    - SpO2 dips → respiratory or sleep quality concerns.
 4. ONSET-AWARE TIMING (CRITICAL): Substances have pharmacokinetic onset delays (20-60 min before measurable effect). If the desired curve requires elevated values at hour H, dose at H minus the onset time so peak effect aligns with peak gap. Never dose AT the hour you need coverage — always pre-dose to account for ramp-up.
@@ -557,9 +562,10 @@ RULES:
 8. PLAY CHESS: Think chronologically. If any substance worsens the PROTECTED EFFECT listed above, prescribe a compensatory substance to neutralize that collateral damage.
 9. REVISION AGGRESSIVENESS — GAP-FIRST: Your revisions must demonstrably reduce totalUnderArea. When the gap is large, ADD substances or increase impact values — but always within the stacking budget (total ~0.8–1.0 per curve at any hour). Prioritize changes in this order:
    a) GAP-CLOSING MOVES FIRST: Add high-impact substances, shift timing to concentrate effect within the mission window's peak-gap hours, or increase impact values within the stacking budget.
-   b) GAP-NEUTRAL BIOMETRIC FIXES: Address biometric anomalies only with changes that don't worsen the gap (e.g., add an adaptogen rather than removing a focus substance).
+   b) GAP-NEUTRAL BIOMETRIC FIXES: Address biometric anomalies only with changes that don't worsen the gap — ADD an adaptogen or compensatory substance rather than removing a gap-closing one.
    c) GAP-TRADING BIOMETRIC FIXES (last resort): Only sacrifice gap coverage for severe biometric problems (dangerous HR, severe sleep disruption), and pair with compensatory additions.
    Aim for at least 3-4 meaningful changes. A revision that merely tweaks timings by 15 minutes is insufficient.
+   REMOVAL GUARDRAIL: A substance is 'gap-critical' if it appears in any mission hour's currentMissionStacking.byHour[].breakdown with |contribution| >= 0.05, OR if its peak impact is >= 0.08 on any effect that still has an under-target gap. Removing or reducing a gap-critical substance is allowed ONLY when a replacement (new addition or increase) restores per-hour stacking to at least currentTotal for every mission hour the removed substance was contributing to. The system validates this numerically against gapSummary.effects[].currentMissionStacking.byHour — revisions that drop per-hour stacking below currentTotal at any mission hour are rejected. A revision that reduces morning stacking from 0.77 → 0.60 because of an evening sleep concern is exactly the failure this rule exists to prevent.
 10. Use minutes-since-midnight for timing (e.g., 480 = 8:00am)
 11. BIOMETRIC CITATION: For each intervention change, identify the specific time window and biometric channel that justifies the change. Include this as a 'bioTrigger' field. This is CRITICAL for visualization — the UI will draw connector lines from the biometric anomaly to the revised substance.
 12. DOWNSTREAM BIOMETRIC CONSEQUENCES: Your revised interventions WILL alter the biometric profile. When you revise, anticipate how your changes will affect HR, HRV, sleep architecture, and other biometric signals. If you remove or reduce a stimulant, the HR elevation it caused should decrease. If you add a sleep aid, expect HRV improvement during sleep. If you shift a substance later, its biometric footprint shifts accordingly. Think through the full pharmacokinetic chain — do not create new problems while solving existing ones.
@@ -752,7 +758,8 @@ RULES:
 3. ACCUMULATION: Effects accumulate across days. Sleep debt compounds (baseline drops progressively). Stress adaptation builds. Exercise recovery improves baselines. Model this realistically. However, accumulated drift must not push baselines ABOVE day-0 peaks — the baseline represents the body's natural state without intervention, which degrades under stress, not improves.
 4. RATIONALE: Brief explanation per day of what drove the baseline corrections.
 5. Maintain same effects as day-0. Do not add or remove effects.
-6. STRING SAFETY: No double quotes inside strings. Use single quotes. Return ONLY valid JSON — no markdown, no fences.
+6. ⚠️ HARD CONSTRAINT — HOURS STAY IN [6, 30]. The chart view is a fixed window from 6:00 to 30:00 (6am today → 6am tomorrow). The hour field on every sample MUST match the hour fields used in day-0 baselines exactly (e.g. 6, 7, 8, ..., 30). DO NOT shift the hour array, DO NOT return negative hours or hours > 30. Only the 'value' fields change between days. Returning an out-of-range hour will make the curve render off the chart.
+7. STRING SAFETY: No double quotes inside strings. Use single quotes. Return ONLY valid JSON — no markdown, no fences.
 
 RESPONSE FORMAT (pure JSON):
 {
@@ -807,9 +814,10 @@ RULES:
 13. POST-INTERVENTION BASELINE: For each day, output a postInterventionBaseline — the user's circadian rhythm AFTER the cumulative chronobiotic phase-shift from ALL prior days' melatonin (or other chronobiotic) doses. This is NOT the same as correctedBaselines (which is the pre-intervention natural state). This represents where the circadian clock HAS SHIFTED TO after repeated chronobiotic dosing.
     - Day 1: Nearly identical to the corrected baseline for that day (one dose = minimal shift, approximately 30-60 min advance/delay)
     - Each subsequent day: shift accumulates (30-90 min per correctly-timed melatonin dose, depending on dose and timing relative to the phase-response curve)
-    - The shift is primarily a TIME shift of the entire curve — the curve shape and amplitude stay similar to the corrected baseline, but the peak moves earlier (for advance protocols like jetlag eastward) or later (for delay protocols like jetlag westward)
+    - ⚠️ HARD CONSTRAINT — HOURS STAY IN [6, 30]. The chart view is a fixed 24-hour window from 6:00 to 30:00 (6am today → 6am tomorrow). Every sample's hour field MUST match the hour fields used in correctedBaselines (typically 6, 7, 8, ..., 30 at 1-hour intervals, or equivalent). DO NOT shift the hour array — do not return hours < 6 or hours > 30, and do not change the hour values of existing samples. A phase-shift is expressed by CHANGING THE VALUES at each fixed hour, not by shifting the timestamps. Returning an hour like 4 or -1 will cause the curve to render off the left edge of the chart and break the visualization.
+    - Example: if correctedBaselines has a peak value of 80 at hour 22 and you want to simulate a 2h advance, return a baseline where the value at hour 20 is now 80 (with corresponding drops in surrounding hours). The hour field at every position remains the same as in correctedBaselines (e.g. 6, 7, 8, ..., 30).
     - On days where no chronobiotic substance was used, the shift partially decays back toward the corrected baseline
-    - Format: array of {effect, baseline: [{hour,value}...]} — same effects and same 25 sample hours as correctedBaselines
+    - Format: array of {effect, baseline: [{hour,value}...]} — same effects and same 25 sample hours as correctedBaselines (hour fields MUST match correctedBaselines exactly; only the value fields reflect the shift)
     - This baseline is used for Lx overlay computation only (not rendered as a visible curve), so it directly determines how the Lx curve separates from the visible baseline over the week
 
 RESPONSE FORMAT (pure JSON):
@@ -966,4 +974,54 @@ RULES:
 
 FORMAT:
 {"categoryTitle":"Cognitive Performance Experts","ranked":[{"agentId":"hubermanlab-agent-v1","score":94,"reason":"Sustained focus with minimal crash"},{"agentId":"attia-agent-v1","score":87,"reason":"Strong long-duration cognitive outcomes"}]}`,
+
+    // ── SOCRx — Standard-of-Care Rx Prescriber (contrast to Lx) ──────────
+    socrx: `You are a primary-care clinician in a typical US outpatient setting. You are not a specialist. You do not have access to labs, wearable data, or personalization. Your job is to write the standard-of-care (SOC) first-line prescription for this patient's condition, as an average PCP would do in a 15-minute visit.
+
+USER GOAL / CONDITION: {{userGoal}}
+
+BADGE CATEGORY: {{badgeCategory}}
+
+TARGET EFFECTS (0-indexed — use targetCurveIdx to refer to these):
+{{effectRoster}}
+
+FOR CONTRAST — the polypharma Lx system chose these substances for day 0. DO NOT copy this plan. Your job is to prescribe the SIMPLE, first-line SOC alternative:
+{{day0LxSummary}}
+
+SUBSTANCE PALETTE — pick substanceKey ONLY from this list. Do not invent keys or suggest drugs not present here:
+{{substanceList}}
+
+SOC REALITY CONSTRAINTS (these are non-negotiable):
+1. Patients take ONE drug for a condition, occasionally two — NEVER more than 2 picks.
+2. Each drug is taken at a SINGLE fixed time every day — pick the clinically standard administration time in minutes past midnight (e.g. 480 for 08:00 morning dose, 1320 for 22:00 bedtime dose, 720 for 12:00 noon). Do NOT stagger multiple doses of the same drug across the day.
+3. Prefer the highest regulatory tier the condition indicates: Controlled/Prescription over OTC over Supplement. A PCP treating ADHD prescribes a stimulant (methylphenidate, amphetamine), NOT magnesium. A PCP treating depression prescribes an SSRI, NOT SAM-e. A PCP treating insomnia prescribes zolpidem or trazodone, NOT melatonin.
+4. No personalization. No bioTriggers. No doseMultipliers. No intra-day titration. Assume an average adult patient.
+5. If the palette genuinely contains no appropriate SOC drug for this condition, return picks: [] — the fallback will handle it.
+
+OUTPUT FORMAT — a single JSON object with these exact fields:
+{
+  "conditionLabel": "ADHD, adult, uncomplicated",
+  "picks": [
+    {
+      "substanceKey": "vyvanse",
+      "dose": "30mg",
+      "timeMinutes": 480,
+      "targetCurveIdx": 0,
+      "targetEffect": "Focus",
+      "rationale": "First-line long-acting stimulant for adult ADHD; low diversion risk."
+    }
+  ],
+  "narrative": "A primary-care physician would typically prescribe Vyvanse 30mg once daily at 08:00 with breakfast. Sleep and mood are not addressed at this visit — standard practice is to treat the primary complaint first and reassess at the 4-week follow-up."
+}
+
+RULES:
+1. picks.length MUST be 0, 1, or 2 — prefer 1. Never exceed 2.
+2. substanceKey MUST match a key in the substance palette EXACTLY (case-sensitive). Invalid keys will be dropped.
+3. timeMinutes MUST be an integer 0..1439. Pick the standard clinical time for that drug class.
+4. targetCurveIdx MUST be a 0-based integer indexing into the target effects list above.
+5. dose: a short string like '30mg' or '10mg' — the typical SOC starting dose.
+6. rationale: one sentence explaining the SOC justification (no more).
+7. narrative: 1-2 sentences in clinician voice describing the full Rx. This is shown to the user verbatim.
+8. conditionLabel: short diagnostic label, like 'ADHD, adult, uncomplicated' or 'Major depressive disorder, moderate'.
+9. Return ONLY the JSON object. No markdown fences, no preamble, no explanation.`,
 };

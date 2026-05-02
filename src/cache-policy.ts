@@ -18,6 +18,7 @@ export const CACHE_STAGE_LABELS: Record<string, string> = {
     'grandmaster-daily-model': 'Grandmaster (7d)',
     'sherlock7d-model': 'Sherlock (7d)',
     'agent-match-model': 'Agent Match',
+    'socrx-model': 'SOCRx',
 };
 
 export const CACHE_STAGE_UPSTREAM_DEPS: Record<string, string[]> = {
@@ -36,6 +37,7 @@ export const CACHE_STAGE_UPSTREAM_DEPS: Record<string, string[]> = {
     'grandmaster-daily-model': ['strategist-bio-daily-model', 'knight-model', 'intervention-model'],
     'sherlock7d-model': ['grandmaster-daily-model'],
     'agent-match-model': ['fast-model'],
+    'socrx-model': ['intervention-model'],
 };
 
 function reverseDependencyMap(): Record<string, string[]> {

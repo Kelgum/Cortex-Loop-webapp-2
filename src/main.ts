@@ -14,6 +14,7 @@ import {
     MultiDayState,
     AgentMatchState,
     isTurboActive,
+    loadDefaultPreset,
 } from './state';
 import { sleep, isLightMode } from './utils';
 import { chartTheme } from './utils';
@@ -55,6 +56,7 @@ import {
     callExtendedStrategist,
     callExtendedIntervention,
     callExtendedSherlock,
+    callSocrxModel,
 } from './llm-pipeline';
 import {
     validateInterventions,
@@ -87,6 +89,17 @@ import {
 } from './sherlock';
 import { cleanupBaselineEditor } from './baseline-editor';
 import { DebugLog } from './debug-panel';
+import { buildRxSocTwin, RX_SOC_TWIN_SCHEMA_VERSION } from './rx-soc-transform';
+import {
+    renderCompareView,
+    updateCompareViewDay,
+    clearCompareView,
+    isCompareActive,
+    interpolateCompareDay,
+    RX_TWIN_REGENERATE_EVENT,
+} from './rx-compare-render';
+import { renderCompareBadges, clearCompareBadges } from './rx-compare-badges';
+import { compute7DEffectScores, computeDesignEffectScores } from './effect-score';
 import {
     clearRuntimeBug,
     initRuntimeErrorBanner,
@@ -94,7 +107,13 @@ import {
     reportRuntimeCacheWarning,
 } from './runtime-error-banner';
 import { extractCurvesData, extractInterventionsData, extractTimeHorizon } from './llm-response-shape';
-import { renderExtendedChart, clearExtendedChart, renderExtendedPhaseA, revealExtendedDesired, revealExtendedSubstances } from './chart-extended';
+import {
+    renderExtendedChart,
+    clearExtendedChart,
+    renderExtendedPhaseA,
+    revealExtendedDesired,
+    revealExtendedSubstances,
+} from './chart-extended';
 import { computeIncrementalExtendedLxOverlay } from './lx-compute';
 import type { TimeHorizon } from './types';
 import {
@@ -130,7 +149,7 @@ import { TaskGroup } from './task-group';
 import { initDebugBundleExport } from './debug-bundle';
 import { LLMCache } from './llm-cache';
 import { initCycleUi } from './cycle-ui';
-import { getLoadedCycleId, getLoadedCyclePrompt } from './cycle-store';
+import { getLoadedCycleId, getLoadedCyclePrompt, saveRxTwin, loadRxTwin, loadCycleBundle } from './cycle-store';
 import {
     getRuntimeReplaySnapshot,
     isRuntimeReplayActive,
@@ -157,7 +176,7 @@ import {
     expandWallDepth,
 } from './substance-wall';
 import type { TimelineEngineHandle } from './contracts';
-const HARD_RESET_PENDING_PROMPT_KEY = 'cortex_pending_prompt_after_hard_reset_v1';
+const HARD_RESET_PENDING_PROMPT_KEY = 'lx_studio_pending_prompt_after_hard_reset_v1';
 
 type PendingPromptPayload = {
     prompt: string;
@@ -1527,7 +1546,7 @@ export async function handlePromptSubmit(e) {
             ? `[array of ${curvesResult.length}]`
             : Object.keys(curvesResult || {}).join(', ');
         console.error(
-            '[CortexLoop] Curve result had no usable curves. Parsed keys:',
+            '[LxStudio] Curve result had no usable curves. Parsed keys:',
             keys,
             'Full result:',
             curvesResult,
@@ -1751,6 +1770,20 @@ export async function handlePromptSubmit(e) {
         console.warn('[Sherlock] DISABLED — narration skipped');
     }
 
+    // Stash the original baseline on each curve as a reference. This is used by
+    // lx-compute to size the pharmacological effect as an absolute quantity so
+    // the Lx curve tracks baseline shifts after bio-correction (rather than
+    // auto-scaling to always cover 95% of whatever gap exists). Bio-correction's
+    // cloneCurvesDataWithBaselines() preserves this field via spread, so the
+    // reference survives through the rest of the pipeline.
+    if (Array.isArray(curvesData)) {
+        for (const curve of curvesData) {
+            if (curve && Array.isArray(curve.baseline) && !Array.isArray(curve.referenceBaseline)) {
+                curve.referenceBaseline = curve.baseline.map((p: any) => ({ hour: p.hour, value: p.value }));
+            }
+        }
+    }
+
     // Compute incremental Lx overlays (one per substance step)
     const replayIncrementalSnapshots = replaySnapshot?.design?.incrementalSnapshots;
     const incrementalSnapshots =
@@ -1878,6 +1911,21 @@ function showDemoButtons(): void {
     if (rxBtn) rxBtn.classList.remove('hidden');
     if (sculptorBtn) sculptorBtn.classList.remove('hidden');
     if (wallBtn) wallBtn.classList.remove('hidden');
+    refreshRxTwinBtnVisibility();
+}
+
+/**
+ * The Rx-SOC twin compare button only makes sense once we have week data
+ * to derive from — either a loaded cycle or a completed live run with
+ * multi-day results.
+ */
+export function refreshRxTwinBtnVisibility(): void {
+    const btn = document.getElementById('rx-twin-btn');
+    if (!btn) return;
+    const hasCycle = !!PhaseState.loadedCycleId;
+    const hasWeek = !!MultiDayState.days && MultiDayState.days.length >= 2;
+    const eligible = hasCycle || hasWeek;
+    btn.classList.toggle('hidden', !eligible);
 }
 
 export function initDebugPanel() {
@@ -1953,7 +2001,15 @@ const STREAM_VISUAL_DEFAULTS = {
     titleScale: 50,
     titleColorIntensity: 50,
     badgeIntensity: 50,
+    scoreWeight: 50,
+    scoreScale: 25,
+    showPrompt: 1,
 } as const;
+
+function applyStreamShowPrompt(show: boolean): void {
+    const grid = document.querySelector('.stream-grid');
+    if (grid) grid.classList.toggle('stream-hide-prompt', !show);
+}
 
 let visualControlsExpanded = false;
 
@@ -1997,10 +2053,40 @@ function applyStreamTitleScale(value: number): void {
     document.documentElement.style.setProperty('--stream-title-scale', scale.toFixed(3));
 }
 
+function applyStreamScoreWeight(value: number): void {
+    // 0 → 300 (light), 50 → 600 (semibold), 100 → 900 (black)
+    const weight = Math.round(300 + (clampVisualValue(value) / 100) * 600);
+    document.documentElement.style.setProperty('--stream-score-weight', String(weight));
+}
+
+function applyStreamScoreScale(value: number): void {
+    // 0 → 0.7x, 50 → 1x, 100 → 1.5x
+    const v = clampVisualValue(value);
+    const scale = v <= 50 ? 0.7 + (v / 50) * 0.3 : 1 + ((v - 50) / 50) * 0.5;
+    document.documentElement.style.setProperty('--stream-score-scale', scale.toFixed(3));
+}
+
 function applyStoredStreamVisualControls(): void {
     applyStreamCardDensity(settingsStore.getNumber(STORAGE_KEYS.streamCardDensity, STREAM_VISUAL_DEFAULTS.cardDensity));
     applyStreamCardChrome(settingsStore.getNumber(STORAGE_KEYS.streamCardChrome, STREAM_VISUAL_DEFAULTS.cardChrome));
     applyStreamTitleScale(settingsStore.getNumber(STORAGE_KEYS.streamTitleScale, STREAM_VISUAL_DEFAULTS.titleScale));
+    applyStreamScoreWeight(settingsStore.getNumber(STORAGE_KEYS.streamScoreWeight, STREAM_VISUAL_DEFAULTS.scoreWeight));
+    applyStreamScoreScale(settingsStore.getNumber(STORAGE_KEYS.streamScoreScale, STREAM_VISUAL_DEFAULTS.scoreScale));
+    applyStreamShowPrompt(
+        settingsStore.getNumber(STORAGE_KEYS.streamShowPrompt, STREAM_VISUAL_DEFAULTS.showPrompt) !== 0,
+    );
+}
+
+function renderVisualToggle(label: string, inputId: string, checked: boolean): string {
+    return (
+        `<div class="settings-control settings-control-toggle">` +
+        `<label class="settings-control-label" for="${inputId}">${label}</label>` +
+        `<label class="settings-toggle-switch">` +
+        `<input id="${inputId}" type="checkbox" ${checked ? 'checked' : ''} />` +
+        `<span class="settings-toggle-slider"></span>` +
+        `</label>` +
+        `</div>`
+    );
 }
 
 function renderVisualControl(label: string, inputId: string, value: number): string {
@@ -2046,6 +2132,21 @@ function buildVisualControlsMarkup(mode: SettingsVisualMode): string {
             'Badge Intensity',
             'stream-badge-intensity-slider',
             settingsStore.getNumber(STORAGE_KEYS.streamBadgeIntensity, STREAM_VISUAL_DEFAULTS.badgeIntensity),
+        ),
+        renderVisualControl(
+            'Effect % Weight',
+            'stream-score-weight-slider',
+            settingsStore.getNumber(STORAGE_KEYS.streamScoreWeight, STREAM_VISUAL_DEFAULTS.scoreWeight),
+        ),
+        renderVisualControl(
+            'Effect % Size',
+            'stream-score-scale-slider',
+            settingsStore.getNumber(STORAGE_KEYS.streamScoreScale, STREAM_VISUAL_DEFAULTS.scoreScale),
+        ),
+        renderVisualToggle(
+            'Show Prompt Text',
+            'stream-show-prompt-toggle',
+            settingsStore.getNumber(STORAGE_KEYS.streamShowPrompt, STREAM_VISUAL_DEFAULTS.showPrompt) !== 0,
         ),
     ].join('');
 }
@@ -2109,6 +2210,23 @@ function renderVisualControlsSection(): void {
         settingsStore.setString(STORAGE_KEYS.streamBadgeIntensity, String(value));
         refreshStreamCardPresentation();
     });
+    bindVisualSlider('stream-score-weight-slider', value => {
+        applyStreamScoreWeight(value);
+        settingsStore.setString(STORAGE_KEYS.streamScoreWeight, String(value));
+    });
+    bindVisualSlider('stream-score-scale-slider', value => {
+        applyStreamScoreScale(value);
+        settingsStore.setString(STORAGE_KEYS.streamScoreScale, String(value));
+    });
+
+    const promptToggle = document.getElementById('stream-show-prompt-toggle') as HTMLInputElement | null;
+    if (promptToggle) {
+        promptToggle.addEventListener('change', () => {
+            const show = promptToggle.checked;
+            applyStreamShowPrompt(show);
+            settingsStore.setString(STORAGE_KEYS.streamShowPrompt, show ? '1' : '0');
+        });
+    }
 }
 
 export function initSettings() {
@@ -2155,7 +2273,7 @@ export function initSettings() {
         renderVisualControlsSection();
     });
 
-    window.addEventListener('cortex:app-mode-changed', () => {
+    window.addEventListener('lx-studio:app-mode-changed', () => {
         if (!popover.classList.contains('hidden')) {
             renderVisualControlsSection();
         }
@@ -2227,10 +2345,147 @@ export function initRxMode() {
 // 20b. INVESTOR DEMO BUTTONS (Rx toggle, Curve Sculptor, Substance Wall)
 // ============================================
 
+async function handleRxTwinClick(btn: HTMLElement, opts: { forceRegenerate?: boolean } = {}): Promise<void> {
+    // Second click while active: dismiss the compare view (unless forced).
+    if (isCompareActive() && !opts.forceRegenerate) {
+        clearCompareView();
+        clearCompareBadges();
+        stopCompareDayWatcher();
+        MultiDayState.onCompareInterp = null;
+        btn.classList.remove('active');
+        return;
+    }
+
+    const curvesData = PhaseState.curvesData;
+    if (!curvesData || curvesData.length === 0) return;
+
+    const cycleId = PhaseState.loadedCycleId;
+
+    // Prefer a persisted twin from the loaded cycle, but only if the
+    // stored schema version matches the current transform. Stale twins
+    // (generated before the pruning / impact-matching fix) must be
+    // re-derived so we don't show an incorrect SOC picks to investors.
+    let twin = !opts.forceRegenerate && cycleId ? await loadRxTwin(cycleId) : null;
+    if (twin && twin.version !== RX_SOC_TWIN_SCHEMA_VERSION) twin = null;
+
+    if (!twin) {
+        // When a cycle is loaded, always derive from the cycle's file on
+        // disk — LLMCache's in-memory bundle may be stale from a prior
+        // session's localStorage and not yet rehydrated from the cycle.
+        // Fall back to the in-memory bundle for live (non-replay) runs.
+        const bundle = cycleId ? await loadCycleBundle(cycleId) : LLMCache.getCurrentBundle();
+        if (!bundle) return;
+
+        // Ask the SOCRx agent for the standard-of-care Rx. On any failure
+        // (network, parse, provider error) we pass null into buildRxSocTwin,
+        // which falls back to the deterministic `pruneToSoc` heuristic.
+        const replayPayload = (bundle?.stages as any)?.['runtime-replay-state']?.payload;
+        const day0Lx = Array.isArray(replayPayload?.week?.days?.[0]?.interventions)
+            ? replayPayload.week.days[0].interventions
+            : [];
+        const userGoal = PhaseState.userGoal || (cycleId ? getLoadedCyclePrompt()?.prompt || '' : '') || '';
+        const badgeCategory = PhaseState.badgeCategory || '';
+
+        let socrx: Awaited<ReturnType<typeof callSocrxModel>> | null = null;
+        try {
+            socrx = await callSocrxModel(userGoal, curvesData, day0Lx, badgeCategory);
+        } catch (err) {
+            console.warn('[socrx] call failed — falling back to deterministic prune', err);
+            socrx = null;
+        }
+
+        twin = buildRxSocTwin(bundle, curvesData, socrx);
+        if (!twin) return;
+        if (cycleId) {
+            try {
+                await saveRxTwin(cycleId, twin);
+            } catch (err) {
+                console.warn('[rx-twin] save failed', err);
+            }
+        }
+    }
+
+    const multiDayDays = Array.isArray(MultiDayState.days) && MultiDayState.days.length >= 2 ? MultiDayState.days : null;
+    const lxScores = multiDayDays
+        ? compute7DEffectScores(multiDayDays, curvesData)
+        : PhaseState.lxCurves
+          ? computeDesignEffectScores(PhaseState.lxCurves, curvesData)
+          : [];
+    const effectLabels = curvesData.map(c => c.effect);
+
+    const initialDay = Math.max(0, MultiDayState.currentDay || 0);
+    renderCompareView(twin, curvesData, multiDayDays, initialDay);
+    renderCompareBadges(twin, lxScores, effectLabels);
+    startCompareDayWatcher();
+    // Drive per-frame Rx interpolation from the Lx multi-day animation so
+    // the two panels morph in lockstep (was stepwise, snapping once per day).
+    MultiDayState.onCompareInterp = (fromDay, toDay, t) => {
+        interpolateCompareDay(fromDay, toDay, t);
+    };
+    btn.classList.add('active');
+}
+
+/**
+ * Force-regenerate the Rx twin via a fresh SOCRx call. Wired into the
+ * "↻ re-prescribe" button in the compare panel.
+ */
+export async function requestRxTwinRegenerate(): Promise<void> {
+    const btn = document.getElementById('rx-twin-btn') as HTMLElement | null;
+    if (!btn) return;
+    const cycleId = PhaseState.loadedCycleId;
+    if (cycleId) {
+        try {
+            await saveRxTwin(cycleId, null);
+        } catch (err) {
+            console.warn('[rx-twin] clear failed', err);
+        }
+    }
+    // Tear down current view so handleRxTwinClick's re-entry rebuilds cleanly.
+    clearCompareView();
+    clearCompareBadges();
+    stopCompareDayWatcher();
+    MultiDayState.onCompareInterp = null;
+    btn.classList.remove('active');
+    await handleRxTwinClick(btn, { forceRegenerate: true });
+}
+
+// ── 7D sync: watch MultiDayState.currentDay and re-render the Rx side ──
+// Polled via rAF because the existing multi-day animation mutates the
+// state field directly; there's no dedicated day-change event. The poll
+// is cheap (one comparison per frame) and only runs while compare-mode
+// is active.
+let _rxDayRaf: number | null = null;
+let _rxLastDay = -1;
+
+function startCompareDayWatcher(): void {
+    stopCompareDayWatcher();
+    _rxLastDay = MultiDayState.currentDay ?? 0;
+    const tick = () => {
+        if (!isCompareActive()) {
+            _rxDayRaf = null;
+            return;
+        }
+        const d = MultiDayState.currentDay ?? 0;
+        if (d !== _rxLastDay) {
+            _rxLastDay = d;
+            updateCompareViewDay(d);
+        }
+        _rxDayRaf = requestAnimationFrame(tick);
+    };
+    _rxDayRaf = requestAnimationFrame(tick);
+}
+
+function stopCompareDayWatcher(): void {
+    if (_rxDayRaf != null) cancelAnimationFrame(_rxDayRaf);
+    _rxDayRaf = null;
+    _rxLastDay = -1;
+}
+
 function initDemoButtons(): void {
     const rxBtn = document.getElementById('demo-rx-btn');
     const sculptorBtn = document.getElementById('curve-sculptor-btn');
     const wallBtn = document.getElementById('substance-wall-btn');
+    const rxTwinBtn = document.getElementById('rx-twin-btn');
 
     // Demo Rx toggle — cycles AppState.rxMode and notifies active features
     if (rxBtn) {
@@ -2243,6 +2498,22 @@ function initDemoButtons(): void {
             if (isSculptorActive()) refreshSculptorRxFilter();
             if (isWallActive()) refreshWallRxFilter();
         });
+    }
+
+    // Rx-SOC twin toggle — investor-demo side-by-side Lx vs standard-of-care
+    if (rxTwinBtn) {
+        rxTwinBtn.addEventListener('click', () => {
+            void handleRxTwinClick(rxTwinBtn);
+        });
+        // "↻ re-prescribe" button inside the compare panel dispatches a
+        // window event (avoids a rx-compare-render → main.ts cycle).
+        window.addEventListener(RX_TWIN_REGENERATE_EVENT, () => {
+            void requestRxTwinRegenerate();
+        });
+        // Re-check visibility when a saved cycle is loaded (LLMCache changes)
+        LLMCache.subscribe(() => refreshRxTwinBtnVisibility());
+        // And once after cycle-ui finishes its async init
+        setTimeout(() => refreshRxTwinBtnVisibility(), 300);
     }
 
     // Curve sculptor toggle
@@ -2534,6 +2805,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             detail: `Disabled: ${describeStageClasses(repairedCacheStages)}.`,
         });
     }
+    await loadDefaultPreset();
     initSettings();
     initRxMode();
     initDebugPanel();
@@ -2554,7 +2826,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         appDom.prompt.form.dispatchEvent(new Event('submit', { cancelable: true }));
     });
 
-    if (pendingPrompt?.prompt) {
+    if (pendingPrompt?.prompt && getCurrentMode() !== 'stream') {
         if (appDom.prompt.input && appDom.prompt.form) {
             appDom.prompt.input.value = pendingPrompt.prompt;
             PhaseState.userGoal = pendingPrompt.prompt;

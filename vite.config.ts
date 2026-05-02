@@ -26,7 +26,7 @@ function getGitBranch(): string {
  * Resolve the main repo root (NOT the worktree root).
  * `--git-common-dir` returns the shared .git directory; its parent is the
  * main checkout.  This ensures gitignored data directories (saved-cycles/,
- * .cortex-debug/, etc.) are always shared across all worktrees.
+ * .lx-studio-debug/, etc.) are always shared across all worktrees.
  */
 function getGitRoot(): string {
     try {
@@ -40,7 +40,7 @@ function getGitRoot(): string {
 
 const GIT_ROOT = getGitRoot();
 
-const EXPORT_ROOT_DIR_NAME = '.cortex-debug';
+const EXPORT_ROOT_DIR_NAME = '.lx-studio-debug';
 const EXPORT_ROOT_PATH = resolve(GIT_ROOT, EXPORT_ROOT_DIR_NAME);
 
 function sendJson(res: any, statusCode: number, payload: unknown) {
@@ -177,7 +177,7 @@ function debugBundlePlugin() {
     };
 
     return {
-        name: 'cortex-debug-bundles',
+        name: 'lx-studio-debug-bundles',
         configureServer(server: any) {
             server.middlewares.use((req: any, res: any, next: () => void) => {
                 void handleRequest(req, res, next);
@@ -234,6 +234,7 @@ function toSavedCycleIndexEntry(record: any) {
     const entry: any = {
         id: record.id,
         filename: record.filename,
+        overlayTitle: record.overlayTitle ?? null,
         prompt: record.prompt,
         maxEffects: record.maxEffects,
         rxMode: record.rxMode,
@@ -241,6 +242,8 @@ function toSavedCycleIndexEntry(record: any) {
         hookSentence: record.hookSentence,
         topEffects: record.topEffects,
         curveEffects: record.curveEffects,
+        curveColors: record.curveColors,
+        curvePolarities: record.curvePolarities,
         badgeCategory: record.badgeCategory ?? null,
         iconSvg: record.iconSvg ?? null,
         recommendedDevices: record.recommendedDevices,
@@ -248,6 +251,8 @@ function toSavedCycleIndexEntry(record: any) {
         timeHorizon: record.timeHorizon,
         effectScores: record.effectScores,
         effectScoresVersion: record.effectScoresVersion,
+        hasRxTwin: !!record.rxTwin,
+        rxEffectScores: record.rxTwin?.effectScores,
     };
     if (record.badgeCategory) entry.badgeCategory = record.badgeCategory;
     if (record.recommendedDevices) entry.recommendedDevices = record.recommendedDevices;
@@ -327,6 +332,11 @@ function cycleStoragePlugin() {
                     if (body?.filename && String(body.filename).trim()) {
                         record.filename = String(body.filename).trim();
                     }
+                    if (typeof body?.overlayTitle !== 'undefined') {
+                        const v = body.overlayTitle;
+                        record.overlayTitle =
+                            v === null || (typeof v === 'string' && !v.trim()) ? null : String(v).trim();
+                    }
                     if (typeof body?.iconSvg === 'string' || body?.iconSvg === null) {
                         record.iconSvg = body.iconSvg;
                     }
@@ -357,6 +367,27 @@ function cycleStoragePlugin() {
                             .filter((s: any) => typeof s === 'string')
                             .slice(0, 2);
                     }
+                    if (Array.isArray(body?.curveColors)) {
+                        record.curveColors = body.curveColors
+                            .filter((s: any) => typeof s === 'string')
+                            .slice(0, 2);
+                    }
+                    if (Array.isArray(body?.curvePolarities)) {
+                        record.curvePolarities = body.curvePolarities
+                            .map((s: any) => (s === 'higher_is_worse' ? 'higher_is_worse' : 'higher_is_better'))
+                            .slice(0, 2);
+                    }
+                    if (typeof body?.protocolConfidence === 'number' && Number.isFinite(body.protocolConfidence)) {
+                        record.protocolConfidence = body.protocolConfidence;
+                    }
+                    if (typeof body?.confidenceVersion === 'number') {
+                        record.confidenceVersion = body.confidenceVersion;
+                    }
+                    if (body?.rxTwin === null) {
+                        record.rxTwin = null;
+                    } else if (body?.rxTwin && typeof body.rxTwin === 'object') {
+                        record.rxTwin = body.rxTwin;
+                    }
 
                     await writeFile(filePath, JSON.stringify(record), 'utf8');
 
@@ -364,6 +395,7 @@ function cycleStoragePlugin() {
                     const entry = index.find((e: any) => e.id === id);
                     if (entry) {
                         if (record.filename) entry.filename = record.filename;
+                        if (typeof record.overlayTitle !== 'undefined') entry.overlayTitle = record.overlayTitle;
                         if (typeof record.iconSvg !== 'undefined') entry.iconSvg = record.iconSvg;
                         if (record.substanceClasses) entry.substanceClasses = record.substanceClasses;
                         if (record.recommendedDevices) entry.recommendedDevices = record.recommendedDevices;
@@ -374,6 +406,16 @@ function cycleStoragePlugin() {
                         }
                         if (record.topEffects) entry.topEffects = record.topEffects;
                         if (record.curveEffects) entry.curveEffects = record.curveEffects;
+                        if (record.curveColors) entry.curveColors = record.curveColors;
+                        if (record.curvePolarities) entry.curvePolarities = record.curvePolarities;
+                        if (typeof record.protocolConfidence === 'number') {
+                            entry.protocolConfidence = record.protocolConfidence;
+                        }
+                        if (typeof record.confidenceVersion === 'number') {
+                            entry.confidenceVersion = record.confidenceVersion;
+                        }
+                        entry.hasRxTwin = !!record.rxTwin;
+                        entry.rxEffectScores = record.rxTwin?.effectScores;
                     }
                     await writeCyclesIndex(index);
                     return index;
@@ -403,7 +445,7 @@ function cycleStoragePlugin() {
     };
 
     return {
-        name: 'cortex-cycle-storage',
+        name: 'lx-studio-cycle-storage',
         configureServer(server: any) {
             server.middlewares.use((req: any, res: any, next: () => void) => {
                 void handleRequest(req, res, next);
@@ -477,7 +519,14 @@ function customSectionsPlugin() {
                 const id = sanitizeCustomSectionId(body?.id);
                 await mkdir(CUSTOM_SECTIONS_DIR, { recursive: true });
 
-                const record = { id, title: String(body?.title || '').trim(), tags: body?.tags || [] };
+                const record: any = {
+                    id,
+                    title: String(body?.title || '').trim(),
+                    tags: body?.tags || [],
+                };
+                if (Array.isArray(body?.negativeTags)) record.negativeTags = body.negativeTags;
+                if (Array.isArray(body?.forceIncludeIds)) record.forceIncludeIds = body.forceIncludeIds;
+                if (Array.isArray(body?.forceExcludeIds)) record.forceExcludeIds = body.forceExcludeIds;
                 const filePath = resolve(CUSTOM_SECTIONS_DIR, `${id}.json`);
                 await writeFile(filePath, JSON.stringify(record, null, 2), 'utf8');
 
@@ -516,6 +565,15 @@ function customSectionsPlugin() {
                     if (Array.isArray(body?.negativeTags)) {
                         record.negativeTags = body.negativeTags;
                     }
+                    if (Array.isArray(body?.forceIncludeIds)) {
+                        record.forceIncludeIds = body.forceIncludeIds;
+                    }
+                    if (Array.isArray(body?.forceExcludeIds)) {
+                        record.forceExcludeIds = body.forceExcludeIds;
+                    }
+                    if (Array.isArray(body?.cardOrder)) {
+                        record.cardOrder = body.cardOrder;
+                    }
 
                     await writeFile(filePath, JSON.stringify(record, null, 2), 'utf8');
 
@@ -525,6 +583,9 @@ function customSectionsPlugin() {
                         if (record.title) entry.title = record.title;
                         if (record.tags) entry.tags = record.tags;
                         if (record.negativeTags) entry.negativeTags = record.negativeTags;
+                        if (record.forceIncludeIds) entry.forceIncludeIds = record.forceIncludeIds;
+                        if (record.forceExcludeIds) entry.forceExcludeIds = record.forceExcludeIds;
+                        if (record.cardOrder) entry.cardOrder = record.cardOrder;
                     }
                     await writeCustomSectionsIndex(index);
                     return index;
@@ -554,7 +615,7 @@ function customSectionsPlugin() {
     };
 
     return {
-        name: 'cortex-custom-sections',
+        name: 'lx-studio-custom-sections',
         configureServer(server: any) {
             server.middlewares.use((req: any, res: any, next: () => void) => {
                 void handleRequest(req, res, next);
@@ -573,6 +634,7 @@ function customSectionsPlugin() {
 // they survive across sessions and browsers.
 
 const PRESETS_PATH = resolve(GIT_ROOT, 'pipeline-presets.json');
+const DEFAULT_PRESET_PATH = resolve(GIT_ROOT, 'default-preset.json');
 
 async function readPresetsFile(): Promise<any[]> {
     try {
@@ -588,10 +650,47 @@ async function writePresetsFile(presets: any[]): Promise<void> {
     await writeFile(PRESETS_PATH, JSON.stringify(presets, null, 2), 'utf8');
 }
 
+async function readDefaultPresetFile(): Promise<any | null> {
+    try {
+        const raw = await readFile(DEFAULT_PRESET_PATH, 'utf8');
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+        return null;
+    }
+}
+
+async function writeDefaultPresetFile(preset: any): Promise<void> {
+    await writeFile(DEFAULT_PRESET_PATH, JSON.stringify(preset, null, 2), 'utf8');
+}
+
 function presetStoragePlugin() {
     const handleRequest = async (req: any, res: any, next: () => void) => {
         const url = String(req.url || '').split('?')[0];
-        if (!url.startsWith('/__presets')) return next();
+        if (!url.startsWith('/__presets') && !url.startsWith('/__default-preset')) return next();
+
+        // GET /__default-preset — read the default preset snapshot
+        if (req.method === 'GET' && url === '/__default-preset') {
+            try {
+                const preset = await readDefaultPresetFile();
+                sendJson(res, 200, preset || {});
+            } catch (err: any) {
+                sendJson(res, 500, { ok: false, error: err?.message });
+            }
+            return;
+        }
+
+        // PUT /__default-preset — set the default preset snapshot
+        if (req.method === 'PUT' && url === '/__default-preset') {
+            try {
+                const body = await readJsonBody(req);
+                await writeDefaultPresetFile(body);
+                sendJson(res, 200, { ok: true });
+            } catch (err: any) {
+                sendJson(res, 500, { ok: false, error: err?.message });
+            }
+            return;
+        }
 
         // GET /__presets — read all presets
         if (req.method === 'GET' && url === '/__presets') {
@@ -620,7 +719,7 @@ function presetStoragePlugin() {
     };
 
     return {
-        name: 'cortex-preset-storage',
+        name: 'lx-studio-preset-storage',
         configureServer(server: any) {
             server.middlewares.use((req: any, res: any, next: () => void) => {
                 void handleRequest(req, res, next);
@@ -679,7 +778,89 @@ function sectionOrderPlugin() {
     };
 
     return {
-        name: 'cortex-section-order',
+        name: 'lx-studio-section-order',
+        configureServer(server: any) {
+            server.middlewares.use((req: any, res: any, next: () => void) => {
+                void handleRequest(req, res, next);
+            });
+        },
+        configurePreviewServer(server: any) {
+            server.middlewares.use((req: any, res: any, next: () => void) => {
+                void handleRequest(req, res, next);
+            });
+        },
+    };
+}
+
+// ── Built-in Section Overrides Plugin ───────────────────────────────
+// Persists per-section manual force-include / force-exclude cycle-id lists
+// for BUILT-IN sections (recent, focus, sleep, etc.) as a single JSON file.
+// Custom sections already store their own force lists inside their per-section
+// JSON files via customSectionsPlugin — this is the built-in equivalent.
+
+const BUILTIN_OVERRIDES_PATH = resolve(process.cwd(), 'builtin-section-overrides.json');
+
+interface BuiltinOverrides {
+    forceIncludeIds: Record<string, string[]>;
+    forceExcludeIds: Record<string, string[]>;
+    cardOrder: Record<string, string[]>;
+}
+
+async function readBuiltinOverrides(): Promise<BuiltinOverrides> {
+    try {
+        const raw = await readFile(BUILTIN_OVERRIDES_PATH, 'utf8');
+        const parsed = JSON.parse(raw);
+        return {
+            forceIncludeIds:
+                parsed && typeof parsed.forceIncludeIds === 'object' ? parsed.forceIncludeIds : {},
+            forceExcludeIds:
+                parsed && typeof parsed.forceExcludeIds === 'object' ? parsed.forceExcludeIds : {},
+            cardOrder:
+                parsed && typeof parsed.cardOrder === 'object' ? parsed.cardOrder : {},
+        };
+    } catch {
+        return { forceIncludeIds: {}, forceExcludeIds: {}, cardOrder: {} };
+    }
+}
+
+function builtinOverridesPlugin() {
+    const handleRequest = async (req: any, res: any, next: () => void) => {
+        const url = String(req.url || '').split('?')[0];
+        if (!url.startsWith('/__builtin-overrides')) return next();
+
+        if (req.method === 'GET' && url === '/__builtin-overrides') {
+            try {
+                sendJson(res, 200, await readBuiltinOverrides());
+            } catch (err: any) {
+                sendJson(res, 500, { ok: false, error: err?.message });
+            }
+            return;
+        }
+
+        if (req.method === 'PUT' && url === '/__builtin-overrides') {
+            try {
+                const body = await readJsonBody(req);
+                const data: BuiltinOverrides = {
+                    forceIncludeIds:
+                        body && typeof body.forceIncludeIds === 'object' ? body.forceIncludeIds : {},
+                    forceExcludeIds:
+                        body && typeof body.forceExcludeIds === 'object' ? body.forceExcludeIds : {},
+                    cardOrder:
+                        body && typeof body.cardOrder === 'object' ? body.cardOrder : {},
+                };
+                await writeFile(BUILTIN_OVERRIDES_PATH, JSON.stringify(data, null, 2), 'utf8');
+                sendJson(res, 200, { ok: true });
+            } catch (err: any) {
+                sendJson(res, 500, { ok: false, error: err?.message });
+            }
+            return;
+        }
+
+        next();
+    };
+
+    return {
+        name: 'lx-studio-builtin-overrides',
         configureServer(server: any) {
             server.middlewares.use((req: any, res: any, next: () => void) => {
                 void handleRequest(req, res, next);
@@ -896,7 +1077,7 @@ function abTestPlugin() {
     }
 
     return {
-        name: 'cortex-ab-test',
+        name: 'lx-studio-ab-test',
         configureServer(server: any) {
             server.middlewares.use((req: any, res: any, next: () => void) => {
                 void handleRequest(req, res, next);
@@ -914,10 +1095,10 @@ function abTestPlugin() {
 // ── LLM Log Plugin ─────────────────────────────────────────────────
 // Persists LLM call logs to disk so Claude Code can read and triage
 // failures without manual export.  Writes:
-//   .cortex-logs/llm-log.json   — full log snapshot (overwritten)
-//   .cortex-logs/failures.jsonl — append-only failure audit trail
+//   .lx-studio-logs/llm-log.json   — full log snapshot (overwritten)
+//   .lx-studio-logs/failures.jsonl — append-only failure audit trail
 
-const LOGS_DIR = resolve(GIT_ROOT, '.cortex-logs');
+const LOGS_DIR = resolve(GIT_ROOT, '.lx-studio-logs');
 
 async function readExistingFailureCids(filePath: string): Promise<Set<string>> {
     const cids = new Set<string>();
@@ -973,7 +1154,7 @@ function llmLogPlugin() {
     };
 
     return {
-        name: 'cortex-llm-log',
+        name: 'lx-studio-llm-log',
         configureServer(server: any) {
             server.middlewares.use((req: any, res: any, next: () => void) => {
                 void handleRequest(req, res, next);
@@ -991,7 +1172,7 @@ function llmLogPlugin() {
 // Auto-launches the Cam Tracker Python backend alongside the Vite dev
 // server so `npm run dev` is all that's needed for camera tracking.
 
-const TRACKER_DIR = resolve('/Users/perry/Documents/GitHub/Cam_tracker/backend');
+const TRACKER_DIR = resolve('/Users/perry/Documents/Code/Cam_tracker/backend');
 const TRACKER_PYTHON = resolve(TRACKER_DIR, 'venv', 'bin', 'python3');
 const TRACKER_PORT = 8000;
 
@@ -1087,7 +1268,7 @@ function camTrackerPlugin() {
     }
 
     return {
-        name: 'cortex-cam-tracker',
+        name: 'lx-studio-cam-tracker',
         configureServer(server: any) {
             void launchTracker();
             server.httpServer?.on('close', killTracker);
@@ -1109,22 +1290,23 @@ export default defineConfig({
         cycleStoragePlugin(),
         customSectionsPlugin(),
         sectionOrderPlugin(),
+        builtinOverridesPlugin(),
         presetStoragePlugin(),
         abTestPlugin(),
         llmLogPlugin(),
-        camTrackerPlugin(),
+        // camTrackerPlugin(), // disabled — re-enable later if desired
     ],
     server: {
         port: process.env.PORT ? Number(process.env.PORT) : undefined,
         strictPort: !!process.env.PORT,
         watch: {
             ignored: [
-                '**/.cortex-debug/**',
+                '**/.lx-studio-debug/**',
                 '**/saved-cycles/**',
                 '**/custom-sections/**',
                 '**/pipeline-presets.json',
                 '**/section-order.json',
-                '**/.cortex-logs/**',
+                '**/.lx-studio-logs/**',
             ],
         },
     },

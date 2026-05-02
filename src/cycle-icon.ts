@@ -743,7 +743,7 @@ function buildWideIconSvg(
     );
 
     return [
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDE_W} ${WIDE_H}" data-v="10" data-wide="1">`,
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDE_W} ${WIDE_H}" preserveAspectRatio="xMidYMin slice" data-v="10" data-wide="1">`,
         defs.length ? `<defs>${defs.join('')}</defs>` : '',
         `<rect class="ci-bg" width="${WIDE_W}" height="${WIDE_H}" rx="${WIDE_CORNER_R}"/>`,
         `<g clip-path="url(#wsweep-${u})">`,

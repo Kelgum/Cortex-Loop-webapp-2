@@ -58,6 +58,7 @@ import {
 import { handleBioCorrectionPhase } from './bio-correction';
 import { callStrategistBioModel } from './llm-pipeline';
 import { runWeekPipeline, callSherlock7D, buildFallbackSherlock7D } from './week-orchestrator';
+import { sanitizeWeekDaySnapshots } from './week-snapshot-utils';
 import {
     getRuntimeReplaySnapshot,
     isRuntimeReplayActive,
@@ -1323,12 +1324,12 @@ export function exportBiometricLog() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'cortex_loop_biometric_log.json';
+    a.download = 'lx_studio_biometric_log.json';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    console.log('[BiometricLog] Exported', bioEntries.length, 'biometric entries to cortex_loop_biometric_log.json');
+    console.log('[BiometricLog] Exported', bioEntries.length, 'biometric entries to lx_studio_biometric_log.json');
 }
 
 /**
@@ -3415,11 +3416,10 @@ function onMultiDayAdvance(): void {
     animateMultiDayLabelTransit();
     updateMultiDayVcrNav();
 
-    // Advance Sherlock 7D card to current day
-    if (MultiDayState.sherlock7dReady && SherlockState.sherlock7dNarration) {
-        const dayIdx = Math.max(0, MultiDayState.currentDay - 1);
-        showSherlock7DStack(SherlockState.sherlock7dNarration.beats, dayIdx);
-    }
+    // Sherlock 7D card stack is driven continuously by the per-frame
+    // onSherlock7DSync callback (see multi-day-animation.ts tick loop), so
+    // we no longer snap it here — snapping would visually interrupt the
+    // smooth scroll the tick loop is producing.
 }
 
 function teardownVcrPanel(): void {
@@ -3568,6 +3568,8 @@ let _bioContextLabelClick: () => void = () => {};
 
 let _bioDevicePanel: HTMLElement | null = null;
 let _bioDevicePanelRAF: number | null = null;
+let _bioDevicePanelResizeObserver: ResizeObserver | null = null;
+let _bioDevicePanelListenersBound = false;
 
 function ensureBioDevicePanel(): HTMLElement {
     if (_bioDevicePanel) return _bioDevicePanel;
@@ -3606,18 +3608,43 @@ function repositionBioDevicePanel(): void {
 }
 
 function startBioDevicePanelLoop(): void {
+    if (!_bioDevicePanel) return;
+    if (!_bioDevicePanelListenersBound) {
+        window.addEventListener('scroll', queueBioDevicePanelReposition, { passive: true });
+        window.addEventListener('resize', queueBioDevicePanelReposition);
+        _bioDevicePanelListenersBound = true;
+    }
+    if (!_bioDevicePanelResizeObserver && typeof ResizeObserver !== 'undefined') {
+        _bioDevicePanelResizeObserver = new ResizeObserver(() => queueBioDevicePanelReposition());
+    }
+    const svg = document.getElementById('phase-chart-svg');
+    if (_bioDevicePanelResizeObserver && svg) {
+        _bioDevicePanelResizeObserver.observe(svg);
+    }
+    queueBioDevicePanelReposition();
+}
+
+function queueBioDevicePanelReposition(): void {
     if (_bioDevicePanelRAF !== null) return;
-    const tick = () => {
+    _bioDevicePanelRAF = requestAnimationFrame(() => {
+        _bioDevicePanelRAF = null;
         repositionBioDevicePanel();
-        _bioDevicePanelRAF = requestAnimationFrame(tick);
-    };
-    _bioDevicePanelRAF = requestAnimationFrame(tick);
+    });
 }
 
 function stopBioDevicePanelLoop(): void {
     if (_bioDevicePanelRAF !== null) {
         cancelAnimationFrame(_bioDevicePanelRAF);
         _bioDevicePanelRAF = null;
+    }
+    if (_bioDevicePanelListenersBound) {
+        window.removeEventListener('scroll', queueBioDevicePanelReposition);
+        window.removeEventListener('resize', queueBioDevicePanelReposition);
+        _bioDevicePanelListenersBound = false;
+    }
+    if (_bioDevicePanelResizeObserver) {
+        _bioDevicePanelResizeObserver.disconnect();
+        _bioDevicePanelResizeObserver = null;
     }
 }
 
@@ -4353,6 +4380,9 @@ function renderRevisionBandMorphFrame(
     }
 }
 
+/** Generation counter — only the latest morphLxCurvesToRevision call drives the rAF loop. */
+let _morphLxGeneration = 0;
+
 function renderLxCurveMorphFrame(oldLxCurves: any, newLxCurves: any, curvesData: any, progress: number): void {
     const lxGroup = document.getElementById('phase-lx-curves');
     if (!lxGroup) return;
@@ -4446,9 +4476,29 @@ export async function morphLxCurvesToRevision(
         return;
     }
 
+    const myGen = ++_morphLxGeneration;
+
     await new Promise<void>(resolve => {
         const startTime = performance.now();
         (function tick(now: number) {
+            // A newer morph has superseded this one — snap to final state so the
+            // next morph starts from a clean DOM state, then yield.
+            if (_morphLxGeneration !== myGen) {
+                renderLxCurveMorphFrame(oldLxCurves, newLxCurves, curvesData, 1);
+                if (fromIncrementalSnapshots && toIncrementalSnapshots) {
+                    renderRevisionBandMorphFrame(
+                        fromIncrementalSnapshots,
+                        toIncrementalSnapshots,
+                        curvesData,
+                        1,
+                        revisionEntries,
+                        bandRenderOrder,
+                    );
+                }
+                resolve();
+                return;
+            }
+
             const rawT = Math.min(1, (now - startTime) / duration);
             const ease = rawT < 0.5 ? 2 * rawT * rawT : 1 - Math.pow(-2 * rawT + 2, 2) / 2;
 
@@ -5168,7 +5218,9 @@ export async function handleRevisionPhase(curvesData: any): Promise<boolean> {
             if (pois.length > 0) {
                 (BiometricState as any)._pois = pois;
                 renderPointsOfInterest(pois, poiContainer as any, 'circuit');
-                await animatePointsOfInterest(poiContainer as any, 1200);
+                if (!isTurboActive()) {
+                    await animatePointsOfInterest(poiContainer as any, 1200);
+                }
             }
         }
     }
@@ -5360,7 +5412,7 @@ export function showSimulationButton() {
                     : null;
 
                 // Bio-correction morphs baseline + Lx curves
-                await sleep(400);
+                if (!isTurboActive()) await sleep(400);
                 await handleBioCorrectionPhase(curvesData, userGoal, strategistBioPromise, biometricRuntime);
             } catch (err: any) {
                 console.error('[ApplyBiometrics] Pipeline error:', err.message, err.stack);
@@ -5575,11 +5627,12 @@ async function launchMultiDayPipeline() {
                 : await runWeekPipeline(curvesData, interventions, msg => {
                       console.log('[MultiDay]', msg);
                   });
+        const sanitizedAllDays = sanitizeWeekDaySnapshots(allDays, curvesData);
 
         // Trim to 7 days (Mon-Sun). The pipeline produces Day 0 (baseline Monday)
         // + Days 1-7 from the LLM = 8 total, but Day 7 wraps back to Monday.
         // Keep only days 0-6 for a clean Mon→Sun week.
-        const days = allDays.length > 7 ? allDays.slice(0, 7) : allDays;
+        const days = sanitizedAllDays.length > 7 ? sanitizedAllDays.slice(0, 7) : sanitizedAllDays;
 
         if (days.length < 2) {
             console.warn('[MultiDay] Not enough day snapshots:', days.length);
@@ -5782,15 +5835,12 @@ async function launchMultiDayPipeline() {
         }
 
         // Set scrub sync callback for Sherlock 7D
-        MultiDayState.onSherlock7DSync = (dayNumber: number) => {
+        MultiDayState.onSherlock7DSync = (beatIdxFloat: number) => {
             if (SherlockState.sherlock7dNarration && SherlockState.sherlock7dNarration.beats.length > 0) {
-                // Map day number to beat index (beats are for days 1-7, index 0-6)
-                const beatIdx = Math.max(0, dayNumber - 1);
-                showSherlock7DStack(SherlockState.sherlock7dNarration.beats, beatIdx);
-                // Enable scrolling only when animation is paused/idle (not during playback)
-                if (MultiDayState.phase !== 'playing') {
-                    enableSherlockScrollMode();
-                }
+                // Continuous, 0-based beat index. Can exceed n-1 during autoplay
+                // wrap-around (infinite scroll); showSherlock7DStack wraps content
+                // mod n while keeping positions monotonic.
+                showSherlock7DStack(SherlockState.sherlock7dNarration.beats, beatIdxFloat);
             }
         };
 

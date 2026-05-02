@@ -28,11 +28,25 @@ import { settingsStore, sessionSettingsStore, STORAGE_KEYS } from './settings-st
 import { BIOMETRIC_DEVICES } from './biometric-devices';
 import { BADGE_CATEGORIES, BADGE_CATEGORY_CSS, type BadgeCategory } from './constants';
 import { getCustomSections, saveCustomSection, patchCustomSection, deleteCustomSection } from './custom-sections-store';
+import {
+    getBuiltinForceInclude,
+    getBuiltinForceExclude,
+    getBuiltinCardOrder,
+    setBuiltinCardOrder,
+    updateBuiltinForceLists,
+    isBuiltinOverridesReady,
+    getBuiltinTitleOverride,
+    getBuiltinEffectOverride,
+    getBuiltinNegativeTagOverride,
+    setBuiltinTitleOverride,
+    setBuiltinSectionOverrides,
+} from './builtin-overrides-store';
 import { mountMyStream, refreshMyStream, teardownMyStream } from './my-stream';
 import { expandCard, collapseExpandedCard } from './card-expander';
 import { isInStream } from './my-stream-store';
 import type { CustomSectionEntry } from './custom-sections-store';
 import { SUBSTANCE_DB } from './substances';
+import { escapeHtml, clamp } from './utils';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -49,7 +63,24 @@ const SECTION_DEFINITIONS: { key: string; title: string; effects: string[] }[] =
     {
         key: 'focus',
         title: 'Focus & Cognition',
-        effects: ['Focus', 'Executive Function', 'Alertness', 'Attention', 'Dopaminergic', 'Wakefulness'],
+        effects: [
+            'Focus',
+            'Executive Function',
+            'Alertness',
+            'Attention',
+            'Dopaminergic',
+            'Wakefulness',
+            'Creativity',
+            'Neuroplasticity',
+            'Resilience',
+            'Clarity',
+            'Sensory',
+            'Sensory Processing',
+            'Visual Perception',
+            'Immersion',
+            'Psychedelic Immersion',
+            'Psychedelic Experience',
+        ],
     },
     {
         key: 'sleep',
@@ -63,6 +94,10 @@ const SECTION_DEFINITIONS: { key: string; title: string; effects: string[] }[] =
             'Sleep Quality',
             'Circadian Phase',
             'Circadian Rhythm',
+            'Continuity',
+            'Deep-Sleep',
+            'Sleep Duration',
+            'Sleep Onset Latency',
         ],
     },
     {
@@ -78,17 +113,62 @@ const SECTION_DEFINITIONS: { key: string; title: string; effects: string[] }[] =
             'Appetite Suppression',
             'Energy Expenditure',
             'Energy Metabolism',
+            'Ketogenesis',
+            'Lipolysis',
+            'Glycemia',
+            'Satiety',
+            'B12 Status',
+            'Glucose Stability',
+            'Nausea',
         ],
     },
     {
         key: 'mood',
         title: 'Mood & Stress',
-        effects: ['Stress', 'Mood Stability', 'Mood Regulation', 'Craving', 'Withdrawal', 'Nausea'],
+        effects: [
+            'Stress',
+            'Mood Stability',
+            'Mood Regulation',
+            'Craving',
+            'Withdrawal',
+            'Nausea',
+            'Anxiety',
+            'Calm',
+            'Relaxation',
+            'De-arousal',
+            'Presence',
+            'Cortisol',
+        ],
     },
     {
         key: 'hormonal',
         title: 'Hormonal & Thermal',
-        effects: ['Estrogen Balance', 'Vasomotor Stability', 'Thermoregulation'],
+        effects: [
+            'Estrogen Balance',
+            'Vasomotor Stability',
+            'Thermoregulation',
+            'Cortisol',
+            'Androgenicity',
+            'Testosterone',
+            'Hormonal',
+            'Rhythm',
+        ],
+    },
+    {
+        key: 'habit',
+        title: 'Habit Breaking',
+        effects: [
+            'Craving',
+            'Cravings',
+            'Withdrawal',
+            'Addiction',
+            'Dependence',
+            'Nicotine Craving',
+            'Headache',
+            'Alcohol',
+            'Caffeine',
+            'Tolerance',
+        ],
     },
 ];
 
@@ -182,6 +262,13 @@ export function initModeSwitcher(): void {
                 void handleStreamLoad(id);
             }
         }) as EventListener);
+
+        // Drag & drop between sections (edit mode only — handlers gate on _editMode)
+        _gridEl.addEventListener('dragstart', handleCardDragStart);
+        _gridEl.addEventListener('dragend', handleCardDragEnd);
+        _gridEl.addEventListener('dragover', handleSectionDragOver);
+        _gridEl.addEventListener('dragleave', handleSectionDragLeave);
+        _gridEl.addEventListener('drop', handleSectionDrop);
     }
 
     // Stream edit-mode toggle (3-dot button)
@@ -196,7 +283,7 @@ export function initModeSwitcher(): void {
     // Cycle store is async — re-render stream content once data arrives
     if (_mode === 'stream') {
         const retryRender = () => {
-            if (getCycleCount() > 0) {
+            if (getCycleCount() > 0 && isBuiltinOverridesReady()) {
                 updateStreamHint();
                 renderStreamContent('');
                 // Reveal with stagger on async load
@@ -247,7 +334,7 @@ export function setMode(mode: AppMode): void {
     settingsStore.setString(STORAGE_KEYS.appMode, mode);
     window.history.replaceState(null, '', `#${mode}`);
     applyMode(mode, true);
-    window.dispatchEvent(new CustomEvent('cortex:app-mode-changed', { detail: { mode } }));
+    window.dispatchEvent(new CustomEvent('lx-studio:app-mode-changed', { detail: { mode } }));
 }
 
 // ── Apply Mode ─────────────────────────────────────────────────────────
@@ -305,6 +392,22 @@ function applyMode(mode: AppMode, animated = false): void {
         if (mode === 'stream') {
             document.body.classList.add('mode-stream');
             document.body.classList.remove('mode-design');
+
+            // Clear stale state left by the Design pipeline / compile-animation
+            const ps = document.getElementById('prompt-section');
+            if (ps) {
+                ps.style.opacity = '';
+                ps.style.transition = '';
+                ps.classList.remove('phase-top');
+                ps.classList.add('phase-centered');
+            }
+            const promptForm = document.getElementById('prompt-form');
+            if (promptForm) promptForm.classList.remove('prompt-loaded');
+            const promptInput = document.getElementById('prompt-input') as HTMLInputElement | null;
+            if (promptInput) promptInput.readOnly = false;
+            const submitBtn = document.getElementById('prompt-submit') as HTMLButtonElement | null;
+            if (submitBtn) submitBtn.disabled = false;
+
             morphPrompt();
             renderStreamContent('');
             ensureMyStreamMounted();
@@ -326,6 +429,30 @@ function applyMode(mode: AppMode, animated = false): void {
             // Leaving Stream → Design — exit edit mode if active
             if (_editMode) toggleEditMode();
 
+            const restoreDesignState = () => {
+                document.body.classList.remove('mode-stream');
+                document.body.classList.add('mode-design');
+                morphPrompt();
+                // Restore loaded-cycle prompt state if a cycle is active
+                const loadedId = getLoadedCycleId();
+                if (loadedId) {
+                    const idx = getCycleIndex();
+                    const entry = idx.find(e => e.id === loadedId);
+                    const psEl = document.getElementById('prompt-section');
+                    const formEl = document.getElementById('prompt-form');
+                    const inputEl = document.getElementById('prompt-input') as HTMLInputElement | null;
+                    if (psEl) {
+                        psEl.classList.remove('phase-centered');
+                        psEl.classList.add('phase-top');
+                    }
+                    if (formEl) formEl.classList.add('prompt-loaded');
+                    if (inputEl && entry) {
+                        inputEl.readOnly = true;
+                        inputEl.value = entry.prompt;
+                    }
+                }
+            };
+
             if (animated && gridContainer) {
                 gridContainer.classList.add('stream-exiting');
                 gridContainer.classList.remove('stream-visible');
@@ -334,18 +461,14 @@ function applyMode(mode: AppMode, animated = false): void {
                 gridContainer.querySelectorAll('.cg-card').forEach(c => c.classList.remove('card-enter'));
 
                 setTimeout(() => {
-                    document.body.classList.remove('mode-stream');
-                    document.body.classList.add('mode-design');
                     gridContainer.classList.remove('stream-exiting');
-                    morphPrompt();
+                    restoreDesignState();
                 }, 280);
             } else {
-                document.body.classList.remove('mode-stream');
-                document.body.classList.add('mode-design');
                 gridContainer?.classList.remove('stream-visible', 'stream-exiting');
                 gridContainer?.querySelectorAll('.stream-section').forEach(s => s.classList.remove('section-enter'));
                 gridContainer?.querySelectorAll('.cg-card').forEach(c => c.classList.remove('card-enter'));
-                morphPrompt();
+                restoreDesignState();
             }
         }
     };
@@ -437,10 +560,6 @@ function formatDate(iso: string): string {
     }
 }
 
-function escHtml(s: string): string {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
 const _deviceMap = new Map(BIOMETRIC_DEVICES.devices.map(d => [d.key, d]));
 const _isLight = () => document.body.classList.contains('light-mode');
 
@@ -452,7 +571,7 @@ function renderDeviceIcons(devices: string[] | undefined): string {
             const dev = _deviceMap.get(key);
             if (!dev) return '';
             const src = light ? dev.iconLight : dev.iconDark;
-            return `<img class="cg-card-device-icon" src="${src}" data-src-dark="${dev.iconDark}" data-src-light="${dev.iconLight}" alt="${escHtml(dev.name)}" title="${escHtml(dev.name)}" width="20" height="20" />`;
+            return `<img class="cg-card-device-icon" src="${src}" data-src-dark="${dev.iconDark}" data-src-light="${dev.iconLight}" alt="${escapeHtml(dev.name)}" title="${escapeHtml(dev.name)}" width="20" height="20" />`;
         })
         .filter(Boolean)
         .join('');
@@ -521,12 +640,15 @@ const BADGE_EFFECT_MAP: { label: string; cssClass: string; effects: string[] }[]
             'Metabolism',
             'Energy Expenditure',
             'Energy Metabolism',
+            'Appetite',
+            'Appetite Suppression',
+            'Gastric Emptying',
         ],
     },
     {
         label: 'CARDIO',
         cssClass: 'badge-cardio',
-        effects: ['Appetite', 'Appetite Suppression', 'Gastric Emptying'],
+        effects: ['Blood Pressure', 'Heart Rate', 'Circulation', 'Vascular Tone', 'Coagulation'],
     },
     {
         label: 'MOOD',
@@ -535,8 +657,48 @@ const BADGE_EFFECT_MAP: { label: string; cssClass: string; effects: string[] }[]
     },
     {
         label: 'HORMONAL',
-        cssClass: 'badge-cardio',
+        cssClass: 'badge-hormonal',
         effects: ['Estrogen Balance', 'Vasomotor Stability', 'Thermoregulation'],
+    },
+    {
+        label: 'RECOVERY',
+        cssClass: 'badge-recovery',
+        effects: ['Recovery', 'Repair', 'Regeneration'],
+    },
+    {
+        label: 'IMMUNE',
+        cssClass: 'badge-immune',
+        effects: ['Inflammation', 'Immune', 'Cytokine'],
+    },
+    {
+        label: 'PAIN',
+        cssClass: 'badge-pain',
+        effects: ['Pain', 'Nociception'],
+    },
+    {
+        label: 'PERFORMANCE',
+        cssClass: 'badge-performance',
+        effects: ['Endurance', 'Strength', 'Power', 'Performance'],
+    },
+    {
+        label: 'LONGEVITY',
+        cssClass: 'badge-longevity',
+        effects: ['Longevity', 'Aging', 'Senolytic'],
+    },
+    {
+        label: 'GUT',
+        cssClass: 'badge-gut',
+        effects: ['Gut', 'Digestion', 'Bloating', 'Microbiome'],
+    },
+    {
+        label: 'BEAUTY',
+        cssClass: 'badge-beauty',
+        effects: ['Skin', 'Hair', 'Collagen'],
+    },
+    {
+        label: 'ADDICTION',
+        cssClass: 'badge-addiction',
+        effects: ['Addiction', 'Dependence'],
     },
 ];
 
@@ -624,7 +786,10 @@ const BADGE_PALETTE_MAP: Record<string, BadgePalette> = {
 const EFFECT_KEYWORD_CLASS: { keywords: string[]; cssClass: string }[] = [
     { keywords: ['sleep', 'rem', 'circadian', 'rhythm', 'insomnia'], cssClass: 'badge-sleep' },
     { keywords: ['focus', 'cogniti', 'attention', 'alert', 'executive', 'dopamine', 'wake'], cssClass: 'badge-neuro' },
-    { keywords: ['mood', 'anxiety', 'stress', 'depress', 'calm', 'craving', 'withdraw', 'nausea'], cssClass: 'badge-mood' },
+    {
+        keywords: ['mood', 'anxiety', 'stress', 'depress', 'calm', 'craving', 'withdraw', 'nausea'],
+        cssClass: 'badge-mood',
+    },
     { keywords: ['glucose', 'insulin', 'metabol', 'glycog', 'energy', 'appet'], cssClass: 'badge-metabolic' },
     { keywords: ['inflamm', 'immune', 'cytokine'], cssClass: 'badge-immune' },
     { keywords: ['cardio', 'heart', 'blood pressure', 'circulation'], cssClass: 'badge-cardio' },
@@ -756,9 +921,7 @@ function darkenForLightMode(color: string): string {
     // Parse to HSL. Accepts hsl(), rgb(), #rrggbb
     let h = 0;
     let s = 0;
-    const hslMatch = color.match(
-        /hsl\(\s*([\d.]+)\s*(?:deg)?\s*[,\s]\s*([\d.]+)\s*%?\s*[,\s]\s*([\d.]+)\s*%?\s*\)/i,
-    );
+    const hslMatch = color.match(/hsl\(\s*([\d.]+)\s*(?:deg)?\s*[,\s]\s*([\d.]+)\s*%?\s*[,\s]\s*([\d.]+)\s*%?\s*\)/i);
     if (hslMatch) {
         h = Number(hslMatch[1]);
         s = Number(hslMatch[2]) / 100;
@@ -1002,10 +1165,6 @@ function clamp01(value: number): number {
     return Math.max(0, Math.min(1, value));
 }
 
-function clamp(value: number, min: number, max: number): number {
-    return Math.max(min, Math.min(max, value));
-}
-
 function getBadgeInlineStyle(cssClass: string): string {
     const palette = BADGE_PALETTE_MAP[cssClass];
     if (!palette) return '';
@@ -1144,15 +1303,24 @@ function formatOverlayTitle(filename: string): string {
     return shortenTitle(filename).split(/\s+/).filter(Boolean).map(formatOverlayToken).join(' ');
 }
 
+/** Resolve the overlay title for an entry, honoring a saved per-cycle override. */
+function resolveOverlayTitle(entry: { id: string; filename: string; overlayTitle?: string | null }): string {
+    const override = entry.overlayTitle;
+    if (override && override.trim()) {
+        return override.trim().split(/\s+/).filter(Boolean).map(formatOverlayToken).join(' ');
+    }
+    return formatOverlayTitle(entry.filename);
+}
+
 function getOverlayTitleClass(overlayTitle: string): string {
     const normalized = overlayTitle.trim();
     const charCount = normalized.length;
     const wordCount = normalized.split(/\s+/).filter(Boolean).length;
 
-    if (charCount <= 10 && wordCount <= 2) return ' title-short';
+    if (charCount <= 12 && wordCount <= 2) return ' title-short';
     if (charCount >= 21 || wordCount >= 4) return ' title-xlong';
-    if (charCount >= 13 || wordCount >= 3) return ' title-long';
-    return '';
+    if (wordCount >= 3) return ' title-long';
+    return ' title-long';
 }
 
 // ── Wide Card Detection ───────────────────────────────────────────────
@@ -1212,10 +1380,7 @@ function buildScoreLineHtml(entry: SavedCycleIndexEntry): string {
     // topEffects (Scout word-cloud category tags used for section matching).
     // Falling back to topEffects keeps the badge working for legacy saves until
     // the lazy migration repairs them.
-    const names =
-        entry.curveEffects && entry.curveEffects.length > 0
-            ? entry.curveEffects
-            : entry.topEffects || [];
+    const names = entry.curveEffects && entry.curveEffects.length > 0 ? entry.curveEffects : entry.topEffects || [];
     // Always render every score we have up to 2 — never silently drop the second
     // effect because its score happens to be 0 or because names is shorter than
     // effectScores (stale entries from before curveEffects existed).
@@ -1226,11 +1391,26 @@ function buildScoreLineHtml(entry: SavedCycleIndexEntry): string {
         const score = scores[i];
         if (!Number.isFinite(score)) continue;
         const name = names[i] || `Effect ${i + 1}`;
-        const color = getEffectColor(name, entry.badgeCategory || null);
+        // Prefer the real curve color stored at save time (one per curve).
+        // Fall back to keyword-based lookup for legacy entries where
+        // curveColors wasn't written. Without this override, curves without
+        // an exact BADGE_EFFECT_MAP hit all fall through to the same
+        // badge-category color and both scores render identically.
+        const savedColor = entry.curveColors && entry.curveColors[i];
+        const color =
+            savedColor && savedColor.length > 0 ? savedColor : getEffectColor(name, entry.badgeCategory || null);
+        // effectScores are always positive (gap-closure magnitude), so the
+        // sign has to come from polarity. A higher_is_worse effect (gastric
+        // distress, craving intensity, pain, anxiety) that the protocol is
+        // *reducing* should read as `−63%`, not `+63%`. Legacy entries
+        // without curvePolarities default to `+` — lazyComputeMissingScores
+        // backfills the field from the bundle on first render.
+        const polarity = entry.curvePolarities && entry.curvePolarities[i];
+        const sign = polarity === 'higher_is_worse' ? '−' : '+';
         entries.push(
             `<span class="cg-card-score-entry" style="--score-color:${color}">` +
-                `<span class="cg-card-score-entry-value">+${Math.round(score)}%</span>` +
-                `<span class="cg-card-score-entry-name">${escHtml(name.toUpperCase())}</span>` +
+                `<span class="cg-card-score-entry-value">${sign}${Math.round(score)}%</span>` +
+                `<span class="cg-card-score-entry-name">${escapeHtml(name.toUpperCase())}</span>` +
                 `</span>`,
         );
     }
@@ -1239,17 +1419,47 @@ function buildScoreLineHtml(entry: SavedCycleIndexEntry): string {
     return `<div class="cg-card-score-line${countClass}">${entries.join('')}</div>`;
 }
 
+/**
+ * Build the confidence badge: flask SVG + score %, positioned inside the
+ * card thumbnail as a bottom-left overlay (like the Rx badge is top-right).
+ */
+function buildConfidenceHtml(entry: SavedCycleIndexEntry): string {
+    const score = entry.protocolConfidence;
+    if (score == null) return '';
+    const tier = score >= 85 ? 'Clinical' : score >= 60 ? 'Research' : score >= 35 ? 'Exploratory' : 'Open Run';
+    const tierClass = tier === 'Open Run' ? ' cg-card-confidence-open' : '';
+    // Flask fill height: 4 tiers → 25% / 50% / 75% / 100%
+    const fillPct = score >= 85 ? 100 : score >= 60 ? 75 : score >= 35 ? 50 : 25;
+    const fillY = 20 - (fillPct / 100) * 17;
+    const fillH = (fillPct / 100) * 17;
+    const flask =
+        `<svg class="cg-card-confidence-flask" width="9" height="14" viewBox="0 0 14 20" fill="none" xmlns="http://www.w3.org/2000/svg">` +
+        `<defs><clipPath id="cfc${fillPct}"><rect x="0" y="${fillY}" width="14" height="${fillH}"/></clipPath></defs>` +
+        `<path d="M5 1h4v5l4 8.5a2 2 0 0 1-1.8 2.8H2.8A2 2 0 0 1 1 14.5L5 6V1z" stroke="currentColor" stroke-width="1.2" fill="none"/>` +
+        `<path d="M5 1h4v5l4 8.5a2 2 0 0 1-1.8 2.8H2.8A2 2 0 0 1 1 14.5L5 6V1z" fill="currentColor" opacity="0.45" clip-path="url(#cfc${fillPct})"/>` +
+        `</svg>`;
+    return (
+        `<span class="cg-card-confidence${tierClass}">` +
+        flask +
+        `<span class="cg-card-confidence-value">${score}%</span>` +
+        `<span class="cg-card-confidence-tier">${escapeHtml(tier.toUpperCase())}</span>` +
+        `</span>`
+    );
+}
+
 // ── Card Builder ───────────────────────────────────────────────────────
 
 function buildCardHtml(entry: SavedCycleIndexEntry, activeId: string | null): string {
     const isActive = entry.id === activeId;
     const wide = isWideCard(entry);
-    const prompt = entry.prompt ? escHtml(entry.prompt.slice(0, 80)) + (entry.prompt.length > 80 ? '...' : '') : '';
+    const prompt = entry.prompt ? escapeHtml(entry.prompt.slice(0, 80)) + (entry.prompt.length > 80 ? '...' : '') : '';
 
     const fallbackW = wide ? 400 : 200;
     const fallbackH = wide ? 175 : 120;
     const iconHtml = entry.iconSvg
-        ? entry.iconSvg
+        ? wide && !entry.iconSvg.includes('preserveAspectRatio')
+            ? entry.iconSvg.replace('<svg ', '<svg preserveAspectRatio="xMidYMin slice" ')
+            : entry.iconSvg
         : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${fallbackW} ${fallbackH}">` +
           `<rect class="ci-bg" width="${fallbackW}" height="${fallbackH}" rx="8"/>` +
           `<text class="ci-day" x="${fallbackW / 2}" y="${fallbackH / 2 + 5}" text-anchor="middle" font-size="20" fill="rgba(255,255,255,0.12)">${entry.maxEffects}</text>` +
@@ -1257,20 +1467,23 @@ function buildCardHtml(entry: SavedCycleIndexEntry, activeId: string | null): st
 
     const badges = computeBadges(entry);
     const badgesHtml = buildBadgesHtml(badges);
-    const overlayTitleText = formatOverlayTitle(entry.filename);
+    const overlayTitleText = resolveOverlayTitle(entry);
     const overlayTitleClass = getOverlayTitleClass(overlayTitleText);
-    const overlayTitle = escHtml(overlayTitleText);
+    const overlayTitle = escapeHtml(overlayTitleText);
     const titleColor = getTitleColor(entry);
 
     const isRx = entry.rxMode === 'rx' || entry.rxMode === 'rx-only';
     const rxHtml = isRx ? `<span class="cg-card-rx">Rx</span>` : '';
     const cardDeleteHtml = _editMode
-        ? `<button class="cg-card-delete-btn" data-delete-id="${escHtml(entry.id)}" aria-label="Delete protocol" title="Delete protocol">&times;</button>`
+        ? `<button class="cg-card-delete-btn" data-delete-id="${escapeHtml(entry.id)}" aria-label="Delete protocol" title="Delete protocol">&times;</button>`
+        : '';
+    const cardRemoveHtml = _editMode
+        ? `<button class="cg-card-remove-btn" data-remove-id="${escapeHtml(entry.id)}" aria-label="Remove from category" title="Remove from category">&minus;</button>`
         : '';
 
     // Wide card extras
     const durationBadgeHtml = wide
-        ? `<span class="cg-card-duration-badge">${escHtml(durationBadgeLabel(entry))}</span>`
+        ? `<span class="cg-card-duration-badge">${escapeHtml(durationBadgeLabel(entry))}</span>`
         : '';
     const phaseBarHtml = wide ? buildPhaseBarHtml(entry) : '';
     // Score line appears immediately under the thumbnail for ALL card types (wide + 24h)
@@ -1287,15 +1500,19 @@ function buildCardHtml(entry: SavedCycleIndexEntry, activeId: string | null): st
 
     const inStreamClass = isInStream(entry.id) ? ' cg-card-in-stream' : '';
 
+    const draggableAttr = _editMode ? ' draggable="true"' : '';
+
     return (
-        `<div class="cg-card${isActive ? ' cg-card-active' : ''}${wideClass}${inStreamClass}" data-cycle-id="${escHtml(entry.id)}">` +
+        `<div class="cg-card${isActive ? ' cg-card-active' : ''}${wideClass}${inStreamClass}" data-cycle-id="${escapeHtml(entry.id)}"${draggableAttr}>` +
         cardDeleteHtml +
+        cardRemoveHtml +
         `<div class="cg-card-icon">` +
         iconHtml +
         badgesHtml +
         durationBadgeHtml +
         `<div class="cg-card-overlay-title${overlayTitleClass}" style="color:${titleColor}">${overlayTitle}</div>` +
         rxHtml +
+        buildConfidenceHtml(entry) +
         phaseBarHtml +
         `</div>` +
         scoreLineHtml +
@@ -1365,24 +1582,43 @@ const _lazyScoreComputed = new Set<string>();
  * Prefers runtime-replay design curves, then falls back to main-model curves.
  * Populates the `curveEffects` badge field (aligned 1:1 with effectScores).
  */
-function deriveCurveEffectNamesFromBundle(bundle: any): string[] {
+/**
+ * Generic curve-field extractor. Searches runtime-replay-state → extended-strategist
+ * → main-model (in priority order) and extracts a field from each curve object.
+ */
+function deriveCurveFieldFromBundle(bundle: any, mapFn: (c: any) => string): string[] {
     const stages = bundle?.stages || {};
-    const replayCurves = stages['runtime-replay-state']?.payload?.design?.curvesData;
-    if (Array.isArray(replayCurves) && replayCurves.length > 0) {
-        const names = replayCurves
+    const sources = [
+        stages['runtime-replay-state']?.payload?.design?.curvesData,
+        stages['extended-strategist']?.payload?.effectRoster,
+        stages['main-model']?.payload?.curves,
+    ];
+    for (const curves of sources) {
+        if (!Array.isArray(curves) || curves.length === 0) continue;
+        const result = curves
             .slice(0, 2)
-            .map((c: any) => (c && typeof c.effect === 'string' ? c.effect : ''))
+            .map(mapFn)
             .filter((s: string) => s.length > 0);
-        if (names.length > 0) return names;
-    }
-    const mainCurves = stages['main-model']?.payload?.curves;
-    if (Array.isArray(mainCurves) && mainCurves.length > 0) {
-        return mainCurves
-            .slice(0, 2)
-            .map((c: any) => (c && typeof c.effect === 'string' ? c.effect : ''))
-            .filter((s: string) => s.length > 0);
+        if (result.length > 0) return result;
     }
     return [];
+}
+
+function deriveCurveEffectNamesFromBundle(bundle: any): string[] {
+    return deriveCurveFieldFromBundle(bundle, (c: any) => (c && typeof c.effect === 'string' ? c.effect : ''));
+}
+
+function deriveCurveColorsFromBundle(bundle: any): string[] {
+    return deriveCurveFieldFromBundle(bundle, (c: any) => (c && typeof c.color === 'string' ? c.color : ''));
+}
+
+/**
+ * Defaults any missing/unknown polarity to 'higher_is_better'.
+ */
+function deriveCurvePolaritiesFromBundle(bundle: any): string[] {
+    return deriveCurveFieldFromBundle(bundle, (c: any) =>
+        c && c.polarity === 'higher_is_worse' ? 'higher_is_worse' : 'higher_is_better',
+    );
 }
 
 /**
@@ -1407,10 +1643,7 @@ function deriveWordCloudEffectsFromBundle(bundle: any): string[] {
  * matching in matchCustomSection depends on topEffects containing the broader
  * Scout category tags, so those have to be restored.
  */
-function topEffectsWasOverwrittenWithCurveNames(
-    entry: SavedCycleIndexEntry,
-    derivedCurveNames: string[],
-): boolean {
+function topEffectsWasOverwrittenWithCurveNames(entry: SavedCycleIndexEntry, derivedCurveNames: string[]): boolean {
     if (derivedCurveNames.length === 0) return false;
     const current = entry.topEffects || [];
     if (current.length === 0 || current.length > 2) return false;
@@ -1473,6 +1706,35 @@ async function lazyComputeMissingScores(entries: SavedCycleIndexEntry[]): Promis
                         }
                     }
 
+                    const derivedCurveColors = deriveCurveColorsFromBundle(bundle);
+                    if (derivedCurveColors.length > 0) {
+                        const current = entry.curveColors || [];
+                        const sameLen = current.length === derivedCurveColors.length;
+                        const sameItems =
+                            sameLen &&
+                            derivedCurveColors.every((c, i) => (current[i] || '').toLowerCase() === c.toLowerCase());
+                        if (!sameItems) {
+                            entry.curveColors = derivedCurveColors;
+                            patch.curveColors = derivedCurveColors;
+                            patched = true;
+                        }
+                    }
+
+                    // Backfill curvePolarities so the stream-card score label
+                    // renders `−X%` for higher_is_worse effects. Legacy saves
+                    // were written before this field existed.
+                    const derivedPolarities = deriveCurvePolaritiesFromBundle(bundle);
+                    if (derivedPolarities.length > 0) {
+                        const current = entry.curvePolarities || [];
+                        const sameLen = current.length === derivedPolarities.length;
+                        const sameItems = sameLen && derivedPolarities.every((p, i) => (current[i] || '') === p);
+                        if (!sameItems) {
+                            entry.curvePolarities = derivedPolarities;
+                            patch.curvePolarities = derivedPolarities;
+                            patched = true;
+                        }
+                    }
+
                     // Heal entries whose topEffects was overwritten with the
                     // Strategist curve names by an earlier buggy migration run —
                     // restore the Scout word-cloud effects so section matching
@@ -1482,6 +1744,28 @@ async function lazyComputeMissingScores(entries: SavedCycleIndexEntry[]): Promis
                         if (wordCloud.length > 0) {
                             entry.topEffects = wordCloud;
                             patch.topEffects = wordCloud;
+                            patched = true;
+                        }
+                    }
+
+                    // Backfill protocol confidence from per-substance dataConfidence
+                    const { computeProtocolConfidence, CONFIDENCE_FORMULA_VERSION } =
+                        await import('./protocol-confidence');
+                    const confCurrent =
+                        entry.protocolConfidence != null && entry.confidenceVersion === CONFIDENCE_FORMULA_VERSION;
+                    if (!confCurrent) {
+                        const ivPayload =
+                            bundle.stages?.['intervention-model']?.payload ||
+                            bundle.stages?.['extended-intervention']?.payload;
+                        const ivKeys: string[] = ((ivPayload as any)?.interventions || [])
+                            .map((iv: any) => iv.key)
+                            .filter(Boolean);
+                        const conf = computeProtocolConfidence(ivKeys);
+                        if (conf) {
+                            entry.protocolConfidence = conf.score;
+                            entry.confidenceVersion = CONFIDENCE_FORMULA_VERSION;
+                            patch.protocolConfidence = conf.score;
+                            patch.confidenceVersion = CONFIDENCE_FORMULA_VERSION;
                             patched = true;
                         }
                     }
@@ -1501,6 +1785,14 @@ async function lazyComputeMissingScores(entries: SavedCycleIndexEntry[]): Promis
                             const iconEl = cardEl.querySelector(':scope > .cg-card-icon');
                             if (iconEl) iconEl.insertAdjacentHTML('afterend', newHtml);
                         }
+                        // Update confidence badge inside the thumbnail
+                        const iconWrap = cardEl.querySelector(':scope > .cg-card-icon');
+                        if (iconWrap) {
+                            const oldBadge = iconWrap.querySelector('.cg-card-confidence');
+                            if (oldBadge) oldBadge.remove();
+                            const confHtml = buildConfidenceHtml(entry);
+                            if (confHtml) iconWrap.insertAdjacentHTML('beforeend', confHtml);
+                        }
                     });
                 } catch {
                     // swallow and continue
@@ -1518,39 +1810,112 @@ async function lazyComputeMissingScores(entries: SavedCycleIndexEntry[]): Promis
 
 /** Resolve the display title for a built-in section (supports user renames). */
 function resolveBuiltInTitle(section: { key: string; title: string }): string {
-    const overrides = settingsStore.getJson<Record<string, string>>(STORAGE_KEYS.customSectionTitles, {});
-    return overrides?.[section.key] || section.title;
+    return getBuiltinTitleOverride(section.key) || section.title;
 }
 
-/** Resolve effects for a built-in section (supports user overrides via localStorage). */
+/** Resolve effects for a built-in section (from filesystem-backed overrides). */
 function resolveBuiltInEffects(section: { key: string; effects: string[] }): string[] {
-    const overrides = settingsStore.getJson<Record<string, string[]>>(STORAGE_KEYS.customSectionEffects, {});
-    return overrides?.[section.key] || section.effects;
+    return getBuiltinEffectOverride(section.key) || section.effects;
 }
 
-/** Resolve negative tags for a built-in section (stored in localStorage). */
+/** Resolve negative tags for a built-in section (from filesystem-backed overrides). */
 function resolveBuiltInNegativeTags(section: { key: string }): string[] {
-    const overrides = settingsStore.getJson<Record<string, string[]>>(STORAGE_KEYS.customSectionNegativeTags, {});
-    return overrides?.[section.key] || [];
+    return getBuiltinNegativeTagOverride(section.key) || [];
 }
 
-/** Match cards to a section via topEffects OR substanceClasses, excluding negative tags. */
+/** Reorder entries by a persisted cardOrder, if one exists for this section.
+ *  Entries present in the order come first (in order); remaining entries follow
+ *  in their original position (stable relative order preserved). */
+function applySectionCardOrder(
+    entries: SavedCycleIndexEntry[],
+    sectionKey: string,
+    sectionType: 'builtin' | 'custom',
+): SavedCycleIndexEntry[] {
+    const order =
+        sectionType === 'custom'
+            ? getCustomSections().find(s => s.id === sectionKey)?.cardOrder
+            : getBuiltinCardOrder(sectionKey);
+    if (!order || order.length === 0) return entries;
+
+    const posMap = new Map(order.map((id, i) => [id, i]));
+    return [...entries].sort((a, b) => {
+        const ai = posMap.has(a.id) ? posMap.get(a.id)! : order.length + entries.indexOf(a);
+        const bi = posMap.has(b.id) ? posMap.get(b.id)! : order.length + entries.indexOf(b);
+        return ai - bi;
+    });
+}
+
+/** Resolve force-include cycle ids for a built-in section (persisted on disk). */
+function resolveBuiltInForceInclude(section: { key: string }): string[] {
+    return getBuiltinForceInclude(section.key);
+}
+
+/** Resolve force-exclude cycle ids for a built-in section (persisted on disk). */
+function resolveBuiltInForceExclude(section: { key: string }): string[] {
+    return getBuiltinForceExclude(section.key);
+}
+
+/**
+ * Match cards to a section via topEffects OR substanceClasses, excluding negative
+ * tags. `forceIncludeIds` pins additional cycles regardless of tag match (appended
+ * after tag matches, dedup'd). `forceExcludeIds` hides cycles even if tag-matched.
+ */
 function matchCustomSection(
     index: SavedCycleIndexEntry[],
     tags: string[],
     negativeTags?: string[],
+    forceIncludeIds?: string[],
+    forceExcludeIds?: string[],
 ): SavedCycleIndexEntry[] {
-    if (tags.length === 0) return [];
+    const forceIncSet = new Set(forceIncludeIds || []);
+    const forceExcSet = new Set(forceExcludeIds || []);
     const tagSet = new Set(tags);
     const negSet = new Set(negativeTags || []);
-    return index.filter(e => {
-        const allTags = [...(e.topEffects || []), ...(e.substanceClasses || [])];
-        const included = allTags.some(t => tagSet.has(t));
-        if (!included) return false;
-        if (negSet.size === 0) return true;
-        const excluded = allTags.some(t => negSet.has(t));
-        return !excluded;
-    });
+
+    // Base tag-based matches (skip if no tags and no force-includes to honor)
+    let base: SavedCycleIndexEntry[] = [];
+    if (tags.length > 0) {
+        base = index.filter(e => matchByTags(e, tagSet, negSet));
+    }
+
+    // Apply force-include (append missing)
+    if (forceIncSet.size > 0) {
+        const seen = new Set(base.map(e => e.id));
+        for (const entry of index) {
+            if (forceIncSet.has(entry.id) && !seen.has(entry.id)) {
+                base.push(entry);
+                seen.add(entry.id);
+            }
+        }
+    }
+
+    // Apply force-exclude
+    if (forceExcSet.size > 0) {
+        base = base.filter(e => !forceExcSet.has(e.id));
+    }
+
+    return base;
+}
+
+/**
+ * Single-entry tag/negative-tag predicate. Only the PRIMARY (first) topEffect
+ * counts for section inclusion — Scout ranks topEffects by dominance, and
+ * secondary effects shouldn't pull a cycle into an unrelated bucket (e.g. an
+ * Interstellar-movie psychedelic cycle with "Sensory Processing" primary +
+ * "Sleep Pressure" secondary must not land in Sleep & Recovery). Negative tags
+ * check the FULL topEffects list so a cycle with "Sleep" anywhere in its tags is
+ * excluded from a section that negates sleep, even if it's not the primary.
+ */
+function matchByTags(e: SavedCycleIndexEntry, tagSet: Set<string>, negSet: Set<string>): boolean {
+    const primaryEffect = (e.topEffects || [])[0];
+    const primaryTags: string[] = primaryEffect ? [primaryEffect] : [];
+    const allTags = [...primaryTags, ...(e.substanceClasses || [])];
+    const included = allTags.some(t => tagSet.has(t));
+    if (!included) return false;
+    if (negSet.size === 0) return true;
+    const fullTags = [...(e.topEffects || []), ...(e.substanceClasses || [])];
+    const excluded = fullTags.some(t => negSet.has(t));
+    return !excluded;
 }
 
 // ── Section Order (disk-persisted) ─────────────────────────────────────
@@ -1656,35 +2021,56 @@ function renderStreamSections(): void {
             const section = builtinMap.get(key);
             if (!section) continue;
             const resolvedEffects = resolveBuiltInEffects(section);
+            const resolvedForceInc = resolveBuiltInForceInclude(section);
+            const resolvedForceExc = resolveBuiltInForceExclude(section);
 
             if (section.key === 'recent') {
-                entries = [...index].sort((a, b) => (b.savedAt || '').localeCompare(a.savedAt || '')).slice(0, 6);
+                // Recent is algorithmic (top 6 by savedAt). Apply force-exclude
+                // to subtract manually-moved cards, then union force-included
+                // cards (appended after the algorithmic picks).
+                const excSet = new Set(resolvedForceExc);
+                const incSet = new Set(resolvedForceInc);
+                const byRecent = [...index]
+                    .sort((a, b) => (b.savedAt || '').localeCompare(a.savedAt || ''))
+                    .filter(e => !excSet.has(e.id))
+                    .slice(0, 6);
+                const seen = new Set(byRecent.map(e => e.id));
+                for (const entry of index) {
+                    if (incSet.has(entry.id) && !seen.has(entry.id)) {
+                        byRecent.push(entry);
+                        seen.add(entry.id);
+                    }
+                }
+                entries = byRecent;
             } else {
                 const resolvedNeg = resolveBuiltInNegativeTags(section);
-                entries = matchCustomSection(index, resolvedEffects, resolvedNeg);
+                entries = matchCustomSection(index, resolvedEffects, resolvedNeg, resolvedForceInc, resolvedForceExc);
             }
 
-            if (entries.length === 0) continue;
+            if (entries.length === 0 && !_editMode) continue;
             title = resolveBuiltInTitle(section);
             sectionEditHtml = _editMode && section.key !== 'recent' ? editTagsHtml : '';
         } else {
             const cs = customMap.get(key);
             if (!cs) continue;
-            entries = matchCustomSection(index, cs.tags, cs.negativeTags);
+            entries = matchCustomSection(index, cs.tags, cs.negativeTags, cs.forceIncludeIds, cs.forceExcludeIds);
             if (entries.length === 0 && !_editMode) continue;
             title = cs.title;
             sectionEditHtml = editTagsHtml;
             sectionDeleteHtml = deleteHtml;
         }
 
+        // Apply persisted card order if available
+        entries = applySectionCardOrder(entries, key, sectionType);
+
         const cardsHtml = entries.map(e => buildCardHtml(e, activeId)).join('');
         const countLabel = entries.length === 1 ? '1 protocol' : `${entries.length} protocols`;
         const moveHtml = _editMode ? `<span class="stream-section-move-group">${moveUpHtml}${moveDownHtml}</span>` : '';
 
         sectionsHtml.push(
-            `<div class="stream-section" data-section="${escHtml(key)}" data-section-type="${sectionType}">` +
+            `<div class="stream-section" data-section="${escapeHtml(key)}" data-section-type="${sectionType}">` +
                 `<div class="stream-section-header">` +
-                `<h2 class="stream-section-title">${escHtml(title)}</h2>` +
+                `<h2 class="stream-section-title">${escapeHtml(title)}</h2>` +
                 `<span class="stream-section-count">${countLabel}</span>` +
                 sectionEditHtml +
                 moveHtml +
@@ -1824,13 +2210,23 @@ function handleCardClick(e: Event): void {
     // Don't intercept clicks on edit inputs
     if (target.classList.contains('cg-card-edit-input')) return;
 
-    // Card delete button
+    // Card delete button (with confirmation)
     const deleteBtn = target.closest('.cg-card-delete-btn') as HTMLElement | null;
     if (deleteBtn) {
         e.preventDefault();
         e.stopPropagation();
         const deleteId = deleteBtn.dataset.deleteId;
-        if (deleteId) handleDeleteCard(deleteId);
+        if (deleteId) showDeleteConfirmation(deleteBtn, deleteId);
+        return;
+    }
+
+    // Card remove-from-section button (minus)
+    const removeBtn = target.closest('.cg-card-remove-btn') as HTMLElement | null;
+    if (removeBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const removeId = removeBtn.dataset.removeId;
+        if (removeId) handleRemoveFromSection(removeBtn, removeId);
         return;
     }
 
@@ -1862,6 +2258,65 @@ function handleDeleteCard(id: string): void {
     void deleteCycle(id).then(() => rerenderStreamImmediate());
 }
 
+/** Remove a card from its containing section via force-exclude (does NOT delete the protocol). */
+function handleRemoveFromSection(btn: HTMLElement, cycleId: string): void {
+    const sectionEl = btn.closest('.stream-section') as HTMLElement | null;
+    if (!sectionEl) return;
+    const sectionKey = sectionEl.dataset.section || '';
+    const sectionType = (sectionEl.dataset.sectionType || 'builtin') as 'builtin' | 'custom';
+    if (!sectionKey || sectionKey === 'recent') return; // don't allow removal from Recent
+
+    void updateSectionForceList(sectionKey, sectionType, { addExclude: cycleId }).then(() => rerenderStreamImmediate());
+}
+
+/** Show a confirmation popover before permanently deleting a protocol. */
+function showDeleteConfirmation(anchor: HTMLElement, cycleId: string): void {
+    // Remove any existing confirmation popover
+    document.querySelector('.cg-delete-confirm')?.remove();
+
+    const entry = getCycleIndex().find(e => e.id === cycleId);
+    const name = entry?.overlayTitle || entry?.filename || 'this protocol';
+
+    const popover = document.createElement('div');
+    popover.className = 'cg-delete-confirm';
+    popover.innerHTML =
+        `<p>Delete <strong>${escapeHtml(name)}</strong>?</p>` +
+        `<p class="cg-delete-confirm-sub">This will permanently remove the protocol.</p>` +
+        `<div class="cg-delete-confirm-actions">` +
+        `<button class="cg-delete-confirm-cancel" type="button">Cancel</button>` +
+        `<button class="cg-delete-confirm-yes" type="button">Delete</button>` +
+        `</div>`;
+
+    // Position near the anchor button
+    const card = anchor.closest('.cg-card') as HTMLElement | null;
+    if (card) {
+        card.style.position = 'relative';
+        card.appendChild(popover);
+    } else {
+        document.body.appendChild(popover);
+    }
+
+    const cancel = () => popover.remove();
+    const confirm = () => {
+        popover.remove();
+        handleDeleteCard(cycleId);
+    };
+
+    popover.querySelector('.cg-delete-confirm-cancel')!.addEventListener('click', cancel);
+    popover.querySelector('.cg-delete-confirm-yes')!.addEventListener('click', confirm);
+
+    // Dismiss on outside click (after a tick to avoid the current click)
+    setTimeout(() => {
+        const dismiss = (ev: MouseEvent) => {
+            if (!popover.contains(ev.target as Node)) {
+                cancel();
+                document.removeEventListener('click', dismiss, true);
+            }
+        };
+        document.addEventListener('click', dismiss, true);
+    }, 0);
+}
+
 // ── Search Handler ─────────────────────────────────────────────────────
 
 function handleStreamSearch(): void {
@@ -1889,6 +2344,385 @@ function toggleEditMode(): void {
     }
 
     // Re-render to show/hide edit UI (skip stagger animation)
+    rerenderStreamImmediate();
+}
+
+// ── Drag & Drop (edit mode) ────────────────────────────────────────────
+//
+// In stream edit mode, cards become draggable between sections. On drop, the
+// user picks Copy or Move; both target writes and (for move) source writes go
+// through force-include / force-exclude lists persisted to disk. Cycle files
+// are never touched — positions are a property of the section, not the card.
+
+interface DragState {
+    cycleId: string;
+    sourceKey: string;
+    sourceType: 'builtin' | 'custom';
+}
+
+let _dragState: DragState | null = null;
+
+function handleCardDragStart(e: DragEvent): void {
+    if (!_editMode || !_gridEl) return;
+    const card = (e.target as HTMLElement | null)?.closest('.cg-card') as HTMLElement | null;
+    if (!card) return;
+    // Don't start a drag on a card that's currently being inline-edited.
+    if (card.classList.contains('cg-card-editing')) {
+        e.preventDefault();
+        return;
+    }
+    const cycleId = card.dataset.cycleId;
+    if (!cycleId) return;
+    const section = card.closest('.stream-section') as HTMLElement | null;
+    if (!section) return;
+    const sourceKey = section.dataset.section || '';
+    const sourceType = (section.dataset.sectionType === 'custom' ? 'custom' : 'builtin') as 'builtin' | 'custom';
+    if (!sourceKey) return;
+
+    _dragState = { cycleId, sourceKey, sourceType };
+    card.classList.add('cg-card-dragging');
+    if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'copyMove';
+        // A value is required on some browsers for drag to initiate.
+        try {
+            e.dataTransfer.setData('text/plain', cycleId);
+        } catch {
+            // ignore
+        }
+    }
+}
+
+function handleCardDragEnd(_e: DragEvent): void {
+    _dragState = null;
+    if (_gridEl) {
+        _gridEl.querySelectorAll('.cg-card-dragging').forEach(el => el.classList.remove('cg-card-dragging'));
+        _gridEl
+            .querySelectorAll('.stream-section-drop-target')
+            .forEach(el => el.classList.remove('stream-section-drop-target'));
+    }
+    removeDropIndicator();
+}
+
+function handleSectionDragOver(e: DragEvent): void {
+    if (!_dragState || !_gridEl) return;
+    const section = (e.target as HTMLElement | null)?.closest('.stream-section') as HTMLElement | null;
+    if (!section) return;
+    // preventDefault is required to permit a drop
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    // Highlight this section only
+    _gridEl.querySelectorAll('.stream-section-drop-target').forEach(el => {
+        if (el !== section) el.classList.remove('stream-section-drop-target');
+    });
+    section.classList.add('stream-section-drop-target');
+
+    // Show intra-section drop indicator
+    updateDropIndicator(section, e);
+}
+
+function handleSectionDragLeave(e: DragEvent): void {
+    const section = (e.target as HTMLElement | null)?.closest('.stream-section') as HTMLElement | null;
+    if (!section) return;
+    // Only remove highlight when leaving the section boundary (relatedTarget
+    // outside the section). Without this, dragleave fires for every child.
+    const next = (e.relatedTarget as HTMLElement | null) || null;
+    if (next && section.contains(next)) return;
+    section.classList.remove('stream-section-drop-target');
+    removeDropIndicator();
+}
+
+function handleSectionDrop(e: DragEvent): void {
+    if (!_dragState || !_gridEl) return;
+    const section = (e.target as HTMLElement | null)?.closest('.stream-section') as HTMLElement | null;
+    if (!section) return;
+    e.preventDefault();
+    const targetKey = section.dataset.section || '';
+    const targetType = (section.dataset.sectionType === 'custom' ? 'custom' : 'builtin') as 'builtin' | 'custom';
+    if (!targetKey) return;
+
+    const drag = _dragState;
+
+    // Clear visual state up front (dragend also runs, but this makes the
+    // modal render over a clean grid).
+    _gridEl.querySelectorAll('.cg-card-dragging').forEach(el => el.classList.remove('cg-card-dragging'));
+    _gridEl
+        .querySelectorAll('.stream-section-drop-target')
+        .forEach(el => el.classList.remove('stream-section-drop-target'));
+    removeDropIndicator();
+
+    // Same-section drop → intra-section reorder
+    if (targetKey === drag.sourceKey && targetType === drag.sourceType) {
+        const dropIdx = computeDropIndex(section, e);
+        void applyIntraSectionReorder(drag, targetKey, targetType, section, dropIdx);
+        _dragState = null;
+        return;
+    }
+
+    const targetTitle = resolveSectionTitle(targetKey, targetType);
+    const cardTitle = resolveCycleTitle(drag.cycleId);
+    showCopyMoveChoice(drag, { key: targetKey, type: targetType, title: targetTitle }, cardTitle);
+    _dragState = null;
+}
+
+function resolveSectionTitle(key: string, type: 'builtin' | 'custom'): string {
+    if (type === 'custom') {
+        return getCustomSections().find(s => s.id === key)?.title || 'category';
+    }
+    const def = SECTION_DEFINITIONS.find(s => s.key === key);
+    return def ? resolveBuiltInTitle(def) : 'category';
+}
+
+function resolveCycleTitle(cycleId: string): string {
+    return getCycleIndex().find(e => e.id === cycleId)?.filename || 'protocol';
+}
+
+/** Read a custom section's current force lists from the in-memory cache. */
+function readCustomForceLists(sectionId: string): { inc: string[]; exc: string[] } {
+    const cs = getCustomSections().find(s => s.id === sectionId);
+    return {
+        inc: cs?.forceIncludeIds ? [...cs.forceIncludeIds] : [],
+        exc: cs?.forceExcludeIds ? [...cs.forceExcludeIds] : [],
+    };
+}
+
+/** Apply add/remove ops to a string list and return the new list. */
+function mutateList(list: string[], ops: { add?: string; remove?: string }): string[] {
+    let next = list.slice();
+    if (ops.remove) next = next.filter(id => id !== ops.remove);
+    if (ops.add && !next.includes(ops.add)) next.push(ops.add);
+    return next;
+}
+
+/**
+ * Update a section's force-include / force-exclude lists. Branches on type:
+ * built-in sections go through builtin-overrides-store (file-backed single
+ * blob); custom sections go through patchCustomSection (per-section JSON file).
+ */
+async function updateSectionForceList(
+    key: string,
+    type: 'builtin' | 'custom',
+    patch: {
+        addInclude?: string;
+        removeInclude?: string;
+        addExclude?: string;
+        removeExclude?: string;
+    },
+): Promise<void> {
+    if (type === 'builtin') {
+        await updateBuiltinForceLists(key, patch);
+        return;
+    }
+    const current = readCustomForceLists(key);
+    const nextInc = mutateList(current.inc, {
+        add: patch.addInclude,
+        remove: patch.removeInclude,
+    });
+    const nextExc = mutateList(current.exc, {
+        add: patch.addExclude,
+        remove: patch.removeExclude,
+    });
+    await patchCustomSection(key, {
+        forceIncludeIds: nextInc,
+        forceExcludeIds: nextExc,
+    });
+}
+
+async function applyCopy(drag: DragState, target: { key: string; type: 'builtin' | 'custom' }): Promise<void> {
+    await updateSectionForceList(target.key, target.type, {
+        addInclude: drag.cycleId,
+        removeExclude: drag.cycleId,
+    });
+    rerenderStreamImmediate();
+}
+
+async function applyMove(drag: DragState, target: { key: string; type: 'builtin' | 'custom' }): Promise<void> {
+    // Target: pin the cycle, clear any stale exclusion from a prior move-out.
+    await updateSectionForceList(target.key, target.type, {
+        addInclude: drag.cycleId,
+        removeExclude: drag.cycleId,
+    });
+
+    // Source: if the cycle was pinned via force-include, unpin it (undo).
+    // Otherwise add it to force-exclude so the tag-matched card disappears
+    // from the source section.
+    const sourceInc =
+        drag.sourceType === 'custom'
+            ? readCustomForceLists(drag.sourceKey).inc
+            : getBuiltinForceInclude(drag.sourceKey);
+
+    if (sourceInc.includes(drag.cycleId)) {
+        await updateSectionForceList(drag.sourceKey, drag.sourceType, {
+            removeInclude: drag.cycleId,
+        });
+    } else {
+        await updateSectionForceList(drag.sourceKey, drag.sourceType, {
+            addExclude: drag.cycleId,
+        });
+    }
+
+    rerenderStreamImmediate();
+}
+
+function showCopyMoveChoice(
+    drag: DragState,
+    target: { key: string; type: 'builtin' | 'custom'; title: string },
+    cardTitle: string,
+): void {
+    // Remove any existing modal (defensive)
+    document.querySelector('.stream-dnd-modal')?.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'stream-dnd-modal';
+    overlay.innerHTML =
+        `<div class="stream-dnd-modal-card" role="dialog" aria-modal="true">` +
+        `<h3>Drop "${escapeHtml(cardTitle)}"</h3>` +
+        `<p>Copy or move this protocol into <strong>${escapeHtml(target.title)}</strong>?</p>` +
+        `<div class="stream-dnd-modal-actions">` +
+        `<button class="stream-dnd-cancel" type="button">Cancel</button>` +
+        `<button class="stream-dnd-copy" type="button">Copy</button>` +
+        `<button class="stream-dnd-move primary" type="button">Move</button>` +
+        `</div>` +
+        `</div>`;
+
+    const cleanup = () => {
+        overlay.remove();
+        document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (ev: KeyboardEvent) => {
+        if (ev.key === 'Escape') {
+            ev.preventDefault();
+            cleanup();
+        }
+    };
+
+    overlay.addEventListener('click', ev => {
+        // Click on backdrop cancels
+        if (ev.target === overlay) cleanup();
+    });
+    overlay.querySelector('.stream-dnd-cancel')?.addEventListener('click', () => cleanup());
+    overlay.querySelector('.stream-dnd-copy')?.addEventListener('click', () => {
+        cleanup();
+        void applyCopy(drag, target);
+    });
+    overlay.querySelector('.stream-dnd-move')?.addEventListener('click', () => {
+        cleanup();
+        void applyMove(drag, target);
+    });
+
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(overlay);
+
+    // Focus the primary action so Enter confirms Move.
+    (overlay.querySelector('.stream-dnd-move') as HTMLElement | null)?.focus();
+}
+
+// ── Intra-section reorder helpers ────────────────────────────────────
+
+/** Singleton drop-indicator element. Created once, reused across drags. */
+let _dropIndicator: HTMLElement | null = null;
+
+function getDropIndicator(): HTMLElement {
+    if (!_dropIndicator) {
+        _dropIndicator = document.createElement('div');
+        _dropIndicator.className = 'stream-drop-indicator';
+    }
+    return _dropIndicator;
+}
+
+function removeDropIndicator(): void {
+    _dropIndicator?.remove();
+}
+
+/**
+ * Given a section and a dragover event, find the card the cursor is nearest to
+ * and show a vertical drop indicator at the left or right edge of that card.
+ * Returns nothing — purely visual. The actual position is computed again on drop.
+ */
+function updateDropIndicator(section: HTMLElement, e: DragEvent): void {
+    const row = section.querySelector('.stream-section-row') as HTMLElement | null;
+    if (!row) return;
+    const cards = Array.from(row.querySelectorAll<HTMLElement>('.cg-card'));
+    if (cards.length < 2) {
+        removeDropIndicator();
+        return;
+    }
+
+    const indicator = getDropIndicator();
+    const mouseX = e.clientX;
+
+    // Find insertion point: scan cards left-to-right, first card whose
+    // horizontal center is AFTER the mouse gets the indicator placed to its left.
+    let insertBefore: HTMLElement | null = null;
+    for (const card of cards) {
+        if (card.classList.contains('cg-card-dragging')) continue;
+        const rect = card.getBoundingClientRect();
+        if (mouseX < rect.left + rect.width / 2) {
+            insertBefore = card;
+            break;
+        }
+    }
+
+    if (insertBefore) {
+        row.insertBefore(indicator, insertBefore);
+    } else {
+        row.appendChild(indicator);
+    }
+}
+
+/**
+ * Compute the numeric insertion index for a drop event inside a section row.
+ * Returns the index within the card list (0 = before first, N = after last).
+ */
+function computeDropIndex(section: HTMLElement, e: DragEvent): number {
+    const row = section.querySelector('.stream-section-row') as HTMLElement | null;
+    if (!row) return 0;
+    const cards = Array.from(row.querySelectorAll<HTMLElement>('.cg-card'));
+    if (cards.length === 0) return 0;
+    const mouseX = e.clientX;
+
+    for (let i = 0; i < cards.length; i++) {
+        const card = cards[i];
+        if (card.classList.contains('cg-card-dragging')) continue;
+        const rect = card.getBoundingClientRect();
+        if (mouseX < rect.left + rect.width / 2) {
+            return i;
+        }
+    }
+    return cards.length;
+}
+
+/**
+ * Compute the new card order for a section after dragging cycleId to position
+ * `dropIdx`, persist it, and re-render.
+ */
+async function applyIntraSectionReorder(
+    drag: DragState,
+    sectionKey: string,
+    sectionType: 'builtin' | 'custom',
+    section: HTMLElement,
+    dropIdx: number,
+): Promise<void> {
+    const row = section.querySelector('.stream-section-row');
+    if (!row) return;
+    // Read the current visual order from the DOM (already sorted by cardOrder)
+    const currentIds = Array.from(row.querySelectorAll<HTMLElement>('.cg-card'))
+        .map(c => c.dataset.cycleId || '')
+        .filter(Boolean);
+
+    // Remove dragged card from current position
+    const filtered = currentIds.filter(id => id !== drag.cycleId);
+    // Clamp dropIdx
+    const clampedIdx = Math.min(dropIdx, filtered.length);
+    // Insert at new position
+    filtered.splice(clampedIdx, 0, drag.cycleId);
+
+    // Persist
+    if (sectionType === 'builtin') {
+        await setBuiltinCardOrder(sectionKey, filtered);
+    } else {
+        await patchCustomSection(sectionKey, { cardOrder: filtered });
+    }
+
     rerenderStreamImmediate();
 }
 
@@ -1953,6 +2787,33 @@ function enterCardEdit(card: HTMLElement, id: string): void {
         });
     }
 
+    // Replace thumbnail overlay title with input
+    const overlayEl = card.querySelector('.cg-card-overlay-title') as HTMLElement | null;
+    if (overlayEl) {
+        const currentOverlay = overlayEl.textContent || '';
+        const overlayInput = document.createElement('input');
+        overlayInput.type = 'text';
+        overlayInput.className = 'cg-card-edit-input cg-card-edit-overlay';
+        overlayInput.value = currentOverlay;
+        overlayInput.dataset.field = 'overlay';
+        overlayInput.dataset.original = currentOverlay;
+        // Preserve the original color styling
+        const color = (overlayEl as HTMLElement).style.color;
+        if (color) overlayInput.style.color = color;
+        overlayEl.replaceWith(overlayInput);
+
+        overlayInput.addEventListener('click', ev => ev.stopPropagation());
+        overlayInput.addEventListener('keydown', ev => {
+            if (ev.key === 'Enter') {
+                ev.preventDefault();
+                commitCardEdit(card, id);
+            } else if (ev.key === 'Escape') {
+                ev.preventDefault();
+                exitCardEdit(card);
+            }
+        });
+    }
+
     // Click outside to commit
     const outsideHandler = (ev: MouseEvent) => {
         if (!card.contains(ev.target as Node)) {
@@ -1970,9 +2831,12 @@ async function commitCardEdit(card: HTMLElement, id: string): Promise<void> {
 
     const nameInput = card.querySelector('.cg-card-edit-name') as HTMLInputElement | null;
     const promptInput = card.querySelector('.cg-card-edit-prompt') as HTMLTextAreaElement | null;
+    const overlayInput = card.querySelector('.cg-card-edit-overlay') as HTMLInputElement | null;
 
     const newName = nameInput?.value.trim() || nameInput?.dataset.original || '';
     const newPrompt = promptInput?.value.trim() || promptInput?.dataset.original || '';
+    const newOverlay = overlayInput?.value.trim() || '';
+    const overlayChanged = overlayInput && newOverlay !== (overlayInput.dataset.original || '');
 
     const nameChanged = nameInput && newName !== nameInput.dataset.original;
     const promptChanged = promptInput && newPrompt !== promptInput.dataset.original;
@@ -1994,6 +2858,18 @@ async function commitCardEdit(card: HTMLElement, id: string): Promise<void> {
     if (promptChanged && entry) {
         entry.prompt = newPrompt;
         // prompt is not patchable via the current API, but update in-memory for display
+    }
+
+    if (overlayChanged && entry) {
+        // Empty string clears override → falls back to filename-derived title
+        const nextOverlay = newOverlay || null;
+        const prevOverlay = entry.overlayTitle ?? null;
+        entry.overlayTitle = nextOverlay;
+        try {
+            await patchCycle(id, { overlayTitle: nextOverlay });
+        } catch {
+            entry.overlayTitle = prevOverlay;
+        }
     }
 
     // Restore static DOM
@@ -2040,10 +2916,22 @@ function restoreCardStatic(card: HTMLElement, id: string): void {
         promptInput.replaceWith(p);
     }
 
-    // Update the overlay title on the thumbnail
-    const overlayEl = card.querySelector('.cg-card-overlay-title');
-    if (overlayEl) {
-        overlayEl.textContent = formatOverlayTitle(entry.filename);
+    // Restore overlay title — if an edit input is present, replace it with a div
+    const overlayInput = card.querySelector('.cg-card-edit-overlay') as HTMLInputElement | null;
+    if (overlayInput) {
+        const div = document.createElement('div');
+        // Preserve classes from original render by re-computing
+        const text = resolveOverlayTitle(entry);
+        div.className = 'cg-card-overlay-title' + getOverlayTitleClass(text);
+        const color = overlayInput.style.color;
+        if (color) div.style.color = color;
+        div.textContent = text;
+        overlayInput.replaceWith(div);
+    } else {
+        const overlayEl = card.querySelector('.cg-card-overlay-title');
+        if (overlayEl) {
+            overlayEl.textContent = resolveOverlayTitle(entry);
+        }
     }
 }
 
@@ -2137,10 +3025,8 @@ function commitSectionTitle(sectionKey: string, sectionType: string, newTitle: s
             rerenderStreamImmediate();
         }
     } else {
-        // Built-in section rename — store in localStorage
-        const overrides = settingsStore.getJson<Record<string, string>>(STORAGE_KEYS.customSectionTitles, {}) || {};
-        overrides[sectionKey] = newTitle;
-        settingsStore.setJson(STORAGE_KEYS.customSectionTitles, overrides);
+        // Built-in section rename — persist to filesystem
+        void setBuiltinTitleOverride(sectionKey, newTitle);
         rerenderStreamImmediate();
     }
 }
@@ -2303,22 +3189,12 @@ function showEditTagsForSection(
                 negativeTags: newNeg.length > 0 ? newNeg : undefined,
             }).then(() => rerenderStreamImmediate());
         } else {
-            // Built-in section — save overrides to localStorage
-            const titleOverrides =
-                settingsStore.getJson<Record<string, string>>(STORAGE_KEYS.customSectionTitles, {}) || {};
-            titleOverrides[cs.id] = newTitle;
-            settingsStore.setJson(STORAGE_KEYS.customSectionTitles, titleOverrides);
-
-            const effectOverrides =
-                settingsStore.getJson<Record<string, string[]>>(STORAGE_KEYS.customSectionEffects, {}) || {};
-            effectOverrides[cs.id] = newTags;
-            settingsStore.setJson(STORAGE_KEYS.customSectionEffects, effectOverrides);
-
-            const negOverrides =
-                settingsStore.getJson<Record<string, string[]>>(STORAGE_KEYS.customSectionNegativeTags, {}) || {};
-            negOverrides[cs.id] = newNeg;
-            settingsStore.setJson(STORAGE_KEYS.customSectionNegativeTags, negOverrides);
-
+            // Built-in section — persist overrides to filesystem
+            void setBuiltinSectionOverrides(cs.id, {
+                title: newTitle,
+                effects: newTags,
+                negativeTags: newNeg,
+            });
             rerenderStreamImmediate();
         }
     });
@@ -2465,13 +3341,13 @@ function buildTagPickerHtml(
     const effectChips = effects
         .map(
             t =>
-                `<button class="${chipClass(t, selectedTags, negativeTags)}" data-tag="${escHtml(t)}">${escHtml(t)}</button>`,
+                `<button class="${chipClass(t, selectedTags, negativeTags)}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`,
         )
         .join('');
     const classChips = substanceClasses
         .map(
             c =>
-                `<button class="${chipClass(c, selectedTags, negativeTags)}" data-tag="${escHtml(c)}">${escHtml(c)}</button>`,
+                `<button class="${chipClass(c, selectedTags, negativeTags)}" data-tag="${escapeHtml(c)}">${escapeHtml(c)}</button>`,
         )
         .join('');
 
@@ -2569,7 +3445,7 @@ async function handleStreamLoad(id: string): Promise<void> {
             timestamp: Date.now(),
             openAtLxReady: true,
         };
-        sessionSettingsStore.setJson('cortex_pending_prompt_after_hard_reset_v1', payload);
+        sessionSettingsStore.setJson('lx_studio_pending_prompt_after_hard_reset_v1', payload);
 
         // Switch to design mode so the loaded cycle lands at the Lx gate
         settingsStore.setString(STORAGE_KEYS.appMode, 'design');

@@ -27,6 +27,7 @@ const BASIN_COST_TOLERANCE = 0.12;
 const BASIN_SWITCH_IMPROVEMENT_RATIO = 0.2;
 const BASIN_SWITCH_HOLD_MS = 180;
 const SMOOTHING_HALF_LIFE_MS = 240;
+const TRACKING_SETTLE_EPSILON = 0.35;
 const LOWER_BAND_ADVANTAGE_RATIO = 0.18;
 const BASIN_OVERLAP_THRESHOLD = 0.32;
 const BASIN_CENTROID_DISTANCE = FIELD_STEP * 3;
@@ -734,19 +735,38 @@ function applyResolvedFrame(
 
     const entranceProgress = resolveEntranceProgress(options.entranceProgress);
     const slideOffset = (1 - entranceProgress) * 8;
-    const renderedBoxY = currentY + slideOffset;
+    let renderedBoxY = currentY + slideOffset;
+    let renderedBoxX = currentX;
+
+    // Lx | Rx compare mode: magnetize the Lx box to the right edge of the
+    // Lx plot (closest to the divider). Each curve's box is stacked
+    // vertically at a fixed Y, matched exactly by the Rx box on the other
+    // side so the two panels face each other for A/B comparison.
+    // Hide the anchor + connector in this mode — they'd point at random
+    // places once the box is no longer at its natural peak location.
+    const inCompareMode =
+        typeof document !== 'undefined' && document.body?.classList?.contains('compare-mode');
+    if (inCompareMode) {
+        const COMPARE_GAP = 12;
+        // Push the Lx box flush against the SVG's right edge so it ends up
+        // as close to the Rx box (which sits flush against the Rx SVG's
+        // left edge) as the two panels allow. Breaches the plot's padR
+        // margin intentionally — Perry wants them adjacent for comparison.
+        renderedBoxX = PHASE_CHART.viewW - BOX_W - 2;
+        renderedBoxY = PHASE_CHART.padT + 12 + track.effectIdx * (BOX_H + COMPARE_GAP);
+    }
 
     track.connectorPath.setAttribute(
         'd',
-        buildElbowPath(currentX, renderedBoxY, frame.peak.anchorX, frame.peak.anchorY),
+        buildElbowPath(renderedBoxX, renderedBoxY, frame.peak.anchorX, frame.peak.anchorY),
     );
-    track.connectorPath.setAttribute('stroke-opacity', (0.35 * entranceProgress).toFixed(3));
+    track.connectorPath.setAttribute('stroke-opacity', inCompareMode ? '0' : (0.35 * entranceProgress).toFixed(3));
 
     track.anchorDot.setAttribute('cx', frame.peak.anchorX.toFixed(1));
     track.anchorDot.setAttribute('cy', frame.peak.anchorY.toFixed(1));
-    track.anchorDot.setAttribute('r', (3 * entranceProgress).toFixed(2));
+    track.anchorDot.setAttribute('r', inCompareMode ? '0' : (3 * entranceProgress).toFixed(2));
 
-    track.boxGroupEl.setAttribute('transform', `translate(${currentX.toFixed(1)}, ${renderedBoxY.toFixed(1)})`);
+    track.boxGroupEl.setAttribute('transform', `translate(${renderedBoxX.toFixed(1)}, ${renderedBoxY.toFixed(1)})`);
     track.boxGroupEl.setAttribute('opacity', (0.9 * entranceProgress).toFixed(3));
     track.frameGroup.setAttribute('opacity', '1');
 
@@ -871,16 +891,54 @@ function renderTrackedOverlayFrame(options: FrameRenderOptions = {}): void {
     }
 }
 
+function trackNeedsAnimation(now: number): boolean {
+    if (!getLiveContainer() || !_curvesData || _tracked.length === 0) return false;
+    if (!isTurboActive() && resolveEntranceProgress() < 1) return true;
+
+    for (const track of _tracked) {
+        if (
+            track.currentBoxX != null &&
+            track.targetBoxX != null &&
+            Math.abs(track.currentBoxX - track.targetBoxX) > TRACKING_SETTLE_EPSILON
+        ) {
+            return true;
+        }
+        if (
+            track.currentBoxY != null &&
+            track.targetBoxY != null &&
+            Math.abs(track.currentBoxY - track.targetBoxY) > TRACKING_SETTLE_EPSILON
+        ) {
+            return true;
+        }
+        if (track.lastRenderAt == null && track.targetBoxX != null && track.targetBoxY != null) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function scheduleTrackingFrame(): void {
+    if (_trackingRafId != null) return;
+    _trackingRafId = requestAnimationFrame(now => {
+        _trackingRafId = null;
+        renderTrackedOverlayFrame({ immediate: false });
+        if (trackNeedsAnimation(now)) {
+            scheduleTrackingFrame();
+        }
+    });
+}
+
+function kickTracking(options: FrameRenderOptions = {}): void {
+    renderTrackedOverlayFrame(options);
+    if (trackNeedsAnimation(performance.now())) {
+        scheduleTrackingFrame();
+    }
+}
+
 function startTracking(): void {
     cancelTrackingRaf();
-
-    const tick = () => {
-        renderTrackedOverlayFrame({ immediate: false });
-        _trackingRafId = requestAnimationFrame(tick);
-    };
-
-    renderTrackedOverlayFrame({ immediate: true, entranceProgress: isTurboActive() ? 1 : 0 });
-    _trackingRafId = requestAnimationFrame(tick);
+    kickTracking({ immediate: true, entranceProgress: isTurboActive() ? 1 : 0 });
 }
 
 function sampleMaxCurveValue(
@@ -2178,9 +2236,7 @@ export function updateGamificationCurveData(lxCurves: any[]): void {
         track.baselinePoints = lx.baseline ?? track.baselinePoints;
     }
 
-    if (_trackingRafId == null) {
-        renderTrackedOverlayFrame({ immediate: true, entranceProgress: 1 });
-    }
+    kickTracking({ immediate: _trackingRafId == null, entranceProgress: 1 });
 }
 
 export function setStackingBarSweepProgress(t: number, playheadHour?: number, stepIdx?: number): void {
@@ -2189,11 +2245,12 @@ export function setStackingBarSweepProgress(t: number, playheadHour?: number, st
     else if (t <= 0) _sweepPlayheadHour = 0;
     else if (t >= 1) _sweepPlayheadHour = 30;
     if (stepIdx != null) _sweepStepIdx = stepIdx;
+    kickTracking({ immediate: false, entranceProgress: 1 });
 }
 
 export function updateGamificationOverlayForDivider(): void {
     if (!getLiveContainer() || _tracked.length === 0) return;
-    renderTrackedOverlayFrame({ immediate: true });
+    kickTracking({ immediate: true, entranceProgress: 1 });
 }
 
 export function removeGamificationOverlay(): void {

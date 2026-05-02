@@ -6,13 +6,14 @@
  * Depends on: state, llm-pipeline, lx-system, prompts
  */
 import { BiometricState, PhaseState, MultiDayState } from './state';
-import { interpolatePrompt, clamp } from './utils';
+import { interpolatePrompt } from './utils';
 import { PROMPTS } from './prompts';
 import { DebugLog } from './debug-panel';
 import { getActiveSubstances } from './substances';
 import { validateInterventions, computeLxOverlay, computeStackingPeaks, pruneConcurrentOverload } from './lx-system';
 import { extractInterventionsData } from './llm-response-shape';
 import { LLMCache } from './llm-cache';
+import { normalizeCurvePointsToReferenceGrid } from './week-snapshot-utils';
 import type {
     CurveData,
     CurvePoint,
@@ -29,7 +30,6 @@ import type {
     Sherlock7DBeat,
 } from './types';
 import { callStageWithFallback, buildStackingCorrectionPrompt, STACKING_THRESHOLD } from './llm-pipeline';
-import { reportRuntimeBug } from './runtime-error-banner';
 
 // ── Generic call helper (mirrors llm-pipeline pattern) ──
 
@@ -64,7 +64,7 @@ async function callGenericForStage(
                 duration: 0,
                 cache: {
                     hit: true,
-                    key: cached.meta?.cacheKey || `cortex_cache_${debugClass}`,
+                    key: cached.meta?.cacheKey || `lx_studio_cache_${debugClass}`,
                     cachedAt: cached.meta?.cachedAt || '',
                     inputMismatch,
                 },
@@ -508,16 +508,13 @@ function buildDayCurvesData(
                     curve.effect.toLowerCase().includes(d.effect.toLowerCase()) ||
                     d.effect.toLowerCase().includes(curve.effect.toLowerCase())),
         );
-        if (match && Array.isArray(match.desired) && match.desired.length >= 10) {
-            desiredCurves.push(
-                match.desired.map((p: any) => ({
-                    hour: Number(p.hour),
-                    value: clamp(Number(p.value), 0, 100),
-                })),
-            );
-        } else {
-            desiredCurves.push([...curve.desired]);
-        }
+        desiredCurves.push(
+            normalizeCurvePointsToReferenceGrid(match?.desired, curve.desired, {
+                dayNumber,
+                effect: curve.effect,
+                label: 'desiredCurves',
+            }),
+        );
     }
 
     // ── Corrected baselines from Strategist Bio ──
@@ -531,16 +528,13 @@ function buildDayCurvesData(
                     curve.effect.toLowerCase().includes(cb.effect.toLowerCase()) ||
                     cb.effect.toLowerCase().includes(curve.effect.toLowerCase())),
         );
-        if (match && Array.isArray(match.baseline) && match.baseline.length >= 10) {
-            correctedBaselines.push(
-                match.baseline.map((p: any) => ({
-                    hour: Number(p.hour),
-                    value: clamp(Number(p.value), 0, 100),
-                })),
-            );
-        } else {
-            correctedBaselines.push([...curve.baseline]);
-        }
+        correctedBaselines.push(
+            normalizeCurvePointsToReferenceGrid(match?.baseline, curve.baseline, {
+                dayNumber,
+                effect: curve.effect,
+                label: 'correctedBaseline',
+            }),
+        );
     }
 
     // ── Post-intervention baseline from Grandmaster (cumulative chronobiotic shift) ──
@@ -554,16 +548,13 @@ function buildDayCurvesData(
                     curve.effect.toLowerCase().includes(pb.effect.toLowerCase()) ||
                     pb.effect.toLowerCase().includes(curve.effect.toLowerCase())),
         );
-        if (match && Array.isArray(match.baseline) && match.baseline.length >= 10) {
-            postInterventionBaseline.push(
-                match.baseline.map((p: any) => ({
-                    hour: Number(p.hour),
-                    value: clamp(Number(p.value), 0, 100),
-                })),
-            );
-        } else {
-            postInterventionBaseline.push(correctedBaselines[ci]);
-        }
+        postInterventionBaseline.push(
+            normalizeCurvePointsToReferenceGrid(match?.baseline, correctedBaselines[ci], {
+                dayNumber,
+                effect: curve.effect,
+                label: 'postInterventionBaseline',
+            }),
+        );
     }
 
     const tempCurvesData = curvesData.map((c, i) => ({

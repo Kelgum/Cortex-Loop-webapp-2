@@ -262,11 +262,8 @@ export const LX_GAP_COVERAGE = 0.95;
 /** Plateau duration threshold (minutes) — substances with plateau >= this are "background" */
 export const BACKGROUND_DURATION_THRESHOLD = 480;
 
-/** Max tactical (non-background) substances in any temporal cluster */
+/** Max tactical (non-background) substances in any temporal cluster — hard cap */
 export const CONCURRENT_SUBSTANCE_MAX = 5;
-
-/** Substance exceeding cluster cap is kept if it contributes >= this % within the cluster */
-export const CONCURRENT_KEEP_THRESHOLD = 5;
 
 /** Max total substances (background + tactical) across the entire day */
 export const DAILY_SUBSTANCE_MAX = 15;

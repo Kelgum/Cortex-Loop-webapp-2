@@ -423,12 +423,25 @@ function prepareRevisionPillMorph(
 
             if (oldPill && oldGeo && newGeo) {
                 const doseMorph = parseDoseMorph(entry.oldIv, entry.newIv);
-                // Use the real pre-rendered new pill as the "ghost" destination. It
-                // already carries the full rich label (Rx badge, contribution %) at
-                // the correct position. The morph tick only touches its opacity.
+                const moveDist = Math.abs(newGeo.x - oldGeo.x);
+                const laneDist = Math.abs(newGeo.laneIdx - oldGeo.laneIdx);
+                const isSmallMove =
+                    moveDist <= teleportThresholdPx && laneDist < TELEPORT.thresholdLanes;
+
                 let ghost: SVGGElement | null = null;
                 let ghostIsRealPill = false;
-                if (newPill) {
+
+                if (isSmallMove) {
+                    // Small move: smooth glide (like 7D multi-day). The old pill
+                    // slides to the new position via translate(). The pre-rendered
+                    // newPill stays hidden and is revealed by revealTimelinePillsInstant()
+                    // at cleanup — no visual pop because the old pill is at the
+                    // same position when it's removed.
+                } else if (newPill) {
+                    // Large move: use the real pre-rendered new pill as the "ghost"
+                    // destination. It already carries the full rich label (Rx badge,
+                    // contribution %) at the correct position. The morph tick only
+                    // touches its opacity.
                     ghost = newPill;
                     ghost.setAttribute('opacity', '0');
                     ghostIsRealPill = true;
@@ -468,9 +481,7 @@ function prepareRevisionPillMorph(
                 // Find the pre-rendered pill from renderSubstanceTimeline. Real pills
                 // carry rich labels (Rx, contribution %) that must be preserved during
                 // the dose count-up so the final state matches a fresh render exactly.
-                const existingPill = entry.newIv
-                    ? findPillByIntervention(entry.newIv, timelineGroup, true)
-                    : null;
+                const existingPill = entry.newIv ? findPillByIntervention(entry.newIv, timelineGroup, true) : null;
                 if (existingPill) {
                     const doseMorph = parseDoseFromZero(entry.newIv);
                     plan.added.push({
@@ -950,7 +961,7 @@ export async function animateRevisionScan(
     const timelineGroup = document.getElementById('phase-substance-timeline');
     if (!svg || !timelineGroup) return;
 
-    if (diff.length === 0) {
+    if (diff.length === 0 || isTurboActive()) {
         renderSubstanceTimeline(newInterventions, newLxCurves, curvesData);
         preserveBiometricStrips();
         revealTimelinePillsInstant();
@@ -982,6 +993,24 @@ export async function animateRevisionScan(
     oldPills.forEach(pill => {
         const clippedG = pill.querySelector('[clip-path]');
         if (clippedG) clippedG.removeAttribute('clip-path');
+        // Cancel any lingering Web Animations (e.g. the `fill: 'forwards'`
+        // reveal from Phase 2 `animateSequentialLxReveal`) before we start
+        // driving opacity via `setAttribute`. A persistent fill-forwards
+        // effect outranks attribute changes and would pin the pill at
+        // opacity 1 throughout the revision scan, stacking old pills on top
+        // of new ones. Safe belt-and-braces — the Phase 2 call site also
+        // commits + cancels on `anim.finished`, but this guards against any
+        // in-flight or not-yet-committed animations as well.
+        const anyPill = pill as any;
+        if (typeof anyPill.getAnimations === 'function') {
+            for (const a of anyPill.getAnimations()) {
+                try {
+                    a.cancel();
+                } catch {
+                    /* ignore */
+                }
+            }
+        }
         tempGroup.appendChild(pill);
     });
     svg.insertBefore(tempGroup, timelineGroup);
@@ -1167,9 +1196,7 @@ export async function animateRevisionScan(
             // scan line's X position, giving a smooth fade with zero active/stale
             // churn (no flicker from previous cards being demoted to stale).
             if (cards.length > 0) showSherlockStack(cards, cards.length - 1);
-            const sherlockPanel = document.querySelector(
-                '.sherlock-narration-panel',
-            ) as HTMLElement | null;
+            const sherlockPanel = document.querySelector('.sherlock-narration-panel') as HTMLElement | null;
             const sherlockCardEls = sherlockPanel
                 ? (Array.from(sherlockPanel.querySelectorAll('.waze-card')) as HTMLElement[])
                 : [];

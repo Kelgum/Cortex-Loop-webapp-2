@@ -2,6 +2,8 @@ import type {
     BiometricStageResult,
     Intervention,
     PipelineStage,
+    SocrxPick,
+    SocrxStageResult,
     SpotterChannelPickResult,
     SpotterDeviceRecommendationResult,
     SpotterProfileDraftResult,
@@ -219,6 +221,38 @@ export function extractInterventionsData(raw: unknown): Intervention[] {
     return [];
 }
 
+export function extractSocrxData(raw: unknown): SocrxStageResult | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const obj = raw as Record<string, any>;
+    if (!Array.isArray(obj.picks)) return null;
+
+    const picks: SocrxPick[] = [];
+    for (const entry of obj.picks) {
+        if (!entry || typeof entry !== 'object') continue;
+        const e = entry as Record<string, any>;
+        const substanceKey = typeof e.substanceKey === 'string' ? e.substanceKey.trim() : '';
+        if (!substanceKey) continue;
+        const rawTime = Number(e.timeMinutes);
+        const timeMinutes = Number.isFinite(rawTime) ? Math.max(0, Math.min(1439, Math.round(rawTime))) : 480;
+        const rawIdx = Number(e.targetCurveIdx);
+        const targetCurveIdx = Number.isFinite(rawIdx) && rawIdx >= 0 ? Math.round(rawIdx) : 0;
+        picks.push({
+            substanceKey,
+            dose: typeof e.dose === 'string' ? e.dose.trim() : '',
+            timeMinutes,
+            targetCurveIdx,
+            targetEffect: typeof e.targetEffect === 'string' ? e.targetEffect : '',
+            rationale: typeof e.rationale === 'string' ? e.rationale : '',
+        });
+    }
+
+    return {
+        conditionLabel: typeof obj.conditionLabel === 'string' ? obj.conditionLabel.trim() : '',
+        picks,
+        narrative: typeof obj.narrative === 'string' ? obj.narrative.trim() : '',
+    };
+}
+
 function hasValidBiometricChannels(result: unknown): result is BiometricStageResult {
     const maybeBiometric = result as { channels?: unknown[] } | null;
     if (!maybeBiometric || !Array.isArray(maybeBiometric.channels) || maybeBiometric.channels.length === 0)
@@ -338,6 +372,12 @@ export function validateStageResponseShape(stage: PipelineStage | string, result
             return ensure(
                 !!result && Array.isArray((result as any).beats) && (result as any).beats.length > 0,
                 'Invalid Sherlock 7D response: expected non-empty beats array.',
+                result,
+            );
+        case 'socrx':
+            return ensure(
+                !!extractSocrxData(result),
+                'Invalid SOCRx response: expected a picks array (may be empty).',
                 result,
             );
         default:

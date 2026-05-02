@@ -2,7 +2,7 @@ import { DebugLog } from './debug-panel';
 import { LLMCache } from './llm-cache';
 import { STORAGE_KEYS, settingsStore } from './settings-store';
 
-const EXPORT_ROOT_DIR_NAME = '.cortex-debug';
+const EXPORT_ROOT_DIR_NAME = '.lx-studio-debug';
 const DEBUG_BUNDLE_API_BASE = '/__debug-bundles';
 const AUTO_SAVE_DEBOUNCE_MS = 700;
 
@@ -188,7 +188,7 @@ function buildSummaryMarkdown(run: DebugBundleRunContext, entries: any[], stageF
     const grouped = groupEntriesByStage(entries);
     const lines: string[] = [];
 
-    lines.push('# Cortex Loop Debug Bundle');
+    lines.push('# Lx.Studio Debug Bundle');
     lines.push('');
     lines.push(`- Run folder: \`${run.folderName}\``);
     lines.push(`- Started: \`${run.startedAt}\``);
@@ -230,7 +230,7 @@ function buildSummaryMarkdown(run: DebugBundleRunContext, entries: any[], stageF
     lines.push('## Share Workflow');
     lines.push('');
     lines.push('1. Add any relevant curve screenshots to `screenshots/`.');
-    lines.push('2. Point the coding agent at this run folder under `.cortex-debug/`.');
+    lines.push('2. Point the coding agent at this run folder under `.lx-studio-debug/`.');
     lines.push('3. Ask it to inspect `summary.md`, `pipeline-log.json`, and the stage file(s) that look suspicious.');
 
     return lines.join('\n');

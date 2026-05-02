@@ -39,6 +39,7 @@ const STAGE_AGENT_NAMES: Record<string, string> = {
     'strategist-bio-daily-model': 'Strategist Bio (7d)',
     'grandmaster-daily-model': 'Grandmaster (7d)',
     'agent-match-model': 'Agent Match',
+    'socrx-model': 'SOCRx',
 };
 
 function agentName(stageClass: string, fallbackLabel: string): string {

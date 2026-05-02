@@ -1,5 +1,5 @@
 // ============================================
-// BIOMETRIC DEVICES — Cortex Loop
+// BIOMETRIC DEVICES — Lx.Studio
 // ============================================
 // 6 consumer wearable devices with display channels for biometric strip visualization.
 // Each device maps to a set of physiological signals rendered as oscilloscope-style waveforms.

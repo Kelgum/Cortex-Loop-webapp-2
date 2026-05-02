@@ -1,10 +1,13 @@
 import { PHASE_CHART, PHASE_SMOOTH_PASSES } from './constants';
 import { interpolatePointsAtTime, smoothPhaseValues } from './curve-utils';
+import { computeHourlyStacking } from './lx-compute';
 import type {
     CurveData,
     CurvePoint,
+    EffectStackingAudit,
     Intervention,
     LxCurve,
+    MissionHourStacking,
     RevisionCurveSeries,
     RevisionFitMetrics,
     RevisionGapEffectSummary,
@@ -352,14 +355,63 @@ export function buildRevisionReferenceBundle(options: BuildRevisionReferenceBund
         );
     });
 
+    const gapSummary = buildRevisionGapSummary(baselineCurves, desiredCurves, currentLxCurves);
+    const stackingAudit = buildStackingAudit(
+        gapSummary,
+        options.currentInterventions || [],
+        options.curvesData,
+    );
+
     return {
         baselineCurves,
         desiredCurves,
         currentLxCurves,
         currentInterventions: cloneInterventions(options.currentInterventions),
-        gapSummary: buildRevisionGapSummary(baselineCurves, desiredCurves, currentLxCurves),
+        gapSummary,
+        stackingAudit,
         bioCorrectionApplied: options.bioCorrectionApplied,
     };
+}
+
+/** Sample hours inside a mission window at integer hours (inclusive of both ends). */
+function sampleMissionHours(window: RevisionGapWindow): number[] {
+    const start = Math.floor(window.startHour);
+    const end = Math.ceil(window.endHour);
+    const hours: number[] = [];
+    for (let h = start; h <= end; h++) hours.push(h);
+    return hours;
+}
+
+function buildStackingAudit(
+    gapSummary: RevisionGapSummary,
+    interventions: Intervention[],
+    curvesData: CurveData[],
+): EffectStackingAudit[] {
+    return gapSummary.effects.map((effectSummary, curveIdx) => {
+        const hours = new Set<number>();
+        for (const win of effectSummary.missionWindows) {
+            for (const h of sampleMissionHours(win)) hours.add(h);
+        }
+        const sortedHours = Array.from(hours).sort((a, b) => a - b);
+        const hourly = computeHourlyStacking(interventions, curvesData, curveIdx, sortedHours);
+
+        const missionHours: MissionHourStacking[] = hourly.map(entry => ({
+            hour: entry.hour,
+            currentTotal: entry.normSum,
+            breakdown: entry.breakdown,
+        }));
+
+        const totals = missionHours.map(mh => mh.currentTotal);
+        const minMissionTotal = totals.length > 0 ? Math.min(...totals) : 0;
+        const peakMissionTotal = totals.length > 0 ? Math.max(...totals) : 0;
+
+        return {
+            effect: effectSummary.effect,
+            missionHours,
+            minMissionTotal,
+            peakMissionTotal,
+        };
+    });
 }
 
 function pickEveryNthPoint(points: CurvePoint[], step: number): CurvePoint[] {
@@ -405,34 +457,54 @@ export function buildRevisionCurrentStateSummary(bundle: RevisionReferenceBundle
 }
 
 export function buildRevisionPromptGapSummary(bundle: RevisionReferenceBundle) {
+    const stackingByEffect = new Map<string, (typeof bundle.stackingAudit)[number]>();
+    for (const audit of bundle.stackingAudit || []) {
+        stackingByEffect.set(audit.effect, audit);
+    }
+
     return {
         bioCorrectionApplied: bundle.bioCorrectionApplied,
         totals: {
             totalUnderArea: round1(bundle.gapSummary.totalUnderArea),
             totalOverArea: round1(bundle.gapSummary.totalOverArea),
         },
-        effects: bundle.gapSummary.effects.map(effect => ({
-            effect: effect.effect,
-            polarity: effect.polarity,
-            missionWindows: effect.missionWindows.map(serializeWindow),
-            topUnderTargetWindows: effect.topUnderTargetWindows.map(serializeWindow),
-            topOverTargetWindows: effect.topOverTargetWindows.map(serializeWindow),
-            totalUnderArea: round1(effect.totalUnderArea),
-            totalOverArea: round1(effect.totalOverArea),
-            worstPointGap: {
-                hour: round1(effect.worstPointGap.hour),
-                value: round1(effect.worstPointGap.value),
-                kind: effect.worstPointGap.kind,
-            },
-            bestAchievedAlignment: {
-                hour: round1(effect.bestAchievedAlignment.hour),
-                absoluteError: round1(effect.bestAchievedAlignment.absoluteError),
-            },
-        })),
+        effects: bundle.gapSummary.effects.map(effect => {
+            const audit = stackingByEffect.get(effect.effect);
+            return {
+                effect: effect.effect,
+                polarity: effect.polarity,
+                missionWindows: effect.missionWindows.map(serializeWindow),
+                topUnderTargetWindows: effect.topUnderTargetWindows.map(serializeWindow),
+                topOverTargetWindows: effect.topOverTargetWindows.map(serializeWindow),
+                totalUnderArea: round1(effect.totalUnderArea),
+                totalOverArea: round1(effect.totalOverArea),
+                worstPointGap: {
+                    hour: round1(effect.worstPointGap.hour),
+                    value: round1(effect.worstPointGap.value),
+                    kind: effect.worstPointGap.kind,
+                },
+                bestAchievedAlignment: {
+                    hour: round1(effect.bestAchievedAlignment.hour),
+                    absoluteError: round1(effect.bestAchievedAlignment.absoluteError),
+                },
+                currentMissionStacking: audit
+                    ? {
+                          minTotal: audit.minMissionTotal,
+                          peakTotal: audit.peakMissionTotal,
+                          byHour: audit.missionHours.map(mh => ({
+                              hour: mh.hour,
+                              currentTotal: mh.currentTotal,
+                              breakdown: mh.breakdown,
+                          })),
+                      }
+                    : null,
+            };
+        }),
         optimizationPriority: [
             'Minimize totalUnderArea first.',
             'Then reduce the largest under-target windows inside mission windows.',
             'Avoid creating unnecessary overshoot outside the mission windows.',
+            "Never reduce a mission hour's stacking total below currentMissionStacking.byHour[hour].currentTotal.",
         ],
     };
 }

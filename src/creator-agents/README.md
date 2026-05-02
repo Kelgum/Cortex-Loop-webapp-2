@@ -1,6 +1,6 @@
 # Agent Marketplace Database
 
-KOL-authored protocol agents for the Cortex Loop Agentic Protocol Marketplace. Each agent encodes the supplement philosophy, optimization weights, guardrails, and signature interventions of a real figure in the biohacking/longevity/performance space.
+KOL-authored protocol agents for the Lx.Studio Agentic Protocol Marketplace. Each agent encodes the supplement philosophy, optimization weights, guardrails, and signature interventions of a real figure in the biohacking/longevity/performance space.
 
 ## Schema
 

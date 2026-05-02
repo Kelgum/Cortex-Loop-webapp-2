@@ -1,11 +1,28 @@
 {
   "id": "cs-1775239387031-uz2c",
-  "title": "Immersion",
+  "title": "Psychedelic",
   "tags": [
     "Psychedelic Experience",
-    "Psychedelic Immersion"
+    "Psychedelic Immersion",
+    "Psychedelic/Atypical"
   ],
   "negativeTags": [
-    "Withdrawal"
+    "Withdrawal",
+    "Psychiatric/Other",
+    "Appetite Suppression",
+    "Gastric"
+  ],
+  "forceIncludeIds": [],
+  "forceExcludeIds": [
+    "cycle-1775767608615-vd1k",
+    "cycle-1775766921003-u6xu"
+  ],
+  "cardOrder": [
+    "cycle-1775761954837-s259",
+    "cycle-1775759714486-qrkb",
+    "cycle-1775234354056-p563",
+    "cycle-1775231317201-oen7",
+    "cycle-1775762374057-172l",
+    "cycle-1775221609468-sn19"
   ]
 }

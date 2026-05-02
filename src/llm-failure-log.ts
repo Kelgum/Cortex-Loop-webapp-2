@@ -243,7 +243,7 @@ export const LLMLog = {
         this._entries.push(full);
         this._evict();
         this._dirty = true;
-        this.flush();
+        this._scheduledFlush();
     },
 
     /** Mark all entries for a given callId as resolved/unresolved. */
@@ -256,7 +256,7 @@ export const LLMLog = {
             entry.resolvedBy = resolvedBy;
         }
         this._dirty = true;
-        this.flush();
+        this._scheduledFlush();
     },
 
     /** Get all entries (newest first). */
@@ -400,7 +400,7 @@ export const LLMLog = {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `cortex_llm_log_${new Date().toISOString().slice(0, 10)}.json`;
+        a.download = `lx_studio_llm_log_${new Date().toISOString().slice(0, 10)}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -416,6 +416,10 @@ export const LLMLog = {
 
     /** Force flush in-memory buffer to localStorage. */
     flush(): void {
+        if (this._flushTimer != null) {
+            clearTimeout(this._flushTimer);
+            this._flushTimer = undefined;
+        }
         if (!this._dirty) return;
         this._dirty = false;
         const store: LLMLogStore = { __v: SCHEMA_VERSION, entries: this._entries };
@@ -438,7 +442,7 @@ export const LLMLog = {
         }, DISK_SYNC_INTERVAL_MS);
     },
 
-    /** POST log to Vite middleware for disk persistence (.cortex-logs/). */
+    /** POST log to Vite middleware for disk persistence (.lx-studio-logs/). */
     _syncToDisk(): void {
         try {
             const payload = JSON.stringify({ __v: SCHEMA_VERSION, entries: this._entries });

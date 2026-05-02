@@ -3,7 +3,7 @@
  * Exports: handleBioCorrectionPhase, animateBioCorrectionMorph
  * Depends on: state, llm-pipeline, lx-system, curve-utils, biometric (handleRevisionPhase)
  */
-import { PhaseState, MultiDayState, TimelineState } from './state';
+import { PhaseState, MultiDayState, TimelineState, isTurboActive } from './state';
 import { callStrategistBioModel } from './llm-pipeline';
 import { extractInterventionsData } from './llm-response-shape';
 import { computeIncrementalLxOverlay, computeLxOverlay, validateInterventions } from './lx-system';
@@ -244,18 +244,13 @@ function prepareBioCorrectionState(
     const oldLxCurves = PhaseState.lxCurves || [];
     const oldIncrementalSnapshots = PhaseState.incrementalSnapshots as LxSnapshot[] | null;
 
-    let newLxCurves = rebaseLxCurveSet(oldLxCurves, oldBaselines, newBaselines, curvesData);
-    let newIncrementalSnapshots = rebaseIncrementalSnapshots(
-        oldIncrementalSnapshots,
-        oldBaselines,
-        newBaselines,
-        curvesData,
-    );
-
-    if (!newLxCurves || !newIncrementalSnapshots) {
-        newLxCurves = computeLxOverlay(interventions, correctedCurvesData);
-        newIncrementalSnapshots = computeIncrementalLxOverlay(interventions, correctedCurvesData) as LxSnapshot[];
-    }
+    // Recompute Lx overlay from scratch against the corrected baselines.
+    // The old rebaseLxCurveSet() preserved absolute deltas (oldLx - oldBaseline),
+    // but the revision phase computes curves via the normalized path
+    // (impact × localGap). Using different algorithms caused a visible jump
+    // when the revision scan fired its first morphLxStep.
+    const newLxCurves = computeLxOverlay(interventions, correctedCurvesData);
+    const newIncrementalSnapshots = computeIncrementalLxOverlay(interventions, correctedCurvesData) as LxSnapshot[];
 
     return {
         correctedBaselines: correctedBaselines.map(clonePoints),
@@ -368,6 +363,16 @@ export async function animateBioCorrectionMorph(
     prepared: PreparedBioCorrectionState,
     curvesData: CurveData[],
 ): Promise<{ correctedCurvesData: CurveData[]; newLxCurves: any[]; newIncrementalSnapshots: LxSnapshot[] | null }> {
+    // Turbo skip: render the final frame immediately, no animation.
+    if (isTurboActive()) {
+        renderBioCorrectionFrame(prepared.frameInput, curvesData, 1);
+        finalizeBioCorrectionPeakDescriptors(prepared.correctedCurvesData, prepared.newLxCurves);
+        return {
+            correctedCurvesData: prepared.correctedCurvesData,
+            newLxCurves: prepared.newLxCurves,
+            newIncrementalSnapshots: prepared.newIncrementalSnapshots,
+        };
+    }
     await new Promise<void>(resolve => {
         const safetyTimer = setTimeout(resolve, BIO_CORRECTION_MORPH_MS + 3000);
         const startTime = performance.now();

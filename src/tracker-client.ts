@@ -5,7 +5,7 @@
  * sends JPEG frames from the camera, and receives JSON tracking results
  * with per-object position/pose data.
  *
- * Standalone module — no dependencies on Cortex Loop internals.
+ * Standalone module — no dependencies on Lx.Studio internals.
  */
 
 // --- Binary protocol opcodes (must match backend protocol.py) ---

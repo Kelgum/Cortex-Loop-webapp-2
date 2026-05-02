@@ -1,30 +1,30 @@
 export const STORAGE_KEYS = {
-    selectedLlm: 'cortex_llm',
-    maxEffects: 'cortex_max_effects',
-    sherlockEnabled: 'cortex_sherlock_enabled',
-    theme: 'cortex_theme',
-    ribbonCollapsed: 'cortex_ribbon_collapsed',
-    pipelineCollapsed: 'cortex_pipeline_collapsed',
-    startAtPhase: 'cortex_start_phase',
-    lastBioDevices: 'cortex_last_bio_devices',
-    debugBundleAutoSave: 'cortex_debug_bundle_autosave',
-    savedCyclesIndex: 'cortex_saved_cycles_index',
-    loadedCycleId: 'cortex_loaded_cycle_id',
-    abOverlayPos: 'cortex_ab_overlay_pos',
-    abOverlayCollapsed: 'cortex_ab_overlay_collapsed',
-    llmLog: 'cortex_llm_log',
-    bandBrightness: 'cortex_band_brightness',
-    presetsCollapsed: 'cortex_presets_collapsed',
-    appMode: 'cortex_app_mode',
-    streamCardDensity: 'cortex_stream_card_density',
-    streamCardChrome: 'cortex_stream_card_chrome',
-    streamTitleScale: 'cortex_stream_title_scale',
-    streamTitleColorIntensity: 'cortex_stream_title_color_intensity',
-    streamBadgeIntensity: 'cortex_stream_badge_intensity',
-    customSectionTitles: 'cortex_custom_section_titles',
-    customSectionEffects: 'cortex_custom_section_effects',
-    customSectionNegativeTags: 'cortex_custom_section_negative_tags',
-    sectionOrder: 'cortex_section_order',
+    selectedLlm: 'lx_studio_llm',
+    maxEffects: 'lx_studio_max_effects',
+    sherlockEnabled: 'lx_studio_sherlock_enabled',
+    theme: 'lx_studio_theme',
+    ribbonCollapsed: 'lx_studio_ribbon_collapsed',
+    pipelineCollapsed: 'lx_studio_pipeline_collapsed',
+    startAtPhase: 'lx_studio_start_phase',
+    lastBioDevices: 'lx_studio_last_bio_devices',
+    debugBundleAutoSave: 'lx_studio_debug_bundle_autosave',
+    savedCyclesIndex: 'lx_studio_saved_cycles_index',
+    loadedCycleId: 'lx_studio_loaded_cycle_id',
+    abOverlayPos: 'lx_studio_ab_overlay_pos',
+    abOverlayCollapsed: 'lx_studio_ab_overlay_collapsed',
+    llmLog: 'lx_studio_llm_log',
+    bandBrightness: 'lx_studio_band_brightness',
+    presetsCollapsed: 'lx_studio_presets_collapsed',
+    appMode: 'lx_studio_app_mode',
+    streamCardDensity: 'lx_studio_stream_card_density',
+    streamCardChrome: 'lx_studio_stream_card_chrome',
+    streamTitleScale: 'lx_studio_stream_title_scale',
+    streamTitleColorIntensity: 'lx_studio_stream_title_color_intensity',
+    streamBadgeIntensity: 'lx_studio_stream_badge_intensity',
+    streamScoreWeight: 'lx_studio_stream_score_weight',
+    streamScoreScale: 'lx_studio_stream_score_scale',
+    streamShowPrompt: 'lx_studio_stream_show_prompt',
+    sectionOrder: 'lx_studio_section_order',
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];
@@ -106,13 +106,13 @@ export const settingsStore = new SettingsStore('local');
 export const sessionSettingsStore = new SettingsStore('session');
 
 export function stageModelKey(stage: string): string {
-    return `cortex_stage_${stage}`;
+    return `lx_studio_stage_${stage}`;
 }
 
 export function stageProviderKey(stage: string): string {
-    return `cortex_stage_provider_${stage}`;
+    return `lx_studio_stage_provider_${stage}`;
 }
 
 export function providerApiKeyKey(provider: string): string {
-    return `cortex_key_${provider}`;
+    return `lx_studio_key_${provider}`;
 }

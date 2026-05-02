@@ -7,7 +7,7 @@
  */
 
 import { LLMCache } from './llm-cache';
-import { PhaseState, AppState, TimelineState, MultiDayState } from './state';
+import { PhaseState, AppState, MultiDayState } from './state';
 import { settingsStore, sessionSettingsStore, STORAGE_KEYS } from './settings-store';
 import { generateCycleIconSvg, generateCycleIconFromBundle, generateWideIconFromBundle } from './cycle-icon';
 import {
@@ -24,16 +24,92 @@ import {
     initCycleStore,
 } from './cycle-store';
 import type { SavedCycleRecord } from './cycle-store';
-import { getCompletedStageClassesForPhase } from './cache-policy';
 import { SUBSTANCE_DB } from './substances';
 import { initCustomSectionsStore } from './custom-sections-store';
 import { initSectionOrder } from './mode-switcher';
+import { initBuiltinOverridesStore } from './builtin-overrides-store';
 import { compute7DEffectScores, computeDesignEffectScores, EFFECT_SCORE_FORMULA_VERSION } from './effect-score';
+import { computeProtocolConfidence, CONFIDENCE_FORMULA_VERSION } from './protocol-confidence';
 
 let _saveBtn: HTMLButtonElement | null = null;
-let _breakBtn: HTMLButtonElement | null = null;
 let _cycleList: HTMLElement | null = null;
 let _unsubCache: (() => void) | null = null;
+let _phaseJumpInited = false;
+let _phaseJumpHoverTimer: number | null = null;
+
+function syncReplayMode(): void {
+    const isReplay = !!PhaseState.loadedCycleId;
+    document.body.classList.toggle('replay-mode', isReplay);
+    if (!isReplay) {
+        document.body.classList.remove('show-phase-jump');
+    }
+}
+
+const PHASE_JUMP_PINNED_KEY = 'lx_studio_phase_jump_pinned';
+
+function getPinnedPhase(): number | null {
+    const raw = sessionSettingsStore.getString(PHASE_JUMP_PINNED_KEY);
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+}
+
+function updateActivePhaseTab(): void {
+    const tabs = document.querySelectorAll<HTMLButtonElement>('.phase-jump-tab');
+    const pinned = getPinnedPhase();
+    const current = pinned != null ? pinned : PhaseState.viewingPhase;
+    tabs.forEach(tab => {
+        const idx = Number(tab.dataset.phase);
+        tab.classList.toggle('is-active', idx === current);
+    });
+}
+
+function initPhaseJumpBand(): void {
+    if (_phaseJumpInited) return;
+    const wrap = document.querySelector<HTMLElement>('.prompt-form-wrap');
+    const band = document.getElementById('phase-jump-band');
+    if (!wrap || !band) return;
+    _phaseJumpInited = true;
+
+    const show = () => {
+        if (!PhaseState.loadedCycleId) return;
+        if (_phaseJumpHoverTimer !== null) {
+            window.clearTimeout(_phaseJumpHoverTimer);
+            _phaseJumpHoverTimer = null;
+        }
+        document.body.classList.add('show-phase-jump');
+        updateActivePhaseTab();
+    };
+    const hide = () => {
+        if (_phaseJumpHoverTimer !== null) {
+            window.clearTimeout(_phaseJumpHoverTimer);
+        }
+        _phaseJumpHoverTimer = window.setTimeout(() => {
+            document.body.classList.remove('show-phase-jump');
+        }, 400);
+    };
+
+    // Single hover zone: .prompt-form-wrap contains the form AND the band
+    // (the band is a child of .prompt-form-wrap), so moving the cursor among
+    // field / tabs / spaces between never leaves the hover zone.
+    wrap.addEventListener('mouseenter', show);
+    wrap.addEventListener('mouseleave', hide);
+
+    band.addEventListener('click', e => {
+        const target = (e.target as HTMLElement).closest<HTMLButtonElement>('.phase-jump-tab');
+        if (!target) return;
+        const phase = Number(target.dataset.phase);
+        if (!Number.isFinite(phase)) return;
+        // Same mechanism as the settings "Start at phase" dropdown:
+        // persist turboTargetPhase and reload — the loaded cycle auto-submits
+        // and the pipeline turbo-skips to the selected phase using cached data.
+        AppState.turboTargetPhase = phase;
+        settingsStore.setString(STORAGE_KEYS.startAtPhase, String(phase));
+        sessionSettingsStore.setString(PHASE_JUMP_PINNED_KEY, String(phase));
+        updateActivePhaseTab();
+        window.location.reload();
+    });
+}
 
 function formatDate(iso: string): string {
     try {
@@ -77,12 +153,26 @@ async function handleSave(): Promise<void> {
         .slice(0, 3)
         .map((e: any) => (typeof e === 'string' ? e : e.name || ''));
 
-    // curveEffects is for CARD BADGE DISPLAY only — aligned 1:1 with effectScores
-    // indices (max 2) so the big % label reflects the actual curve it came from.
-    const curveEffects = (PhaseState.curvesData || [])
-        .slice(0, 2)
-        .map((c: any) => (c && typeof c.effect === 'string' ? c.effect : ''))
-        .filter((s: string) => s.length > 0);
+    // curveEffects / curveColors / curvePolarities are three parallel arrays
+    // aligned 1:1 with effectScores indices (max 2). Walk curvesData once so
+    // they stay in lockstep if any entry is dropped for missing fields.
+    //   - curveEffects  → big %-label curve name on the stream card
+    //   - curveColors   → per-score color (avoids falling through to a shared
+    //                     badge-category color when two curves belong to the
+    //                     same category)
+    //   - curvePolarities → sign of the %-label (`−` for higher_is_worse, so
+    //                     "reduce gastric distress by 63%" doesn't render as
+    //                     "+63% GASTRIC DISTRESS" and look like an increase)
+    const curveEffects: string[] = [];
+    const curveColors: string[] = [];
+    const curvePolarities: string[] = [];
+    for (const c of (PhaseState.curvesData || []).slice(0, 2)) {
+        const effect = c && typeof c.effect === 'string' ? c.effect : '';
+        if (!effect) continue;
+        curveEffects.push(effect);
+        curveColors.push(c && typeof c.color === 'string' ? c.color : '');
+        curvePolarities.push(c && c.polarity === 'higher_is_worse' ? 'higher_is_worse' : 'higher_is_better');
+    }
 
     const isExtendedCycle = PhaseState.timeHorizon && PhaseState.timeHorizon.mode !== 'daily';
     // For extended (28-day) cycles, try the panoramic wide icon first
@@ -124,6 +214,10 @@ async function handleSave(): Promise<void> {
     }
     if (effectScores && !effectScores.some(s => s > 0)) effectScores = undefined;
 
+    // Aggregate protocol confidence from per-substance dataConfidence tiers
+    const ivKeys = ivList.map((iv: any) => iv.key).filter(Boolean);
+    const confidenceResult = computeProtocolConfidence(ivKeys);
+
     const record: SavedCycleRecord = {
         id,
         filename,
@@ -135,6 +229,8 @@ async function handleSave(): Promise<void> {
         hookSentence: PhaseState.hookSentence || null,
         topEffects,
         curveEffects: curveEffects.length > 0 ? curveEffects : undefined,
+        curveColors: curveColors.length > 0 ? curveColors : undefined,
+        curvePolarities: curvePolarities.length > 0 ? curvePolarities : undefined,
         badgeCategory: PhaseState.badgeCategory || null,
         iconSvg,
         recommendedDevices,
@@ -142,6 +238,8 @@ async function handleSave(): Promise<void> {
         timeHorizon: PhaseState.timeHorizon || undefined,
         effectScores,
         effectScoresVersion: effectScores ? EFFECT_SCORE_FORMULA_VERSION : undefined,
+        protocolConfidence: confidenceResult?.score,
+        confidenceVersion: confidenceResult ? CONFIDENCE_FORMULA_VERSION : undefined,
         bundle,
     };
 
@@ -154,39 +252,8 @@ async function handleSave(): Promise<void> {
     }
 }
 
-// ── Break Button ─────────────────────────────────────────────────────
-
-function updateBreakButtonVisibility(): void {
-    if (!_breakBtn) return;
-    _breakBtn.style.display = PhaseState.loadedCycleId ? '' : 'none';
-    _breakBtn.disabled = !!TimelineState.interactionLocked;
-}
-
-function handleBreak(): void {
-    if (!_breakBtn || !PhaseState.loadedCycleId) return;
-
-    const allStages = LLMCache.breakFromCache();
-
-    LLMCache.startLiveFlow();
-    const completed = getCompletedStageClassesForPhase(PhaseState.maxPhaseReached);
-    for (const sc of completed) {
-        if (allStages[sc]) {
-            LLMCache.set(sc, allStages[sc].payload, allStages[sc].meta);
-        }
-    }
-
-    PhaseState.loadedCycleId = null;
-    clearLoadedCycleId();
-
-    const form = document.getElementById('prompt-form');
-    const input = document.getElementById('prompt-input') as HTMLInputElement | null;
-    if (form) form.classList.remove('prompt-loaded');
-    if (input) input.readOnly = false;
-
-    const submit = document.getElementById('prompt-submit') as HTMLButtonElement | null;
-    if (submit) submit.style.display = '';
-    _breakBtn.style.display = 'none';
-}
+// Break-from-cache functionality removed — the submit arrow is simply
+// dimmed (via body.replay-mode CSS) while a loaded cycle is being replayed.
 
 // ── Cycle List in Settings ───────────────────────────────────────────
 
@@ -378,9 +445,9 @@ async function handleLoadCycle(id: string): Promise<void> {
 
         // Persist timeHorizon so extended cycles route correctly on reload
         if (entry.timeHorizon) {
-            sessionSettingsStore.setJson('cortex_loaded_time_horizon', entry.timeHorizon);
+            sessionSettingsStore.setJson('lx_studio_loaded_time_horizon', entry.timeHorizon);
         } else {
-            sessionSettingsStore.remove('cortex_loaded_time_horizon');
+            sessionSettingsStore.remove('lx_studio_loaded_time_horizon');
         }
 
         // Store prompt for auto-submit after reload (sessionStorage for immediate,
@@ -390,7 +457,7 @@ async function handleLoadCycle(id: string): Promise<void> {
             rxMode: entry.rxMode,
             timestamp: Date.now(),
         };
-        sessionSettingsStore.setJson('cortex_pending_prompt_after_hard_reset_v1', payload);
+        sessionSettingsStore.setJson('lx_studio_pending_prompt_after_hard_reset_v1', payload);
 
         window.location.reload();
     } catch (err) {
@@ -427,53 +494,51 @@ function applyLoadedCycleState(): void {
     }
 
     PhaseState.loadedCycleId = loadedId;
+    syncReplayMode();
 
     // Restore timeHorizon for extended cycles so pipeline routes correctly
-    const savedHorizon = sessionSettingsStore.getJson<any>('cortex_loaded_time_horizon', null);
+    const savedHorizon = sessionSettingsStore.getJson<any>('lx_studio_loaded_time_horizon', null);
     if (savedHorizon && savedHorizon.mode && savedHorizon.mode !== 'daily') {
         PhaseState.timeHorizon = savedHorizon;
     }
 
+    // In Stream mode the prompt input is a search bar — don't lock it
+    const isStream = document.body.classList.contains('mode-stream');
     const form = document.getElementById('prompt-form');
     const input = document.getElementById('prompt-input') as HTMLInputElement | null;
     const submit = document.getElementById('prompt-submit') as HTMLButtonElement | null;
 
-    if (form) form.classList.add('prompt-loaded');
-    if (input) {
-        input.readOnly = true;
-        input.value = entry.prompt;
+    if (!isStream) {
+        if (form) form.classList.add('prompt-loaded');
+        if (input) {
+            input.readOnly = true;
+            input.value = entry.prompt;
+        }
     }
-    if (submit) submit.style.display = 'none';
-    if (_breakBtn) _breakBtn.style.display = '';
+    if (submit) submit.style.display = '';
 }
 
 // ── Init ─────────────────────────────────────────────────────────────
 
 export async function initCycleUi(): Promise<void> {
-    await initCycleStore();
-    await initCustomSectionsStore();
-    await initSectionOrder();
+    await Promise.all([initCycleStore(), initCustomSectionsStore(), initSectionOrder(), initBuiltinOverridesStore()]);
 
     _saveBtn = document.getElementById('cycle-save-btn') as HTMLButtonElement | null;
-    _breakBtn = document.getElementById('cycle-break-btn') as HTMLButtonElement | null;
     _cycleList = document.getElementById('saved-cycles-list');
 
     if (_saveBtn) {
         _saveBtn.addEventListener('click', () => void handleSave());
     }
-    if (_breakBtn) {
-        _breakBtn.addEventListener('click', () => handleBreak());
-    }
 
     _unsubCache = LLMCache.subscribe(() => {
         updateSaveButtonVisibility();
-        updateBreakButtonVisibility();
     });
 
     applyLoadedCycleState();
     renderCycleList();
     updateSaveButtonVisibility();
-    updateBreakButtonVisibility();
+    initPhaseJumpBand();
+    syncReplayMode();
 }
 
 export { _unsubCache };

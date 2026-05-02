@@ -1299,6 +1299,59 @@ export async function callFastModel(prompt: string): Promise<StageResultMap['fas
 }
 
 // ============================================
+// 10b.1 SOCRx MODEL — Standard-of-Care Rx Prescriber (Lx|Rx contrast)
+// ============================================
+
+export function buildSocrxSystemPrompt(
+    userGoal: string,
+    curvesData: any[],
+    day0Lx: any[],
+    badgeCategory: string,
+): string {
+    const effectRoster = (curvesData || []).map((c: any, idx: number) => ({
+        idx,
+        effect: c?.effect,
+        polarity: c?.polarity || 'higher_is_better',
+    }));
+    const day0Summary = (day0Lx || []).map((iv: any) => ({
+        key: iv?.key,
+        name: iv?.substance?.name,
+        dose: iv?.dose,
+        timeMinutes: iv?.timeMinutes,
+        targetEffect: iv?.targetEffect,
+    }));
+    return interpolatePrompt(PROMPTS.socrx, {
+        userGoal: userGoal || '',
+        badgeCategory: badgeCategory || '',
+        effectRoster: JSON.stringify(effectRoster, null, 1),
+        day0LxSummary: JSON.stringify(day0Summary, null, 1),
+        substanceList: buildSubstanceListSummary(),
+    });
+}
+
+export async function callSocrxModel(
+    userGoal: string,
+    curvesData: any[],
+    day0Lx: any[],
+    badgeCategory: string,
+): Promise<StageResultMap['socrx']> {
+    const stageClass = 'socrx-model';
+    const systemPrompt = buildSocrxSystemPrompt(userGoal, curvesData, day0Lx, badgeCategory);
+    const userPrompt = `Prescribe the standard-of-care first-line Rx for this patient. Condition / goal: ${userGoal || '(unspecified)'}`;
+
+    const result = await runCachedStage<StageResultMap['socrx']>({
+        stage: 'socrx',
+        stageLabel: 'SOCRx',
+        stageClass,
+        systemPrompt,
+        userPrompt,
+        maxTokens: 1024,
+    });
+
+    return result;
+}
+
+// ============================================
 // 10c. MAIN MODEL — Pharmacodynamic Curves
 // ============================================
 
@@ -1673,14 +1726,18 @@ export async function callInterventionModel(prompt: string, curvesData: any): Pr
             stageClass,
             maxTokens: 8192,
         });
+    }
 
-        // Concurrent density pruning — remove low-value substances from over-dense clusters
-        if (result.interventions?.length) {
-            const validated = validateInterventions(result.interventions, curvesData);
-            const { pruned, removed } = pruneConcurrentOverload(validated, curvesData);
-            if (removed.length > 0) {
-                result = { ...result, interventions: pruned };
-                // Re-validate stacking after rescaling
+    // Concurrent density pruning — runs on both fresh and cached results so saved
+    // cycles populated before the pruner existed still honor the density cap.
+    // Deterministic and idempotent, so re-running on already-pruned data is a no-op.
+    if (curvesData && result.interventions?.length) {
+        const validated = validateInterventions(result.interventions, curvesData);
+        const { pruned, removed } = pruneConcurrentOverload(validated, curvesData);
+        if (removed.length > 0) {
+            result = { ...result, interventions: pruned };
+            if (!isCached) {
+                // Re-validate stacking after rescaling (LLM correction only on fresh calls)
                 result = await correctStackingIfNeeded(result, curvesData, systemPrompt, {
                     stageLabel: 'Chess Player (post-prune)',
                     stageClass,
@@ -1688,7 +1745,9 @@ export async function callInterventionModel(prompt: string, curvesData: any): Pr
                 });
             }
         }
+    }
 
+    if (!isCached) {
         // Persist the finalized payload, not the pre-correction draft cached by runCachedStage().
         // Otherwise saved/replayed cycles can reuse stale impact vectors while the live run used
         // the corrected intervention set to render the Lx curves.
@@ -1789,13 +1848,16 @@ export async function callRevisionModel(
             stageClass,
             maxTokens: 8192,
         });
+    }
 
-        // Concurrent density pruning — remove low-value substances from over-dense clusters
-        if (result.interventions?.length) {
-            const validated = validateInterventions(result.interventions, PhaseState.curvesData);
-            const { pruned, removed } = pruneConcurrentOverload(validated, PhaseState.curvesData);
-            if (removed.length > 0) {
-                result = { ...result, interventions: pruned };
+    // Concurrent density pruning — runs on both fresh and cached results so saved
+    // cycles populated before the pruner existed still honor the density cap.
+    if (PhaseState.curvesData && result.interventions?.length) {
+        const validated = validateInterventions(result.interventions, PhaseState.curvesData);
+        const { pruned, removed } = pruneConcurrentOverload(validated, PhaseState.curvesData);
+        if (removed.length > 0) {
+            result = { ...result, interventions: pruned };
+            if (!isCached) {
                 result = await correctStackingIfNeeded(result, PhaseState.curvesData, systemPrompt, {
                     stageLabel: 'Grandmaster (post-prune)',
                     stageClass,
@@ -1803,7 +1865,9 @@ export async function callRevisionModel(
                 });
             }
         }
+    }
 
+    if (!isCached) {
         // Keep the persisted bundle aligned with the corrected revision actually rendered live.
         persistPostProcessedStageResult(stageClass, systemPrompt, userPrompt, result);
     }

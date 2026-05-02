@@ -1,4 +1,4 @@
-# Cortex Loop
+# Lx.Studio
 
 ## What This Is
 
@@ -229,6 +229,12 @@ tests/
 - **Global state lives in `state.ts` only.** Don't scatter mutable state across modules
 - **Prompts live in `prompts.ts` only.** Don't embed prompt text in pipeline code
 - **Substance data lives in `substances.ts` only**
+
+### Persistence
+- **The root folder is the portable unit.** All user-facing state — settings, toggles, presets, cycles, section order, overrides — must be filesystem-persisted so it survives across browsers, Vite restarts, and copying the folder to another machine. Never rely on localStorage/sessionStorage as the source of truth.
+- **Pattern:** Add a Vite plugin with `GET/PUT` JSON endpoints (e.g. `/__presets`) backed by a JSON file in the repo root. The plugin hooks into both `configureServer` and `configurePreviewServer`. See `vite.config.ts` for existing examples: `presetStoragePlugin`, `cycleStoragePlugin`, `sectionOrderPlugin`, `customSectionsPlugin`, `builtinOverridesPlugin`, `abTestPlugin`.
+- **localStorage as cache only.** localStorage may be used as a fast read-through cache at startup, but the filesystem JSON is authoritative. On load, fetch the filesystem state and apply it (overriding any stale localStorage values).
+- **Gitignore user state files.** Preset files, cycle data, and other per-machine config belong in `.gitignore` — they're portable across sessions but not committed to the repo.
 
 ### Animation Engine Contract
 - Segments must be **re-entrant and idempotent** — `render(progress)` can be called at any time

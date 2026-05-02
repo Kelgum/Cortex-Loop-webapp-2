@@ -1,8 +1,8 @@
-# Cortex Loop — Application Spec
+# Lx.Studio — Application Spec
 
 ## Overview
 
-Cortex Loop is a prompt-driven pharmacodynamic visualizer. The user describes a desired cognitive/physical outcome (e.g. "4 hours of deep focus"), and a multi-stage LLM pipeline: (1) identifies relevant pharmacodynamic effects, (2) models 24-hour baseline vs desired curves, (3) selects an optimal supplement intervention protocol, and (4) uses a Biometric Loop to adjust the intervention based on simulated physiological data — all visualized as animated SVG charts with interactive before/after comparison.
+Lx.Studio is a prompt-driven pharmacodynamic visualizer. The user describes a desired cognitive/physical outcome (e.g. "4 hours of deep focus"), and a multi-stage LLM pipeline: (1) identifies relevant pharmacodynamic effects, (2) models 24-hour baseline vs desired curves, (3) selects an optimal supplement intervention protocol, and (4) uses a Biometric Loop to adjust the intervention based on simulated physiological data — all visualized as animated SVG charts with interactive before/after comparison.
 
 **Stack:** Vanilla HTML/CSS/TypeScript. Powered by Vite for local development and build. Single-page app served from `index.html`.
 
@@ -164,7 +164,7 @@ Rx and Controlled substances are hidden by default. The user enables them via to
 
 ### Agent Naming Scheme
 
-The pipeline uses **agents** as the generic term for each LLM-powered stage (not "model" or "LLM"). The collection of agents is referred to as **The Cortex** or **The Loop**.
+The pipeline uses **agents** as the generic term for each LLM-powered stage (not "model" or "LLM"). The collection of agents is referred to as **Lx.Studio** or **The Loop**.
 
 **Individual agent names** (Chess/Strategy theme):
 
@@ -198,7 +198,7 @@ These names appear in the Debug Panel (e.g. "Scout", "Chess Player") and in docu
 
 OpenAI selectable tiers are GPT-5.3 Instant, GPT-5.4, and GPT-5.4 Thinking. In the current Chat Completions integration, "GPT-5.4 Thinking" is implemented as `gpt-5.4` with elevated reasoning effort.
 
-API keys stored in `localStorage` (`cortex_key_{provider}`). Model selection stored as `cortex_llm` and per-stage defaults. Falls back to `config.js` if present.
+API keys stored in `localStorage` (`lx_studio_key_{provider}`). Model selection stored as `lx_studio_llm` and per-stage defaults. Falls back to `config.js` if present.
 
 ### Pipeline Stages
 
@@ -667,7 +667,7 @@ The codebase has been refactored into a modern Vite + TypeScript setup.
 
 ## Debug Panel
 
-Slide-in panel (right side, 480px wide) showing the full pipeline (The Cortex).
+Slide-in panel (right side, 480px wide) showing the full pipeline (Lx.Studio).
 - **Agent entries**: Scout, Strategist, Chess Player, Spotter, Grandmaster (see Agent Naming Scheme)
 - User Input and Error entries for bookends
 - Includes elapsed time, request/response bodies, and raw JSON toggle
@@ -699,7 +699,7 @@ The phase chart + VCR + biometric flow is the only active UI path. If a module i
 
 1. **Pure SVG** for all visualizations — no Canvas, no external chart libs
 2. **Multi-stage LLM pipeline** — parallel execution where possible, separated concerns
-3. **Agent naming** — "agent" as generic term; Chess theme (Scout, Strategist, Chess Player, Spotter, Grandmaster); "The Cortex" or "The Loop" for the collection
+3. **Agent naming** — "agent" as generic term; Chess theme (Scout, Strategist, Chess Player, Spotter, Grandmaster); "Lx.Studio" or "The Loop" for the collection
 4. **Robust JSON extraction** — custom parser to handle LLM quirks
 5. **requestAnimationFrame** for all continuous animations (scan line, playhead drag, morphing)
 6. **Incremental Lx reveal** — substances animate in showing cumulative effect via AUC bands

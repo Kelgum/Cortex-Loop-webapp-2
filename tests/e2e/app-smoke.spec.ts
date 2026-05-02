@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 const CACHE_SCHEMA = 1;
 const PROMPT = '4 hours of deep focus, no sleep quality impact';
+const STREAM_CARD_ID = 'stream-card-expand-test';
 const HOURS = Array.from({ length: 25 }, (_, idx) => 6 + idx);
 
 function buildCurve(effect: string, color: string, baselineBase: number, desiredBase: number) {
@@ -36,14 +37,92 @@ function buildChannelData(base: number, amplitude: number) {
 
 function buildCacheEnvelope(stageClass: string, payload: unknown) {
     return JSON.stringify({
-        __cortexCache: CACHE_SCHEMA,
+        __lxStudioCache: CACHE_SCHEMA,
         payload,
         meta: {
             stageClass,
-            cacheKey: `cortex_cache_${stageClass}`,
+            cacheKey: `lx_studio_cache_${stageClass}`,
             cachedAt: '2026-03-06T00:00:00.000Z',
         },
     });
+}
+
+function buildStreamCardIcon() {
+    return (
+        `<svg data-v="10" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" preserveAspectRatio="xMidYMid slice">` +
+        `<rect class="ci-bg" width="200" height="120" rx="8"/>` +
+        `<rect x="18" y="18" width="164" height="84" rx="12" fill="rgba(96,165,250,0.16)"/>` +
+        `<circle cx="58" cy="60" r="18" fill="rgba(52,211,153,0.48)"/>` +
+        `<path d="M92 42h58v10H92z" fill="rgba(255,255,255,0.22)"/>` +
+        `<path d="M92 60h42v8H92z" fill="rgba(255,255,255,0.16)"/>` +
+        `<rect class="ci-frame" x="20" y="20" width="160" height="80" rx="10" fill="none"/>` +
+        `</svg>`
+    );
+}
+
+function buildStreamCardRecord() {
+    const curves = [
+        buildCurve('Focus', '#60a5fa', 32, 70),
+        buildCurve('Calm', '#34d399', 38, 60),
+    ];
+
+    const indexEntry = {
+        id: STREAM_CARD_ID,
+        filename: 'Focus Reset',
+        overlayTitle: 'Focus Reset',
+        prompt: 'Sharper focus with steadier calm across a full work block.',
+        maxEffects: 2,
+        rxMode: 'none',
+        savedAt: '2026-04-10T09:00:00.000Z',
+        hookSentence: 'Sharpen the sprint without fraying the edges.',
+        topEffects: ['Focus', 'Calm'],
+        curveEffects: ['Focus', 'Calm'],
+        curveColors: ['#60a5fa', '#34d399'],
+        curvePolarities: ['higher_is_better', 'higher_is_better'],
+        badgeCategory: 'Neuro',
+        iconSvg: buildStreamCardIcon(),
+        recommendedDevices: ['watch'],
+        substanceClasses: ['Nootropic', 'Adaptogen'],
+        timeHorizon: { durationDays: 28, mode: 'program' },
+        effectScores: [58, 41],
+        effectScoresVersion: 1,
+        protocolConfidence: 72,
+        confidenceVersion: 1,
+    };
+
+    const record = {
+        ...indexEntry,
+        createdAt: '2026-04-10T09:00:00.000Z',
+        bundle: {
+            stages: {
+                'fast-model': {
+                    payload: {
+                        hookSentence: 'Sharpen the sprint without fraying the edges.',
+                    },
+                },
+                'main-model': {
+                    payload: {
+                        curves,
+                    },
+                },
+                'intervention-model': {
+                    payload: {
+                        interventions: [
+                            { key: 'caffeineIR', timeMinutes: 495, dose: '100mg', targetEffect: 'Focus' },
+                            { key: 'lTheanine', timeMinutes: 525, dose: '200mg', targetEffect: 'Calm' },
+                        ],
+                    },
+                },
+                'sherlock-model': {
+                    payload: {
+                        beats: [],
+                    },
+                },
+            },
+        },
+    };
+
+    return { indexEntry, record };
 }
 
 async function seedCachedPipeline(page: Page) {
@@ -142,13 +221,13 @@ async function seedCachedPipeline(page: Page) {
         ({ enabledMap, entries }) => {
             window.localStorage.clear();
             window.sessionStorage.clear();
-            window.localStorage.setItem('cortex_sherlock_enabled', 'false');
-            window.localStorage.setItem('cortex_llm', 'anthropic');
-            window.localStorage.setItem('cortex_cache_enabled', JSON.stringify(enabledMap));
-            window.localStorage.setItem('cortex_theme', 'dark');
-            window.localStorage.setItem('cortex_max_effects', '2');
+            window.localStorage.setItem('lx_studio_sherlock_enabled', 'false');
+            window.localStorage.setItem('lx_studio_llm', 'anthropic');
+            window.localStorage.setItem('lx_studio_cache_enabled', JSON.stringify(enabledMap));
+            window.localStorage.setItem('lx_studio_theme', 'dark');
+            window.localStorage.setItem('lx_studio_max_effects', '2');
             for (const [stageClass, payload] of Object.entries(entries)) {
-                window.localStorage.setItem(`cortex_cache_${stageClass}`, JSON.stringify(payload));
+                window.localStorage.setItem(`lx_studio_cache_${stageClass}`, JSON.stringify(payload));
             }
         },
         {
@@ -255,4 +334,73 @@ test('replays the cached prompt-to-biometric flow', async ({ page }) => {
     }, undefined, { timeout: 20_000 });
 
     await expect(page.locator('#phase-biometric-strips')).toBeVisible();
+});
+
+test('stages stream card expansion before revealing expanded content', async ({ page }) => {
+    const { indexEntry, record } = buildStreamCardRecord();
+
+    await page.route('**/__cycles/index', async route => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify([indexEntry]),
+        });
+    });
+
+    await page.route(`**/__cycles/${STREAM_CARD_ID}`, async route => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(record),
+        });
+    });
+
+    await page.addInitScript(() => {
+        window.localStorage.clear();
+        window.sessionStorage.clear();
+        window.localStorage.setItem('lx_studio_theme', 'dark');
+    });
+
+    await page.goto('/#stream');
+
+    await expect(page.locator('body')).toHaveClass(/mode-stream/);
+
+    const card = page.locator(`.stream-section .cg-card[data-cycle-id="${STREAM_CARD_ID}"]`).first();
+    await expect(card).toBeVisible({ timeout: 10_000 });
+    await card.click();
+
+    const clone = page.locator('.cg-card.cg-card-expanded');
+    await expect(clone).toHaveCount(1);
+    await expect(card).toHaveCSS('visibility', 'hidden');
+
+    await page.waitForTimeout(120);
+    await expect(clone).toHaveAttribute('data-expand-stage', 'shell-open');
+    await expect(clone.locator(':scope > .cg-card-expand-panel')).toHaveCount(0);
+    await expect(clone.locator('.cg-card-overlay-title-ghost')).toBeVisible();
+    await expect(clone.locator('.cg-card-overlay-title-live')).toHaveCSS('opacity', '0');
+
+    await expect(clone).toHaveAttribute('data-expand-stage', 'open', { timeout: 2_000 });
+    await expect(clone.locator(':scope > .cg-card-expand-panel')).toBeVisible();
+    await expect(clone.locator(':scope > .cg-expand-close')).toBeVisible();
+    await expect(clone.locator('.cg-card-overlay-title-live')).toHaveCSS('opacity', '0');
+    await expect(clone.locator('.cg-card-overlay-title-ghost')).toBeVisible();
+    await expect(clone.locator('.cg-trailer-hero-svg')).toHaveCount(1);
+
+    const rightCol = clone.locator('.cg-expand-col-right');
+    const rightColBefore = await rightCol.boundingBox();
+
+    await expect(clone).toHaveAttribute('data-trailer-title', 'expanded', { timeout: 5_000 });
+    await page.waitForTimeout(300);
+
+    await expect(clone.locator('.cg-card-overlay-title-live')).toBeVisible();
+    await expect(clone.locator('.cg-trailer-hero-svg')).toHaveClass(/cg-trailer-hero-svg--visible/);
+    const rightColAfter = await rightCol.boundingBox();
+    expect(rightColBefore?.x).toBeDefined();
+    expect(rightColAfter?.x).toBeDefined();
+    expect(Math.abs((rightColAfter?.x ?? 0) - (rightColBefore?.x ?? 0))).toBeLessThan(2);
+
+    await page.mouse.click(10, 10);
+
+    await expect(page.locator('.cg-card.cg-card-expanded')).toHaveCount(0, { timeout: 2_000 });
+    await expect(card).toHaveCSS('visibility', 'visible');
 });

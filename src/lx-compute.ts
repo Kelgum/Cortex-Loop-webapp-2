@@ -10,7 +10,6 @@ import {
     substanceColorFromIndex,
     BACKGROUND_DURATION_THRESHOLD,
     CONCURRENT_SUBSTANCE_MAX,
-    CONCURRENT_KEEP_THRESHOLD,
     DAILY_SUBSTANCE_MAX,
     SUBSTANCE_MIN,
 } from './constants';
@@ -189,6 +188,13 @@ function buildCurveInfo(curvesData: any) {
     return curvesData.map((curve: any) => {
         const blSmoothed = smoothPhaseValues(curve.baseline, PHASE_SMOOTH_PASSES);
         const dsSmoothed = smoothPhaseValues(curve.desired, PHASE_SMOOTH_PASSES);
+        // Reference baseline for absolute effect sizing. Falls back to current
+        // baseline if no reference is stashed (first Phase 2 computation, or
+        // codepaths that don't use bio-correction).
+        const refBlSource = Array.isArray(curve.referenceBaseline) && curve.referenceBaseline.length > 0
+            ? curve.referenceBaseline
+            : curve.baseline;
+        const refBlSmoothed = smoothPhaseValues(refBlSource, PHASE_SMOOTH_PASSES);
         const polarity = curve.polarity || 'higher_is_better';
 
         // maxDesiredGap computed from smoothed curves — must match the smoothed
@@ -200,7 +206,7 @@ function buildCurveInfo(curvesData: any) {
         }
         if (maxDesiredGap < 1) maxDesiredGap = 1;
 
-        return { blSmoothed, dsSmoothed, polarity, maxDesiredGap };
+        return { blSmoothed, dsSmoothed, refBlSmoothed, polarity, maxDesiredGap };
     });
 }
 
@@ -329,6 +335,7 @@ export function computeLxOverlay(interventions: any, curvesData: any, fixedScale
 
     for (let ci = 0; ci < curvesData.length; ci++) {
         const lx = lxCurves[ci];
+        const refBlSmoothed = curveInfo[ci].refBlSmoothed;
         const curveName = (curvesData[ci].effect || '').toLowerCase();
 
         // Diagnostic: log which interventions match this curve
@@ -369,7 +376,7 @@ export function computeLxOverlay(interventions: any, curvesData: any, fixedScale
                 const baseVal = lx.baseline[j].value;
                 const scaledEffect = p.rawEffect * scaleFactor;
                 const value = baseVal + scaledEffect;
-                return { hour: p.hour, value: clamp(value, 0, 100) };
+                return { hour: p.hour, value: Math.max(0, value) };
             });
         } else {
             // ── Normalized path: impact vectors × local gap ──
@@ -387,10 +394,19 @@ export function computeLxOverlay(interventions: any, curvesData: any, fixedScale
                     if (contrib >= 0) posSum += contrib;
                     else negSum += contrib;
                 }
-                const localGap = lx.desired[j].value - bp.value;
-                const scaledEffect = posSum * localGap + negSum * Math.abs(localGap);
+                // Cap coverage so the Lx curve never fully closes the baseline→desired gap.
+                posSum = Math.min(posSum, LX_GAP_COVERAGE);
+                negSum = Math.max(negSum, -LX_GAP_COVERAGE);
+                // Use the REFERENCE (pre-bio-correction) baseline for gap sizing so the
+                // pharmacological effect is an absolute quantity, not one that magically
+                // scales up when the user's baseline gets worse. Lx = currentBaseline +
+                // fixedEffect so the Lx curve tracks baseline shifts (drops when the user
+                // has bad sleep, stays high when they're well-rested).
+                const refBaseValue = refBlSmoothed[j]?.value ?? bp.value;
+                const referenceGap = lx.desired[j].value - refBaseValue;
+                const scaledEffect = posSum * referenceGap + negSum * Math.abs(referenceGap);
                 const value = bp.value + scaledEffect;
-                return { hour: bp.hour, value: clamp(value, 0, 100) };
+                return { hour: bp.hour, value: Math.max(0, value) };
             });
         }
     }
@@ -426,7 +442,7 @@ export function computeIncrementalLxOverlay(interventions: any, curvesData: any,
                     }
                     const scaledEffect = rawEffect * globalScaleFactors![curveIdx];
                     const value = bp.value + scaledEffect;
-                    return { hour: bp.hour, value: clamp(value, 0, 100) };
+                    return { hour: bp.hour, value: Math.max(0, value) };
                 } else {
                     // Split positive (gap-filling) and negative (collateral) contributions
                     let posSum = 0;
@@ -436,10 +452,16 @@ export function computeIncrementalLxOverlay(interventions: any, curvesData: any,
                         if (contrib >= 0) posSum += contrib;
                         else negSum += contrib;
                     }
-                    const localGap = ci.dsSmoothed[j].value - bp.value;
-                    const scaledEffect = posSum * localGap + negSum * Math.abs(localGap);
+                    posSum = Math.min(posSum, LX_GAP_COVERAGE);
+                    negSum = Math.max(negSum, -LX_GAP_COVERAGE);
+                    // Use REFERENCE baseline for gap sizing — keeps Lx an absolute
+                    // pharmacological effect so bands shift with the baseline rather
+                    // than auto-scaling to re-fill a widened gap.
+                    const refBase = ci.refBlSmoothed[j]?.value ?? bp.value;
+                    const referenceGap = ci.dsSmoothed[j].value - refBase;
+                    const scaledEffect = posSum * referenceGap + negSum * Math.abs(referenceGap);
                     const value = bp.value + scaledEffect;
-                    return { hour: bp.hour, value: clamp(value, 0, 100) };
+                    return { hour: bp.hour, value: Math.max(0, value) };
                 }
             });
             return {
@@ -515,6 +537,40 @@ export function computeStackingPeaks(interventions: any[], curvesData: any[]): S
             peakNormSum: Math.round(peakNormSum * 100) / 100,
             peakHour,
             breakdown: peakBreakdown,
+        };
+    });
+}
+
+/**
+ * Compute per-hour stacking contributions at specific sample hours for one curve.
+ * Returns, for each requested hour: the summed normSum (Σ impact × doseMultiplier × PK fraction)
+ * and the per-substance contribution breakdown (substances with |contrib| < 1e-6 omitted).
+ *
+ * Used by the revision pipeline to show the LLM an explicit per-hour capacity map of
+ * the CURRENT protocol — so any revision can be compared numerically against the
+ * existing stacking floor and cannot silently drop coverage inside the mission window.
+ */
+export function computeHourlyStacking(
+    interventions: any[],
+    curvesData: any[],
+    curveIdx: number,
+    sampleHours: number[],
+): Array<{ hour: number; normSum: number; breakdown: StackingBreakdown[] }> {
+    return sampleHours.map(hour => {
+        const sampleMin = hour * 60;
+        let normSum = 0;
+        const breakdown: StackingBreakdown[] = [];
+        for (const iv of interventions || []) {
+            const contrib = ivNormalizedEffectAt(iv, curveIdx, sampleMin, curvesData);
+            if (Math.abs(contrib) > 1e-6) {
+                normSum += contrib;
+                breakdown.push({ key: iv.key, contribution: Math.round(contrib * 1000) / 1000 });
+            }
+        }
+        return {
+            hour,
+            normSum: Math.round(normSum * 1000) / 1000,
+            breakdown,
         };
     });
 }
@@ -683,7 +739,7 @@ function computeClusterContributions(
  * 1. Classify substances into background (long-acting) and tactical (time-targeted)
  * 2. Detect temporal clusters among tactical substances via interval merging
  * 3. For each cluster exceeding CONCURRENT_SUBSTANCE_MAX, remove weakest members
- *    (unless each contributes >= CONCURRENT_KEEP_THRESHOLD %)
+ *    until the cap is met (hard cap — no contribution-based exceptions)
  * 4. Apply DAILY_SUBSTANCE_MAX cap on total substances
  * 5. Rescale surviving substances' impacts to absorb freed budget
  *
@@ -694,13 +750,11 @@ export function pruneConcurrentOverload(
     curvesData: any[],
     opts?: {
         concurrentMax?: number;
-        keepThreshold?: number;
         dailyMax?: number;
         minSubstances?: number;
     },
 ): PruneResult {
     const concurrentMax = opts?.concurrentMax ?? CONCURRENT_SUBSTANCE_MAX;
-    const keepThreshold = opts?.keepThreshold ?? CONCURRENT_KEEP_THRESHOLD;
     const dailyMax = opts?.dailyMax ?? DAILY_SUBSTANCE_MAX;
     const minSubstances = opts?.minSubstances ?? SUBSTANCE_MIN;
 
@@ -746,20 +800,15 @@ export function pruneConcurrentOverload(
             if (excess <= 0) break;
             if (removedSet.has(iv)) continue;
 
-            const contrib = contributions.get(iv) || 0;
-            if (contrib >= keepThreshold) {
-                // This substance earns its slot — skip
-                continue;
-            }
-
             // Don't prune below minimum total
             const totalRemaining = interventions.length - removedSet.size;
             if (totalRemaining <= minSubstances) break;
 
+            const contrib = contributions.get(iv) || 0;
             removedSet.add(iv);
             removedInfo.push({
                 key: iv.key,
-                reason: `cluster density (${contrib}% < ${keepThreshold}% threshold)`,
+                reason: `cluster density (hard cap ${concurrentMax})`,
                 peakContribution: contrib,
             });
             excess--;
@@ -771,11 +820,11 @@ export function pruneConcurrentOverload(
         if (removedInCluster.length > 0) {
             const removedNames = removedInCluster.map(iv => `${iv.key} (${contributions.get(iv) || 0}%)`).join(', ');
             console.log(
-                `[Density] Cluster ${startH}h-${endH}h: ${cluster.members.length} tactical, cap=${concurrentMax} → removing ${removedNames}`,
+                `[Density] Cluster ${startH}h-${endH}h: ${cluster.members.length} tactical, hard cap=${concurrentMax} → removing ${removedNames}`,
             );
         } else {
             console.log(
-                `[Density] Cluster ${startH}h-${endH}h: ${cluster.members.length} tactical, cap=${concurrentMax} → all above ${keepThreshold}% threshold, keeping all`,
+                `[Density] Cluster ${startH}h-${endH}h: ${cluster.members.length} tactical, hard cap=${concurrentMax} → min-substance floor reached, keeping all`,
             );
         }
     }
@@ -944,8 +993,8 @@ export function computeExtendedLxOverlay(
 
             // Scale the total effect to map onto the gap
             // Normalized so that a total effect of ~1.0 covers LX_GAP_COVERAGE of the gap
-            const scaledEffect = gap !== 0 ? totalEffect * Math.abs(gap) * LX_GAP_COVERAGE : 0;
-            const overlayValue = clamp(bl + scaledEffect, 0, 100);
+            const scaledEffect = gap !== 0 ? totalEffect * gap * LX_GAP_COVERAGE : 0;
+            const overlayValue = Math.max(0, bl + scaledEffect);
 
             overlay.push({ day, value: overlayValue });
 

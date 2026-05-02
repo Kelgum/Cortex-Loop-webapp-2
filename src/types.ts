@@ -1,5 +1,5 @@
 // ============================================
-// Core domain types — Cortex Loop
+// Core domain types — Lx.Studio
 // ============================================
 
 import type { Destroyable, PlayheadTracker, TaskGroupController, TimelineEngineHandle } from './contracts';
@@ -26,7 +26,8 @@ export type PipelineStage =
     | 'sherlock7d'
     | 'curvesExtended'
     | 'interventionExtended'
-    | 'sherlockExtended';
+    | 'sherlockExtended'
+    | 'socrx';
 
 export type Provider = 'anthropic' | 'openai' | 'grok' | 'gemini';
 
@@ -87,6 +88,14 @@ export interface CurveData {
     color: string;
     baseline: CurvePoint[];
     desired: CurvePoint[];
+    /**
+     * Original (pre-bio-correction) baseline, stashed at initial Lx computation.
+     * Used as the reference for computing the absolute pharmacological effect size,
+     * so Lx contributions stay pharmacologically fixed when bio-correction later
+     * shifts the baseline (substances can't magically compensate for bad sleep).
+     * Fallback to `baseline` if unset.
+     */
+    referenceBaseline?: CurvePoint[];
     polarity?: 'higher_is_better' | 'higher_is_worse';
     levels?: CurveLevel[] | Record<string, string> | string[];
     directive?: 'improve' | 'keep';
@@ -197,12 +206,26 @@ export interface RevisionFitMetrics {
     effects: RevisionFitMetricEffect[];
 }
 
+export interface MissionHourStacking {
+    hour: number;
+    currentTotal: number;
+    breakdown: { key: string; contribution: number }[];
+}
+
+export interface EffectStackingAudit {
+    effect: string;
+    missionHours: MissionHourStacking[];
+    minMissionTotal: number;
+    peakMissionTotal: number;
+}
+
 export interface RevisionReferenceBundle {
     baselineCurves: RevisionCurveSeries[];
     desiredCurves: RevisionCurveSeries[];
     currentLxCurves: RevisionCurveSeries[];
     currentInterventions: Intervention[];
     gapSummary: RevisionGapSummary;
+    stackingAudit: EffectStackingAudit[];
     bioCorrectionApplied: boolean;
 }
 
@@ -470,6 +493,21 @@ export interface StrategistBioStageResult {
     correctedBaselines: DailySimulationBaselineEntry[];
 }
 
+export interface SocrxPick {
+    substanceKey: string;
+    dose: string;
+    timeMinutes: number;
+    targetCurveIdx: number;
+    targetEffect: string;
+    rationale: string;
+}
+
+export interface SocrxStageResult {
+    conditionLabel: string;
+    picks: SocrxPick[];
+    narrative: string;
+}
+
 export interface StageResultMap {
     fast: ScoutStageResult;
     curves: StrategistStageResult;
@@ -491,6 +529,7 @@ export interface StageResultMap {
     curvesExtended: ExtendedStrategistResult;
     interventionExtended: ExtendedInterventionResult;
     sherlockExtended: SherlockExtendedNarration;
+    socrx: SocrxStageResult;
 }
 
 export type StageRunner<TStage extends keyof StageResultMap> = (...args: unknown[]) => Promise<StageResultMap[TStage]>;
@@ -770,4 +809,5 @@ export interface IMultiDayState {
     sherlock7dReady: boolean;
     onDayAdvance: (() => void) | null;
     onSherlock7DSync: ((dayNumber: number) => void) | null;
+    onCompareInterp: ((fromDay: number, toDay: number, t: number) => void) | null;
 }

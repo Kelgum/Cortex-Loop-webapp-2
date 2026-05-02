@@ -671,9 +671,14 @@ function _interpolateFrame(
             const sharedCount = Math.min(stack.fromBandCount, stack.toBandCount);
             const accelT = Math.min(1, t * 1.5);
 
-            // Interpolate each cumulative layer boundary between from and to day
+            // Interpolate each cumulative layer boundary between from and to day.
+            // IMPORTANT: the TOP layer (maxLen-1) must always use plain `t` so it
+            // stays glued to the Lx stroke (which also interpolates at plain `t`).
+            // Applying accelT there makes the top band reach its target at t=0.67
+            // while the Lx line is still at 67% of the way — visible detachment.
+            const topIdx = stack.fromLayers.length - 1;
             const interpolatedLayers = stack.fromLayers.map((fl, i) =>
-                interpolatePoints(fl, stack.toLayers[i], i > sharedCount ? accelT : t),
+                interpolatePoints(fl, stack.toLayers[i], i > sharedCount && i < topIdx ? accelT : t),
             );
             // Render each band as the space between consecutive interpolated layers
             for (let b = 0; b < stack.bands.length; b++) {
@@ -813,6 +818,16 @@ async function animateDayTransition(
 
             _interpolateFrame(fromDay, toDay, rawT, curvesData, pillPlan, ctx);
 
+            // Smoothly scroll Sherlock 7D card stack using monotonic cum step —
+            // this keeps growing past n-1 on wrap, so the stack scrolls infinitely.
+            const sherlock7dCb = MultiDayState.onSherlock7DSync;
+            if (typeof sherlock7dCb === 'function') sherlock7dCb(_cumStepFromIdx + rawT);
+
+            // Rx-SOC compare panel: per-frame interpolation so the Rx curves
+            // morph in lockstep with Lx instead of snapping once per day.
+            const compareCb = MultiDayState.onCompareInterp;
+            if (typeof compareCb === 'function') compareCb(fromDay.day, toDay.day, rawT);
+
             if (rawT < 1) {
                 requestAnimationFrame(tick);
             } else {
@@ -900,6 +915,11 @@ async function animateDayFadeTransition(
             const totalDays = MultiDayState.days.length || 7;
             interpolateWeekStripHighlight(fromDay.day, toDay.day, rawT, totalDays);
 
+            // Smoothly scroll Sherlock 7D card stack during the fade too
+            // (monotonic cum step — fade wraps Sun→Mon but scroll keeps going).
+            const sherlock7dCb = MultiDayState.onSherlock7DSync;
+            if (typeof sherlock7dCb === 'function') sherlock7dCb(_cumStepFromIdx + rawT);
+
             if (rawT < 1) {
                 requestAnimationFrame(tick);
             } else {
@@ -948,8 +968,7 @@ export function renderDayState(day: DaySnapshot, curvesData: CurveData[], opts?:
     const baselineStrokes = baseGroup ? Array.from(baseGroup.querySelectorAll('.phase-baseline-path')) : [];
     for (let ci = 0; ci < curvesData.length; ci++) {
         // Use postInterventionBaseline so the stroke matches what bands + Lx are rooted in.
-        const blSource =
-            day.postInterventionBaseline?.[ci] || day.bioCorrectedBaseline[ci] || curvesData[ci].baseline;
+        const blSource = day.postInterventionBaseline?.[ci] || day.bioCorrectedBaseline[ci] || curvesData[ci].baseline;
         const bl = smoothPhaseValues(blSource, PHASE_SMOOTH_PASSES);
         if (baselineStrokes[ci] && bl.length > 0) {
             baselineStrokes[ci].setAttribute('d', phasePointsToPath(bl, true));
@@ -1012,9 +1031,13 @@ export function renderDayState(day: DaySnapshot, curvesData: CurveData[], opts?:
     updateWeekStripDay(day.day, totalDays);
     MultiDayState.currentDay = day.day;
 
-    // Sync Sherlock 7D on instant seek
+    // Sync Sherlock 7D on instant seek — use 0-based index to match autoplay's
+    // cum step space. `day.day` is 1-based, so subtract 1.
+    const seekIdx = Math.max(0, day.day - 1);
+    _cumStepBase = 0;
+    _cumStepFromIdx = seekIdx;
     const sherlock7dCb = MultiDayState.onSherlock7DSync;
-    if (typeof sherlock7dCb === 'function') sherlock7dCb(day.day);
+    if (typeof sherlock7dCb === 'function') sherlock7dCb(seekIdx);
 }
 
 // ── Seek to a specific day (instant) ──
@@ -1141,9 +1164,13 @@ export function renderAtContinuousDay(dayFloat: number, curvesData: CurveData[])
     updateDayCounter(nearestDay, narrativeBeat);
     MultiDayState.currentDay = fromIdx;
 
-    // Sync Sherlock 7D narration card during scrub
+    // Sync Sherlock 7D narration card during scrub — pass a continuous (fractional)
+    // day index so the card stack scrolls smoothly in sync with the drag rectangle.
+    // Use 0-based fromIdx so this matches autoplay's monotonic cum step space.
+    _cumStepBase = 0;
+    _cumStepFromIdx = fromIdx + t;
     const sherlock7dCb = MultiDayState.onSherlock7DSync;
-    if (typeof sherlock7dCb === 'function') sherlock7dCb(nearestDay);
+    if (typeof sherlock7dCb === 'function') sherlock7dCb(fromIdx + t);
 
     // Sync HTML scrubber
     const scrubber = document.getElementById('day-scrubber') as HTMLInputElement;
@@ -1154,6 +1181,20 @@ export function renderAtContinuousDay(dayFloat: number, curvesData: CurveData[])
 // Monotonically increasing ID — bumped each time a new animation sequence starts.
 // Old rAF loops check this and exit immediately if stale, preventing dual-loop races.
 let _animSeqId = 0;
+
+// ── Sherlock 7D monotonic step counter ──
+// Cumulative float across autoplay. Each day transition sets `_cumStepFromIdx`
+// to the "from" step index; the tick loops sync the Sherlock 7D stack using
+// `_cumStepFromIdx + rawT`. This value keeps growing past n-1 on wrap-around
+// (via `_cumStepBase`, incremented once per completed loop) so the Sherlock
+// card stack scrolls infinitely instead of snapping back to Monday. Scrub/seek
+// paths reset both counters via setSherlock7DCumStep.
+let _cumStepBase = 0;
+let _cumStepFromIdx = 0;
+export function setSherlock7DCumStep(v: number): void {
+    _cumStepBase = 0;
+    _cumStepFromIdx = v;
+}
 
 // ── Play multi-day sequence ──
 
@@ -1181,6 +1222,9 @@ export async function playMultiDaySequence(days: DaySnapshot[], curvesData: Curv
 
     const baseDuration = 3000; // ms per day transition
     const fastFadeDuration = 1500; // ms for wrap-around fade when Knight changed curves
+
+    // Seed monotonic cum step from the visible start day so Sherlock 7D lines up.
+    _cumStepFromIdx = visibleStartIdx;
 
     // Continuous loop: start from the first visible computed day and loop back there.
     while (_mdPhase() === 'playing' && _animSeqId === mySeqId) {
@@ -1212,6 +1256,7 @@ export async function playMultiDaySequence(days: DaySnapshot[], curvesData: Curv
             if (typeof advanceCb === 'function') advanceCb();
 
             const nextDay = days[i + 1];
+            _cumStepFromIdx = _cumStepBase + i; // monotonic cum step for Sherlock 7D sync
             await animateDayTransition(days[i], nextDay, curvesData, baseDuration, () => {
                 // Rebuild DOM in final animation frame — no visible gap between days
                 // Skip renderLxBandsStatic: interpolation at t=1 already shows the correct
@@ -1234,6 +1279,10 @@ export async function playMultiDaySequence(days: DaySnapshot[], curvesData: Curv
             const advanceCb = MultiDayState.onDayAdvance;
             if (typeof advanceCb === 'function') advanceCb();
 
+            // Wrap transition — advance cum step past the last index so the
+            // Sherlock stack scrolls forward instead of rewinding to Monday.
+            _cumStepFromIdx = _cumStepBase + days.length - 1;
+
             if (hasSignificantDesiredCurveChange(days)) {
                 // Knight adapted desired curves — faster fade for wrap-around
                 await animateDayFadeTransition(lastDay, firstDay, curvesData, fastFadeDuration, () => {
@@ -1250,6 +1299,10 @@ export async function playMultiDaySequence(days: DaySnapshot[], curvesData: Curv
                 });
             }
             if (_animSeqId !== mySeqId) return;
+
+            // Advance cum base by the loop span so subsequent loops keep the
+            // Sherlock 7D stack scrolling forward instead of resetting.
+            _cumStepBase += days.length - visibleStartIdx;
         }
     }
 
@@ -1284,6 +1337,10 @@ async function playMultiDaySequenceFrom(startDay: number, days: DaySnapshot[], c
     // (morph-added pills, mid-transform elements, stale opacity/transform attrs)
     renderDayState(days[loopStart], curvesData);
 
+    // Seed cum counters from the scrub target so Sherlock 7D lines up on resume.
+    _cumStepBase = 0;
+    _cumStepFromIdx = loopStart;
+
     while (_mdPhase() === 'playing' && _animSeqId === mySeqId) {
         for (let i = loopStart; i < days.length - 1; i++) {
             if (_animSeqId !== mySeqId) return;
@@ -1309,6 +1366,7 @@ async function playMultiDaySequenceFrom(startDay: number, days: DaySnapshot[], c
             if (typeof advanceCb === 'function') advanceCb();
 
             const nextDay = days[i + 1];
+            _cumStepFromIdx = _cumStepBase + i; // monotonic cum step for Sherlock 7D sync
             await animateDayTransition(days[i], nextDay, curvesData, baseDuration, () => {
                 MultiDayState.currentDay = nextDay.day;
                 renderSubstanceTimeline(nextDay.interventions, nextDay.lxCurves, curvesData);
@@ -1327,6 +1385,10 @@ async function playMultiDaySequenceFrom(startDay: number, days: DaySnapshot[], c
             const advanceCb = MultiDayState.onDayAdvance;
             if (typeof advanceCb === 'function') advanceCb();
 
+            // Wrap transition — advance cum step past the last index so the
+            // Sherlock stack scrolls forward instead of rewinding to Monday.
+            _cumStepFromIdx = _cumStepBase + days.length - 1;
+
             if (hasSignificantDesiredCurveChange(days)) {
                 await animateDayFadeTransition(lastDay, firstDay, curvesData, fastFadeDuration, () => {
                     MultiDayState.currentDay = 0;
@@ -1341,6 +1403,10 @@ async function playMultiDaySequenceFrom(startDay: number, days: DaySnapshot[], c
                 });
             }
             if (_animSeqId !== mySeqId) return;
+
+            // Advance cum base by this loop's span so the next iteration keeps
+            // Sherlock 7D scrolling forward instead of resetting.
+            _cumStepBase += days.length - loopStart;
         }
 
         // After the first pass (which started from startDay), all subsequent loops

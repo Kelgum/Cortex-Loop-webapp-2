@@ -654,9 +654,9 @@ function handleSave(): void {
     jsonOutput.innerHTML = syntaxHighlight(json);
 
     // Save to localStorage
-    const saved = settingsStore.getJson<AgentConfig[]>('cortex_saved_agents', []);
+    const saved = settingsStore.getJson<AgentConfig[]>('lx_studio_saved_agents', []);
     saved.push(config);
-    settingsStore.setJson('cortex_saved_agents', saved);
+    settingsStore.setJson('lx_studio_saved_agents', saved);
 
     jsonPanel.classList.add('open');
 }

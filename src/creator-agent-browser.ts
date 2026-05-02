@@ -35,7 +35,7 @@ export function initAgentBrowser(): void {
 
 export function openAgentBrowser(): void {
     // Merge bundled + saved agents
-    const saved = settingsStore.getJson<AgentConfig[]>('cortex_saved_agents', []);
+    const saved = settingsStore.getJson<AgentConfig[]>('lx_studio_saved_agents', []);
     allAgents = [...BUNDLED_AGENTS, ...saved];
 
     searchInput.value = '';
@@ -139,9 +139,9 @@ function deleteAgent(agentId: string): void {
     if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
 
     // Remove from localStorage
-    const saved = settingsStore.getJson<AgentConfig[]>('cortex_saved_agents', []);
+    const saved = settingsStore.getJson<AgentConfig[]>('lx_studio_saved_agents', []);
     const updated = saved.filter(a => a.id !== agentId);
-    settingsStore.setJson('cortex_saved_agents', updated);
+    settingsStore.setJson('lx_studio_saved_agents', updated);
 
     // Remove from in-memory list and re-render
     allAgents = allAgents.filter(a => a.id !== agentId);

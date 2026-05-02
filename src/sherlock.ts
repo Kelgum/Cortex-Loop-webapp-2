@@ -14,6 +14,8 @@ import type { Sherlock7DBeat, SherlockExtendedBeat } from './types';
 
 let _panel: HTMLElement | null = null;
 let _repositionRAF: number | null = null;
+let _repositionObserver: ResizeObserver | null = null;
+let _repositionListenersBound = false;
 let _scrollSettleTimer: number | null = null;
 const SHERLOCK_ENTER_MS = 400;
 const SHERLOCK_SCROLL_SETTLE_MS = SHERLOCK_ENTER_MS + 60;
@@ -234,19 +236,44 @@ function repositionPanel(): void {
     }
 }
 
-function startRepositionLoop(): void {
+function queuePanelReposition(): void {
     if (_repositionRAF !== null) return;
-    const tick = () => {
+    _repositionRAF = requestAnimationFrame(() => {
+        _repositionRAF = null;
         repositionPanel();
-        _repositionRAF = requestAnimationFrame(tick);
-    };
-    _repositionRAF = requestAnimationFrame(tick);
+    });
+}
+
+function startRepositionLoop(): void {
+    if (!_panel) return;
+    if (!_repositionListenersBound) {
+        window.addEventListener('scroll', queuePanelReposition, { passive: true });
+        window.addEventListener('resize', queuePanelReposition);
+        _repositionListenersBound = true;
+    }
+    if (!_repositionObserver && typeof ResizeObserver !== 'undefined') {
+        _repositionObserver = new ResizeObserver(() => queuePanelReposition());
+    }
+    const svg = document.getElementById('phase-chart-svg');
+    if (_repositionObserver) {
+        if (svg) _repositionObserver.observe(svg);
+        _repositionObserver.observe(_panel);
+    }
 }
 
 function stopRepositionLoop(): void {
     if (_repositionRAF !== null) {
         cancelAnimationFrame(_repositionRAF);
         _repositionRAF = null;
+    }
+    if (_repositionListenersBound) {
+        window.removeEventListener('scroll', queuePanelReposition);
+        window.removeEventListener('resize', queuePanelReposition);
+        _repositionListenersBound = false;
+    }
+    if (_repositionObserver) {
+        _repositionObserver.disconnect();
+        _repositionObserver = null;
     }
 }
 
@@ -453,6 +480,29 @@ function attachHoverListeners(cardEl: Element): void {
         const key = el.getAttribute('data-substance-key');
         const curveIdx = parseCurveIdx(el.getAttribute('data-curve-idx'));
         const timeMinutes = parseTimeMinutes(el.getAttribute('data-time-minutes'));
+
+        // 7D mode: infinite-scroll card stack — don't switch to scrollable mode
+        // (which jumbles the layout and restores pre-7D typography). Instead,
+        // seek directly to the clicked beat via our JS-driven positioning.
+        if (_panel && _panel.classList.contains('sherlock-7d-stack')) {
+            setSherlockHoverLock(false);
+            const m = id && /^day7d-(\d+)$/.exec(id);
+            if (m) {
+                const dayNum = parseInt(m[1], 10);
+                seekSherlock7DToBeat(Math.max(0, dayNum - 1));
+            }
+            if (key) {
+                if (_clickedSubstanceKey === key) {
+                    _clickedSubstanceKey = null;
+                    applyBandPillHighlight(null);
+                } else {
+                    _clickedSubstanceKey = key;
+                    applyBandPillHighlight(key);
+                }
+            }
+            setCurveFocus(curveIdx);
+            return;
+        }
 
         // Clicking should center the card (even if it has no substance metadata).
         // Also release any external hover lock so center-sync can mark it active.
@@ -1032,6 +1082,19 @@ export function awaitLxStep(stepIdx: number, total: number): Promise<void> {
 // ── Sherlock 7D — Circular carousel for STREAM sequence ──
 
 let _7dCardsBuilt = false;
+// Cached layout — measured once after build, invalidated on rebuild/resize.
+// Avoids per-frame offsetHeight reads (forced sync layout) which were the
+// main source of low-FPS jitter during the 7D autoplay scroll.
+let _7dCachedStep = 0;
+let _7dCachedCenterY = 0;
+let _7dCachedCardH = 0;
+let _7dCachedCards: HTMLElement[] = [];
+let _7dResizeObserver: ResizeObserver | null = null;
+
+function _invalidate7DLayoutCache(): void {
+    _7dCachedStep = 0;
+    _7dCachedCards = [];
+}
 
 /**
  * Display all 7D beats as a circular carousel.
@@ -1043,7 +1106,12 @@ export function showSherlock7DStack(beats: Sherlock7DBeat[], activeDayIdx: numbe
     if (!SherlockState.enabled || beats.length === 0) return;
     const panel = ensureNarrationPanel();
     const n = beats.length;
-    const activeIdx = Math.max(0, Math.min(activeDayIdx, n - 1));
+    // activeDayIdx is a continuous float that can grow unboundedly during autoplay
+    // (e.g. 0, 1, …, 6, 7, 8, …) — content wraps mod n so the week cycles forever,
+    // while positions are computed off the raw float so the stack scrolls smoothly
+    // without the "top card zipping back down to Monday" rewind.
+    const activeFloat = activeDayIdx;
+    const activeIdx = ((Math.round(activeFloat) % n) + n) % n;
 
     // Build card DOM once — reuse on subsequent calls (only positions/opacity change)
     const existingCards = panel.querySelectorAll('.waze-card');
@@ -1066,73 +1134,134 @@ export function showSherlock7DStack(beats: Sherlock7DBeat[], activeDayIdx: numbe
         });
         cards.forEach(card => panel.appendChild(createCardElement(card)));
         _7dCardsBuilt = true;
+        _invalidate7DLayoutCache();
+    }
 
-        // Ensure animated card mode (absolute positioning, no scroll)
-        panel.classList.remove('scrollable');
+    // Ensure animated card mode every call. Adding the `sherlock-7d-stack` class
+    // also disables the `.waze-card` CSS transition + sherlockEnter keyframe so
+    // rAF-driven updates don't fight a 0.5s transition (no stutter, no bump).
+    panel.classList.remove('scrollable');
+    if (!panel.classList.contains('sherlock-7d-stack')) {
+        panel.classList.add('sherlock-7d-stack');
         panel.style.removeProperty('--sherlock-scroll-pad');
     }
 
-    // Position all cards relative to the active one
-    const allCards = Array.from(panel.querySelectorAll('.waze-card')) as HTMLElement[];
-    if (allCards.length === 0) return;
+    // Measure layout ONCE per build/resize (not per frame). offsetHeight reads
+    // force a synchronous layout; doing it every rAF tick was the main source
+    // of low-FPS jitter. Positions are then driven purely by transform, which
+    // the compositor can handle without any layout work.
+    if (_7dCachedStep === 0 || _7dCachedCards.length !== n) {
+        const allCards = Array.from(panel.querySelectorAll('.waze-card')) as HTMLElement[];
+        if (allCards.length === 0) return;
+        _7dCachedCards = allCards;
+        const heights = allCards.map(el => el.offsetHeight || 60);
+        _7dCachedCardH = Math.max(...heights);
+        _7dCachedStep = _7dCachedCardH + CARD_STACK_GAP;
+        _7dCachedCenterY = panel.clientHeight / 2;
 
-    const centerY = panel.clientHeight / 2;
-    const gap = CARD_STACK_GAP;
-
-    // Measure each card's height
-    const cardH = allCards.map(el => el.offsetHeight || 60);
-    const activeH = cardH[activeIdx];
-    const activeTop = centerY - activeH / 2;
-
-    // For each card compute signed offset from active (-3..+3 for 7 cards)
-    const half = Math.floor(n / 2);
-
-    allCards.forEach((el, i) => {
-        let offset = i - activeIdx;
-        if (offset > half) offset -= n;
-        else if (offset < -half) offset += n;
-
-        // Accumulate position from center
-        let top: number;
-        if (offset === 0) {
-            top = activeTop;
-        } else if (offset > 0) {
-            // Below active
-            let y = activeTop + activeH + gap;
-            for (let s = 1; s < offset; s++) {
-                const si = (((activeIdx + s) % n) + n) % n;
-                y += cardH[si] + gap;
-            }
-            top = y;
-        } else {
-            // Above active
-            let y = activeTop;
-            for (let s = -1; s >= offset; s--) {
-                const si = (((activeIdx + s) % n) + n) % n;
-                y -= cardH[si] + gap;
-            }
-            top = y;
+        // All cards anchor at top:0 — vertical placement is via transform only.
+        // Pre-set once so subsequent frames don't touch `top` (layout-triggering).
+        for (const el of allCards) {
+            el.style.top = '0px';
+            el.classList.remove('sherlock-active', 'sherlock-stale');
+            // GPU layer hint so compositor handles transform updates cleanly.
+            el.style.willChange = 'transform, opacity';
         }
 
-        el.style.top = `${top}px`;
-
-        // Opacity based on distance from active
-        const dist = Math.abs(offset);
-        if (dist === 0) {
-            el.classList.add('sherlock-active');
-            el.classList.remove('sherlock-stale');
-            el.style.opacity = '1';
-        } else {
-            el.classList.remove('sherlock-active');
-            el.classList.add('sherlock-stale');
-            el.style.opacity = Math.max(0.08, 0.47 - dist * 0.15).toFixed(2);
+        // Observe panel resizes to reinvalidate cache (debounced by rAF loop).
+        if (!_7dResizeObserver && typeof ResizeObserver !== 'undefined') {
+            _7dResizeObserver = new ResizeObserver(() => {
+                _invalidate7DLayoutCache();
+            });
+            _7dResizeObserver.observe(panel);
         }
+    }
+
+    const step = _7dCachedStep;
+    const cardH = _7dCachedCardH;
+    const centerY = _7dCachedCenterY;
+    const baseTop = centerY - cardH / 2;
+    const cards = _7dCachedCards;
+
+    // Opacity: dist 0 → 1.0, dist 1 → 0.4, dist 2 → 0.08 (floor).
+    // Infinite-scroll placement: for each card (content index i), choose the
+    // "row" closest to activeFloat among {i, i±n, i±2n, …}. The card's vertical
+    // offset from center is (row - activeFloat) * step — monotonic, no wrap jump.
+    for (let i = 0; i < cards.length; i++) {
+        const el = cards[i];
+        const k = Math.round((activeFloat - i) / n);
+        const dist = i + k * n - activeFloat; // signed
+        const y = baseTop + dist * step;
+        // translate3d forces GPU compositing, avoids subpixel snapping jitter
+        el.style.transform = `translate3d(0, ${y.toFixed(2)}px, 0)`;
+        const absDist = dist < 0 ? -dist : dist;
+        // Linear ramp: 0 → 1.0, 1 → 0.4, 2+ → 0.08 floor.
+        const op = Math.max(0.08, 1 - absDist * 0.6);
+        el.style.opacity = op.toFixed(3);
+    }
+
+    // Active marker (cheap, only touched when it changes)
+    if (_lastActiveIdx !== activeIdx) {
+        if (_lastActiveIdx >= 0 && cards[_lastActiveIdx]) {
+            cards[_lastActiveIdx].classList.remove('sherlock-active-passive');
+        }
+        if (cards[activeIdx]) cards[activeIdx].classList.add('sherlock-active-passive');
+        _lastActiveIdx = activeIdx;
+    }
+}
+
+let _lastActiveIdx = -1;
+
+/**
+ * Seek the Sherlock 7D card stack to a specific beat index (0-based).
+ * Pauses multi-day autoplay (so the per-frame sync callback doesn't immediately
+ * overwrite the chosen position) and rerenders the stack centered on the beat.
+ */
+export function seekSherlock7DToBeat(beatIdx: number): void {
+    if (!SherlockState.sherlock7dNarration) return;
+    const beats = SherlockState.sherlock7dNarration.beats;
+    if (beats.length === 0) return;
+    const n = beats.length;
+    const clamped = Math.max(0, Math.min(beatIdx, n - 1));
+
+    // Pause multi-day so the per-frame sync doesn't clobber our target.
+    // Dynamic import-ish: resolve lazily to avoid a new circular dep.
+    import('./multi-day-animation').then(mod => {
+        try {
+            mod.pauseMultiDay();
+            mod.setSherlock7DCumStep(clamped);
+        } catch {
+            /* best-effort */
+        }
+        showSherlock7DStack(beats, clamped);
     });
+}
+
+/** Find the first 7D beat whose topSubstanceKey matches; -1 if none. */
+export function findSherlock7DBeatBySubstance(substanceKey: string | null): number {
+    if (!substanceKey || !SherlockState.sherlock7dNarration) return -1;
+    const beats = SherlockState.sherlock7dNarration.beats;
+    for (let i = 0; i < beats.length; i++) {
+        if (beats[i].topSubstanceKey === substanceKey) return i;
+    }
+    return -1;
+}
+
+/** True when the Sherlock panel is in 7D infinite-scroll mode. */
+export function isSherlock7DActive(): boolean {
+    return !!_panel && _panel.classList.contains('sherlock-7d-stack');
 }
 
 /** Reset 7D card build state (call when leaving STREAM mode). */
 export function reset7DCardState(): void {
     _7dCardsBuilt = false;
+    _lastActiveIdx = -1;
+    _invalidate7DLayoutCache();
+    if (_7dResizeObserver) {
+        _7dResizeObserver.disconnect();
+        _7dResizeObserver = null;
+    }
+    if (_panel) _panel.classList.remove('sherlock-7d-stack');
 }
 
 /** Hide the Sherlock 7D panel and clear 7D narration state. */

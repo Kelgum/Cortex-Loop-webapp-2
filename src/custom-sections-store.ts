@@ -13,6 +13,9 @@ export interface CustomSectionEntry {
     title: string;
     tags: string[];
     negativeTags?: string[];
+    forceIncludeIds?: string[];
+    forceExcludeIds?: string[];
+    cardOrder?: string[];
 }
 
 /** In-memory cache populated during initCustomSectionsStore(). */
@@ -50,7 +53,14 @@ export async function saveCustomSection(record: CustomSectionEntry): Promise<voi
 
 export async function patchCustomSection(
     id: string,
-    patch: { title?: string; tags?: string[]; negativeTags?: string[] },
+    patch: {
+        title?: string;
+        tags?: string[];
+        negativeTags?: string[];
+        forceIncludeIds?: string[];
+        forceExcludeIds?: string[];
+        cardOrder?: string[];
+    },
 ): Promise<void> {
     const res = await fetch(`/__custom-sections/${encodeURIComponent(id)}`, {
         method: 'PATCH',

@@ -20,7 +20,8 @@ export type PipelineLaneId =
     | 'strategist-bio-daily'
     | 'grandmaster-daily'
     | 'referee'
-    | 'agent-match';
+    | 'agent-match'
+    | 'socrx';
 
 export type PipelineStatus = 'queued' | 'running' | 'done' | 'error';
 
@@ -47,6 +48,7 @@ const LANE_ORDER: PipelineLaneId[] = [
     'agent-match',
     'strategist',
     'chess-player',
+    'socrx',
     'sherlock',
     'spotter',
     'strategist-bio',
@@ -72,6 +74,7 @@ const LANE_LABELS: Record<PipelineLaneId, string> = {
     'strategist-bio-daily': 'Strategist Bio (7d)',
     'grandmaster-daily': 'Grandmaster (7d)',
     referee: 'Referee',
+    socrx: 'SOCRx',
 };
 
 const LANE_COLORS: Record<PipelineLaneId, { dark: string; light: string }> = {
@@ -88,6 +91,7 @@ const LANE_COLORS: Record<PipelineLaneId, { dark: string; light: string }> = {
     'strategist-bio-daily': { dark: '#4ade80', light: '#16a34a' },
     'grandmaster-daily': { dark: '#60a5fa', light: '#2563eb' },
     referee: { dark: '#fbbf24', light: '#d97706' },
+    socrx: { dark: '#f87171', light: '#b91c1c' },
 };
 
 const MAX_LANE_SLOTS = 12;
@@ -229,6 +233,8 @@ function mapLane(stageClass: string): PipelineLaneId | null {
             return 'referee';
         case 'agent-match-model':
             return 'agent-match';
+        case 'socrx-model':
+            return 'socrx';
         case 'extended-strategist':
             return 'strategist';
         case 'extended-intervention':
@@ -260,6 +266,7 @@ function mapSubstep(entry: any): string {
     if (stageClass === 'strategist-bio-daily-model') return 'Bio Correct';
     if (stageClass === 'grandmaster-daily-model') return 'Protocols';
     if (stageClass === 'referee-model') return 'Stacking Fix';
+    if (stageClass === 'socrx-model') return 'SOC Rx';
     if (stageClass === 'extended-strategist') return 'Ext Curves';
     if (stageClass === 'extended-intervention') return 'Ext Protocol';
     if (stageClass === 'extended-sherlock') return 'Ext Narration';

@@ -1,5 +1,5 @@
 // ============================================
-// Agent Marketplace Database — Cortex Loop
+// Agent Marketplace Database — Lx.Studio
 // KOL-authored protocol agents
 // ============================================
 
@@ -33,6 +33,8 @@ import { carhartHarrisAgent } from './carhartharris';
 import { fadimanAgent } from './fadiman';
 import { morrisAgent } from './morris';
 import { wattsAgent } from './watts';
+import { spectorAgent } from './spector';
+import { elhalalAgent } from './elhalal';
 
 /** All KOL protocol agents */
 export const AGENT_DATABASE: AgentConfig[] = [
@@ -64,6 +66,8 @@ export const AGENT_DATABASE: AgentConfig[] = [
     fadimanAgent,
     morrisAgent,
     wattsAgent,
+    spectorAgent,
+    elhalalAgent,
 ] as AgentConfig[];
 
 /** @deprecated Use AGENT_DATABASE instead */

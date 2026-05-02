@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
     __testing,
+    computeEffectImprovement,
     computePeakFromData,
     removeGamificationOverlay,
     renderGamificationOverlay,
@@ -251,6 +252,31 @@ describe('gamification overlay', () => {
         expect(higherIsBetterPeak?.peakGain).toBe(14);
         expect(higherIsWorsePeak?.peakHour).toBe(8);
         expect(higherIsWorsePeak?.peakGain).toBe(11);
+    });
+
+    it('computeEffectImprovement returns a nonzero % for higher_is_worse curves whose intervention sits below baseline', () => {
+        // Nausea-style curve: baseline ~40 all day, intervention drops it to 20
+        // at peak. Gamification box must show a meaningful reduction (~50%),
+        // not 0%. Regression guard against a prior Cmax-ratio rewrite that
+        // keyed off |lx|-max (which lands on no-intervention hours where
+        // lx ≈ baseline, trivially yielding 0).
+        const baseline = makePoints([40, 40, 40, 40, 40, 40]);
+        const desired = makePoints([15, 15, 15, 15, 15, 15]);
+        const lx = makePoints([40, 35, 25, 20, 28, 38]);
+        const pct = computeEffectImprovement(lx, baseline, desired, 'higher_is_worse');
+        expect(pct).not.toBeNull();
+        expect(pct).toBeGreaterThan(40);
+        expect(pct).toBeLessThan(60);
+    });
+
+    it('computeEffectImprovement returns a nonzero % for higher_is_better curves whose intervention sits above baseline', () => {
+        const baseline = makePoints([40, 40, 40, 40, 40, 40]);
+        const desired = makePoints([80, 80, 80, 80, 80, 80]);
+        const lx = makePoints([40, 48, 60, 72, 58, 42]);
+        const pct = computeEffectImprovement(lx, baseline, desired, 'higher_is_better');
+        expect(pct).not.toBeNull();
+        expect(pct).toBeGreaterThan(70);
+        expect(pct).toBeLessThan(90);
     });
 
     it('anchors to the true lx apex inside the improved region instead of the earliest strongest gain shoulder', () => {

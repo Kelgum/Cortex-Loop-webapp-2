@@ -396,6 +396,8 @@ let scrubberDescLabel: SVGTextElement | null = null;
 let _leftExplainer: HTMLElement | null = null;
 let _rightExplainer: HTMLElement | null = null;
 let _explainerRAF: number | null = null;
+let _explainerResizeObserver: ResizeObserver | null = null;
+let _explainerListenersBound = false;
 
 // ============================================
 // Public API
@@ -720,18 +722,43 @@ function repositionExplainers(): void {
 }
 
 function startExplainerRepositionLoop(): void {
+    if (!_leftExplainer && !_rightExplainer) return;
+    if (!_explainerListenersBound) {
+        window.addEventListener('scroll', queueExplainerReposition, { passive: true });
+        window.addEventListener('resize', queueExplainerReposition);
+        _explainerListenersBound = true;
+    }
+    if (!_explainerResizeObserver && typeof ResizeObserver !== 'undefined') {
+        _explainerResizeObserver = new ResizeObserver(() => queueExplainerReposition());
+    }
+    const svg = document.getElementById('phase-chart-svg');
+    if (_explainerResizeObserver && svg) {
+        _explainerResizeObserver.observe(svg);
+    }
+    queueExplainerReposition();
+}
+
+function queueExplainerReposition(): void {
     if (_explainerRAF !== null) return;
-    const tick = () => {
+    _explainerRAF = requestAnimationFrame(() => {
+        _explainerRAF = null;
         repositionExplainers();
-        _explainerRAF = requestAnimationFrame(tick);
-    };
-    _explainerRAF = requestAnimationFrame(tick);
+    });
 }
 
 function stopExplainerRepositionLoop(): void {
     if (_explainerRAF !== null) {
         cancelAnimationFrame(_explainerRAF);
         _explainerRAF = null;
+    }
+    if (_explainerListenersBound) {
+        window.removeEventListener('scroll', queueExplainerReposition);
+        window.removeEventListener('resize', queueExplainerReposition);
+        _explainerListenersBound = false;
+    }
+    if (_explainerResizeObserver) {
+        _explainerResizeObserver.disconnect();
+        _explainerResizeObserver = null;
     }
 }
 

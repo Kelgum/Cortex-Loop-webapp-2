@@ -31,7 +31,7 @@ import type {
     AgentMatchPhase,
 } from './types';
 
-const CONFIG_KEYS = (typeof window !== 'undefined' ? (window as any).CORTEX_CONFIG?.keys : null) || {};
+const CONFIG_KEYS = (typeof window !== 'undefined' ? (window as any).LX_STUDIO_CONFIG?.keys : null) || {};
 
 const STAGE_IDS = [
     'fast',
@@ -54,6 +54,7 @@ const STAGE_IDS = [
     'curvesExtended',
     'interventionExtended',
     'sherlockExtended',
+    'socrx',
 ];
 
 const STAGE_DEFAULTS_BY_PROVIDER: any = {
@@ -78,6 +79,7 @@ const STAGE_DEFAULTS_BY_PROVIDER: any = {
         curvesExtended: 'opus',
         interventionExtended: 'opus',
         sherlockExtended: 'haiku',
+        socrx: 'haiku',
     },
     openai: {
         fast: '5.3-instant',
@@ -100,6 +102,7 @@ const STAGE_DEFAULTS_BY_PROVIDER: any = {
         curvesExtended: '5.4-thinking',
         interventionExtended: '5.4-thinking',
         sherlockExtended: '5.3-instant',
+        socrx: '5.3-instant',
     },
     grok: {
         fast: 'fast',
@@ -122,6 +125,7 @@ const STAGE_DEFAULTS_BY_PROVIDER: any = {
         curvesExtended: 'full',
         interventionExtended: 'full',
         sherlockExtended: 'fast',
+        socrx: 'fast',
     },
     gemini: {
         fast: 'flash-lite',
@@ -144,6 +148,7 @@ const STAGE_DEFAULTS_BY_PROVIDER: any = {
         curvesExtended: 'pro-preview',
         interventionExtended: 'pro-preview',
         sherlockExtended: 'flash-lite',
+        socrx: 'flash-lite',
     },
 };
 
@@ -252,6 +257,23 @@ export function applyPresetSnapshot(snapshot: {
 }
 
 /**
+ * Fetch the filesystem-default preset and apply it to AppState + localStorage.
+ * Called once at startup so the default survives across sessions/browsers.
+ */
+export async function loadDefaultPreset(): Promise<void> {
+    try {
+        const res = await fetch('/__default-preset');
+        if (!res.ok) return;
+        const snapshot = await res.json();
+        if (snapshot?.stageModels && snapshot?.stageProviders) {
+            applyPresetSnapshot(snapshot);
+        }
+    } catch {
+        // Dev server not available (e.g. production build) — ignore
+    }
+}
+
+/**
  * Turbo target phase (0 = disabled, 1-4 = auto-advance to that phase).
  * Stored on AppState but initialized from localStorage here so it's ready
  * before any prompt submission.
@@ -299,6 +321,7 @@ export const AppState: IAppState = {
         curvesExtended: resolveStoredStageProvider('curvesExtended'),
         interventionExtended: resolveStoredStageProvider('interventionExtended'),
         sherlockExtended: resolveStoredStageProvider('sherlockExtended'),
+        socrx: resolveStoredStageProvider('socrx'),
     },
     stageModels: {
         fast: resolveStoredStageModel('fast', resolveStoredStageProvider('fast')),
@@ -327,6 +350,7 @@ export const AppState: IAppState = {
             resolveStoredStageProvider('interventionExtended'),
         ),
         sherlockExtended: resolveStoredStageModel('sherlockExtended', resolveStoredStageProvider('sherlockExtended')),
+        socrx: resolveStoredStageModel('socrx', resolveStoredStageProvider('socrx')),
     },
     turboTargetPhase: _turboTarget,
 };
@@ -531,4 +555,5 @@ export const MultiDayState: IMultiDayState = {
     sherlock7dReady: false,
     onDayAdvance: null,
     onSherlock7DSync: null,
+    onCompareInterp: null,
 };

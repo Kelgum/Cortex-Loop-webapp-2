@@ -374,7 +374,7 @@ function applySlotFills(): void {
 
 /**
  * Render a single slot fill (capsule or tablet) into the SVG as an arc-segment
- * wedge, matching the Lx.Player Virtualizer's carousel geometry.
+ * wedge, matching Lx.Player's carousel geometry.
  *
  * - Tablet: curved wedge spanning one radial band and ~70% of a spoke-width
  * - Capsule: tall wedge spanning all 5 radial bands (full spoke depth)
@@ -389,12 +389,7 @@ function fillSlotElements(day: number, slot: SlotFill): void {
     for (const g of groups) {
         if (slot.isCapsule) {
             // Capsule: arc-segment spanning all 5 bands (full spoke depth)
-            const d = arcSegmentPath(
-                centerDeg - halfSpan,
-                centerDeg + halfSpan,
-                spokeInnerR + 0.3,
-                spokeOuterR - 0.2,
-            );
+            const d = arcSegmentPath(centerDeg - halfSpan, centerDeg + halfSpan, spokeInnerR + 0.3, spokeOuterR - 0.2);
             const el = svgEl('path', {
                 d,
                 fill: slot.substanceColor,
@@ -408,12 +403,7 @@ function fillSlotElements(day: number, slot: SlotFill): void {
         } else {
             // Tablet: arc-segment wedge in one radial band
             const { inner, outer } = bandRadii(slot.slotPosition);
-            const d = arcSegmentPath(
-                centerDeg - halfSpan,
-                centerDeg + halfSpan,
-                inner + 0.1,
-                outer - 0.1,
-            );
+            const d = arcSegmentPath(centerDeg - halfSpan, centerDeg + halfSpan, inner + 0.1, outer - 0.1);
             const el = svgEl('path', {
                 d,
                 fill: slot.substanceColor,

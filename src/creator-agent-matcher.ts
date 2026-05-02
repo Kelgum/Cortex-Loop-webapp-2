@@ -166,7 +166,7 @@ function createFloatingCapsule(agent: AgentConfig): HTMLElement {
 // ============================================
 
 function buildAgentRoster(): string {
-    const saved = settingsStore.getJson<AgentConfig[]>('cortex_saved_agents', []);
+    const saved = settingsStore.getJson<AgentConfig[]>('lx_studio_saved_agents', []);
     const all = [...AGENT_DATABASE, ...saved];
     return all
         .map(a => {
@@ -194,7 +194,7 @@ function buildEffectList(effects: WordCloudEffect[]): string {
 
 /** Fallback: estimate outcome success rate without LLM (produces 60-97 range) */
 function fallbackRank(prompt: string, effects: WordCloudEffect[]): AgentMatchResult[] {
-    const saved = settingsStore.getJson<AgentConfig[]>('cortex_saved_agents', []);
+    const saved = settingsStore.getJson<AgentConfig[]>('lx_studio_saved_agents', []);
     const all = [...AGENT_DATABASE, ...saved];
     const promptLower = prompt.toLowerCase();
     const effectNames = effects.map(e => e.name.toLowerCase());

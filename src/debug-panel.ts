@@ -37,6 +37,7 @@ const STAGES = [
     { id: 'referee', stageClass: 'referee-model', label: 'Referee' },
     { id: 'sherlock7d', stageClass: 'sherlock7d-model', label: 'Sherlock (7d)' },
     { id: 'agentMatch', stageClass: 'agent-match-model', label: 'Agent Match' },
+    { id: 'socrx', stageClass: 'socrx-model', label: 'SOCRx' },
 ];
 
 const STAGE_LABEL_BY_CLASS: Record<string, string> = {};
@@ -64,6 +65,7 @@ const STAGE_PROMPT_TEMPLATE_KEY: Record<string, string> = {
     referee: 'grandmasterDaily',
     sherlock7d: 'sherlock7d',
     agentMatch: 'agentMatch',
+    socrx: 'socrx',
 };
 
 // Some debug cards are sub-passes that reuse an existing runtime stage config.
@@ -385,12 +387,12 @@ export const DebugLog = {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'cortex_loop_debug_log.json';
+        a.download = 'lx_studio_debug_log.json';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        console.log('[DebugLog] Exported', this.entries.length, 'entries to cortex_loop_debug_log.json');
+        console.log('[DebugLog] Exported', this.entries.length, 'entries to lx_studio_debug_log.json');
     },
 
     initCards() {
@@ -637,6 +639,15 @@ export const DebugLog = {
                 this.refreshSelects();
                 row.classList.add('loaded');
                 setTimeout(() => row.classList.remove('loaded'), 1200);
+                // Persist as filesystem default so it survives across sessions/browsers
+                fetch('/__default-preset', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        stageModels: preset.stageModels,
+                        stageProviders: preset.stageProviders,
+                    }),
+                }).catch(() => {});
             });
 
             const deleteBtn = document.createElement('button');
@@ -740,7 +751,7 @@ export const DebugLog = {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'cortex_pipeline_presets.json';
+            a.download = 'lx_studio_pipeline_presets.json';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);

@@ -805,13 +805,22 @@ export function animateTimelineReveal(duration: any) {
         pill.setAttribute('opacity', '0');
         pill.style.transition = '';
         setTimeout(() => {
-            pill.animate(
+            const anim = pill.animate(
                 [
                     { opacity: 0, transform: 'translateY(4px)' },
                     { opacity: 1, transform: 'translateY(0)' },
                 ],
                 { duration: 400, fill: 'forwards', easing: 'ease-out' },
             );
+            anim.finished
+                .then(() => {
+                    pill.setAttribute('opacity', '1');
+                    pill.style.removeProperty('transform');
+                    anim.cancel();
+                })
+                .catch(() => {
+                    /* cancelled — nothing to commit */
+                });
         }, delay);
     });
 }
@@ -1222,13 +1231,30 @@ export async function animateSequentialLxReveal(
                     continue;
                 }
                 setTimeout(() => {
-                    pill.animate(
+                    const anim = pill.animate(
                         [
                             { opacity: 0, transform: 'translateY(4px)' },
                             { opacity: 1, transform: 'translateY(0)' },
                         ],
                         { duration: 300, fill: 'forwards', easing: 'ease-out' },
                     );
+                    // Commit the final visual state to the element's attributes/styles
+                    // and cancel the Web Animation. Without this, `fill: 'forwards'`
+                    // leaves a persistent animation effect that overrides any later
+                    // `setAttribute('opacity', ...)` on the same element — which is
+                    // exactly what the Phase 4 revision scan does when it fades the
+                    // old pills out inside tempGroup. The result without this commit
+                    // is that old pills stay fully visible throughout the revision
+                    // scan, stacking over the new pills until the final cleanup pass.
+                    anim.finished
+                        .then(() => {
+                            pill.setAttribute('opacity', '1');
+                            pill.style.removeProperty('transform');
+                            anim.cancel();
+                        })
+                        .catch(() => {
+                            /* cancelled or interrupted — nothing to commit */
+                        });
                 }, pi * 100);
             }
         }

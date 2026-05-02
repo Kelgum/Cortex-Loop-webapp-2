@@ -19,7 +19,7 @@ describe('resolveCachedStageHit', () => {
             payload: { ok: true },
             meta: {
                 stageClass: 'fast-model',
-                cacheKey: 'cortex_cache_fast-model',
+                cacheKey: 'lx_studio_cache_fast-model',
                 cachedAt: '2026-03-06T00:00:00.000Z',
                 systemPrompt: 'cached system',
                 userPrompt: 'cached user',

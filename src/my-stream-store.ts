@@ -45,8 +45,8 @@ export interface SubstanceInput {
 
 // ── Storage key ────────────────────────────────────────────────────
 
-const STREAM_KEY = 'cortex_my_stream_protocols';
-const COLLAPSE_KEY = 'cortex_my_stream_collapsed';
+const STREAM_KEY = 'lx_studio_my_stream_protocols';
+const COLLAPSE_KEY = 'lx_studio_my_stream_collapsed';
 
 // ── In-memory cache ────────────────────────────────────────────────
 

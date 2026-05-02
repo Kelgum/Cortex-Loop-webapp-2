@@ -5,8 +5,8 @@
 
 import { settingsStore } from './settings-store';
 
-const SESSION_CACHE_KEY = 'cortex_session_cache_bundle';
-const SESSION_CACHE_ENABLED_KEY = 'cortex_session_cache_enabled';
+const SESSION_CACHE_KEY = 'lx_studio_session_cache_bundle';
+const SESSION_CACHE_ENABLED_KEY = 'lx_studio_session_cache_enabled';
 const CACHE_SCHEMA = 2;
 
 export interface CacheMeta {
@@ -24,7 +24,7 @@ export interface CacheEntryEnvelope {
 }
 
 export interface SessionCacheBundle {
-    __cortexCache: number;
+    __lxStudioCache: number;
     runId: string;
     createdAt: string;
     completedAt: string;
@@ -44,7 +44,7 @@ function isSessionCacheBundle(value: any): value is SessionCacheBundle {
     return (
         !!value &&
         typeof value === 'object' &&
-        value.__cortexCache === CACHE_SCHEMA &&
+        value.__lxStudioCache === CACHE_SCHEMA &&
         typeof value.runId === 'string' &&
         typeof value.createdAt === 'string' &&
         typeof value.completedAt === 'string' &&
@@ -76,7 +76,7 @@ function writeEnabled(enabled: boolean): void {
 
 function emitCacheStateChanged() {
     if (typeof window === 'undefined') return;
-    window.dispatchEvent(new CustomEvent('cortex-session-cache-changed'));
+    window.dispatchEvent(new CustomEvent('lx-studio-session-cache-changed'));
 }
 
 const initialBundle = readBundle();
@@ -97,8 +97,8 @@ export const LLMCache = {
     subscribe(listener: () => void) {
         if (typeof window === 'undefined') return () => {};
         const wrapped = () => listener();
-        window.addEventListener('cortex-session-cache-changed', wrapped);
-        return () => window.removeEventListener('cortex-session-cache-changed', wrapped);
+        window.addEventListener('lx-studio-session-cache-changed', wrapped);
+        return () => window.removeEventListener('lx-studio-session-cache-changed', wrapped);
     },
 
     _emit() {
@@ -130,6 +130,11 @@ export const LLMCache = {
             runId: this._bundle?.runId || null,
             completedAt: this._bundle?.completedAt || null,
         };
+    },
+
+    /** Read-only access to the currently-loaded session bundle. */
+    getCurrentBundle(): SessionCacheBundle | null {
+        return this._bundle;
     },
 
     isEnabled(_stageClass?: string): boolean {
@@ -221,7 +226,7 @@ export const LLMCache = {
         if (stageEntries.length === 0) return;
 
         this._bundle = {
-            __cortexCache: CACHE_SCHEMA,
+            __lxStudioCache: CACHE_SCHEMA,
             runId: this._draftRunId || `run-${Date.now()}`,
             createdAt: this._draftCreatedAt || new Date().toISOString(),
             completedAt: new Date().toISOString(),

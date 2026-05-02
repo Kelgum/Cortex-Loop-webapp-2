@@ -26,20 +26,25 @@ export function smoothPhaseValues(points: any, passes = 3) {
     return points.map((p: any, i: any) => ({ ...p, value: vals[i] }));
 }
 
-export function phasePointsToPath(points: any, alreadySmoothed = false) {
-    if (!points || points.length < 2) return '';
+/**
+ * Build a monotone-cubic Bezier path string through the given screen-space
+ * coordinates. Returns the full path starting with an `M` command, or (when
+ * `omitMove` is true) just the cubic-segment chain suitable for appending to
+ * an existing path. Falls back to a polyline when x-ordering is invalid.
+ *
+ * Shared between `phasePointsToPath` (Lx stroke) and `phaseBandPath` (AUC band
+ * boundaries) so the two render with identical curvature — otherwise the Lx
+ * stroke would visibly separate from the top of the stacked bands at peaks.
+ */
+function monotoneCubicPath(coords: Array<{ x: number; y: number }>, omitMove = false): string {
+    if (coords.length < 2) return '';
 
-    const smoothed = alreadySmoothed ? points : smoothPhaseValues(points, PHASE_SMOOTH_PASSES);
-    const coords = smoothed.map((p: any) => ({
-        x: phaseChartX(Number(p.hour) * 60),
-        y: phaseChartY(Number(p.value)),
-    }));
-
-    // Fallback to polyline if x ordering is invalid.
+    // Fallback to polyline if x ordering is invalid (duplicate/descending x).
     for (let i = 0; i < coords.length - 1; i++) {
         if (!(coords[i + 1].x > coords[i].x)) {
-            let linear = `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)}`;
-            for (let j = 1; j < coords.length; j++) {
+            let linear = omitMove ? '' : `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)}`;
+            const startIdx = omitMove ? 0 : 1;
+            for (let j = startIdx; j < coords.length; j++) {
                 linear += ` L ${coords[j].x.toFixed(1)} ${coords[j].y.toFixed(1)}`;
             }
             return linear;
@@ -47,7 +52,8 @@ export function phasePointsToPath(points: any, alreadySmoothed = false) {
     }
 
     if (coords.length === 2) {
-        return `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)} L ${coords[1].x.toFixed(1)} ${coords[1].y.toFixed(1)}`;
+        const head = omitMove ? '' : `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)}`;
+        return `${head} L ${coords[1].x.toFixed(1)} ${coords[1].y.toFixed(1)}`;
     }
 
     // Monotone cubic interpolation (Fritsch-Carlson) to avoid overshoot artifacts.
@@ -75,7 +81,7 @@ export function phasePointsToPath(points: any, alreadySmoothed = false) {
         }
     }
 
-    let d = `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)}`;
+    let d = omitMove ? '' : `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)}`;
     for (let i = 0; i < n - 1; i++) {
         const p0 = coords[i];
         const p1 = coords[i + 1];
@@ -90,28 +96,80 @@ export function phasePointsToPath(points: any, alreadySmoothed = false) {
     return d;
 }
 
+/** Discard samples whose hour falls outside the chart's time window. Protects
+ *  rendering against stale/corrupt LLM output (e.g. chronobiotic phase-shift
+ *  outputs that drift the hour array off the plot area). Lightweight no-op when
+ *  all points are already in-range. */
+function filterPointsInChartRange(points: any[]): any[] {
+    if (!Array.isArray(points) || points.length === 0) return [];
+    const lo = PHASE_CHART.startHour;
+    const hi = PHASE_CHART.endHour;
+    // Fast path — scan without allocating until we hit something out of range.
+    for (let i = 0; i < points.length; i++) {
+        const h = Number(points[i]?.hour);
+        if (!Number.isFinite(h) || h < lo || h > hi) {
+            return points.filter((p: any) => {
+                const hh = Number(p?.hour);
+                return Number.isFinite(hh) && hh >= lo && hh <= hi;
+            });
+        }
+    }
+    return points;
+}
+
+export function phasePointsToPath(points: any, alreadySmoothed = false) {
+    if (!points || points.length < 2) return '';
+
+    const inRange = filterPointsInChartRange(points);
+    if (inRange.length < 2) return '';
+
+    const smoothed = alreadySmoothed ? inRange : smoothPhaseValues(inRange, PHASE_SMOOTH_PASSES);
+    const coords = smoothed.map((p: any) => ({
+        x: phaseChartX(Number(p.hour) * 60),
+        y: phaseChartY(Number(p.value)),
+    }));
+
+    return monotoneCubicPath(coords, false);
+}
+
 export function phasePointsToFillPath(points: any, alreadySmoothed = false) {
-    const pathD = phasePointsToPath(points, alreadySmoothed);
+    const inRange = filterPointsInChartRange(points);
+    const pathD = phasePointsToPath(inRange, alreadySmoothed);
     if (!pathD) return '';
-    const firstX = phaseChartX(points[0].hour * 60);
-    const lastX = phaseChartX(points[points.length - 1].hour * 60);
+    const firstX = phaseChartX(inRange[0].hour * 60);
+    const lastX = phaseChartX(inRange[inRange.length - 1].hour * 60);
     const baseY = phaseChartY(0);
     return pathD + ` L ${lastX.toFixed(1)} ${baseY.toFixed(1)} L ${firstX.toFixed(1)} ${baseY.toFixed(1)} Z`;
 }
 
-/** Closed path between two curves (upper traced L→R, lower traced R→L) for AUC band fills */
+/** Closed path between two curves (upper traced L→R, lower traced R→L) for AUC band fills.
+ *  The upper edge is drawn with the same monotone-cubic Bezier as `phasePointsToPath`
+ *  so the band top matches the Lx stroke pixel-for-pixel. The lower edge uses straight
+ *  `L` segments — adjacent bands stack top-to-bottom so each band's polyline lower edge
+ *  coincides with the next band's polyline upper edge (no inter-band gaps), and the
+ *  top-most band's cubic upper edge is what the user compares against the Lx stroke. */
 export function phaseBandPath(upperPts: any[], lowerPts: any[]): string {
     if (!upperPts || !lowerPts || upperPts.length < 2 || lowerPts.length < 2) return '';
-    const x0 = phaseChartX(upperPts[0].hour * 60);
-    const y0 = phaseChartY(upperPts[0].value);
-    let d = `M ${x0.toFixed(1)} ${y0.toFixed(1)}`;
-    for (let i = 1; i < upperPts.length; i++) {
-        d += ` L ${phaseChartX(upperPts[i].hour * 60).toFixed(1)} ${phaseChartY(upperPts[i].value).toFixed(1)}`;
+
+    // Clip to chart time window so stale/corrupt LLM output doesn't drift bands
+    // off the plot area.
+    const upperIn = filterPointsInChartRange(upperPts);
+    const lowerIn = filterPointsInChartRange(lowerPts);
+    if (upperIn.length < 2 || lowerIn.length < 2) return '';
+
+    // Upper edge: reuse the exact cubic path used by the Lx stroke.
+    // `alreadySmoothed=true` — the caller already applies smoothing upstream (points come
+    // from `computeIncrementalLxOverlay` which uses pre-smoothed baselines).
+    const upperPath = phasePointsToPath(upperIn, true);
+    if (!upperPath) return '';
+
+    // Lower edge: polyline R→L (closes the band).
+    let lowerPath = '';
+    for (let i = lowerIn.length - 1; i >= 0; i--) {
+        lowerPath += ` L ${phaseChartX(Number(lowerIn[i].hour) * 60).toFixed(1)} ${phaseChartY(Number(lowerIn[i].value)).toFixed(1)}`;
     }
-    for (let i = lowerPts.length - 1; i >= 0; i--) {
-        d += ` L ${phaseChartX(lowerPts[i].hour * 60).toFixed(1)} ${phaseChartY(lowerPts[i].value).toFixed(1)}`;
-    }
-    return d + ' Z';
+
+    return `${upperPath}${lowerPath} Z`;
 }
 
 /** Progressive morph: blend desired→Lx values based on playhead position */

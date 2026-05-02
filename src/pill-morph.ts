@@ -359,22 +359,25 @@ export function tickPillMorph(
 
             if (ghostIsRealPill) {
                 // Ghost IS the real pre-rendered new pill, already positioned at `to`.
-                // Don't touch its transform (no drift), don't mutate its label (preserves
-                // rich tspans like Rx badge and contribution %). Just fade it in and make
+                // Don't touch its transform (no drift). Just fade it in and make
                 // sure it's not still hidden from the Phase 0b pre-render.
                 if (ghost.classList.contains('revision-prehidden')) {
                     ghost.classList.remove('revision-prehidden');
                     ghost.removeAttribute('visibility');
                 }
                 ghost.setAttribute('opacity', tf.destOpacity.toFixed(3));
+
+                // Animate dose label with arrows (rich-label safe — preserves Rx
+                // badge + contribution % tspans while showing dose interpolation,
+                // pulsing font, and up/down arrow indicators).
+                if (doseMorph && pillEase > 0.01) {
+                    _tickDoseLabelRich(ghost, doseMorph, pillEase);
+                }
             } else {
                 // Destination ghost: drift into final position, fade in
                 const ghostDriftDx = totalDx * (tf.destPos - 1);
                 const ghostDriftDy = totalDy * (tf.destPos - 1);
-                ghost.setAttribute(
-                    'transform',
-                    `translate(${ghostDriftDx.toFixed(2)}, ${ghostDriftDy.toFixed(2)})`,
-                );
+                ghost.setAttribute('transform', `translate(${ghostDriftDx.toFixed(2)}, ${ghostDriftDy.toFixed(2)})`);
                 ghost.setAttribute('opacity', tf.destOpacity.toFixed(3));
 
                 // Ghost connector + dot fade
@@ -484,30 +487,10 @@ export function tickPillMorph(
                     const doseT = fadeIn;
 
                     if (preserveRichLabel) {
-                        // Preserve Rx badge + contribution % tspans — only mutate the
-                        // first text node (the "Name Dose" prefix). At doseT >= 1 the
-                        // label matches what a fresh render would produce, so no final
-                        // DOM rebuild is required.
-                        if (doseT >= 1) {
-                            const finalDisplay =
-                                doseMorph.decimals > 0
-                                    ? doseMorph.newNum.toFixed(doseMorph.decimals)
-                                    : String(Math.round(doseMorph.newNum));
-                            _setDoseLabelFirstTextNode(
-                                el,
-                                `${doseMorph.prefix}${finalDisplay}${doseMorph.unit}`,
-                            );
-                        } else {
-                            const cur = doseMorph.newNum * doseT;
-                            const display =
-                                doseMorph.decimals > 0
-                                    ? cur.toFixed(doseMorph.decimals)
-                                    : String(Math.round(cur));
-                            _setDoseLabelFirstTextNode(
-                                el,
-                                `${doseMorph.prefix}${display}${doseMorph.unit}`,
-                            );
-                        }
+                        // Animate with arrows + pulse while preserving Rx badge +
+                        // contribution % tspans. Cleanup at doseT >= 1 restores
+                        // the label to match a fresh render exactly.
+                        _tickDoseLabelRich(el, doseMorph, doseT);
                     } else if (doseT >= 1) {
                         const finalDisplay =
                             doseMorph.decimals > 0
@@ -602,5 +585,59 @@ function _tickDoseLabel(el: Element, doseMorph: DoseMorphInfo, lxEase: number): 
             arrowSpan.textContent = arrowChar;
             label.appendChild(arrowSpan);
         }
+    }
+}
+
+/** Like _tickDoseLabel but preserves rich tspans (Rx badge, contribution %).
+ *  Used by revision animation where pills carry pre-rendered rich labels.
+ *  Creates a temporary .morph-arrow tspan that is cleaned up at completion. */
+function _tickDoseLabelRich(el: Element, doseMorph: DoseMorphInfo, doseT: number): void {
+    const label = el.querySelector('.timeline-bar-label') as SVGTextElement | null;
+    if (!label) return;
+
+    if (doseT >= 1) {
+        // Final state: set exact final dose, clean up animation artifacts
+        const finalDisplay =
+            doseMorph.decimals > 0
+                ? doseMorph.newNum.toFixed(doseMorph.decimals)
+                : String(Math.round(doseMorph.newNum));
+        _setDoseLabelFirstTextNode(el, `${doseMorph.prefix}${finalDisplay}${doseMorph.unit}`);
+        const arrow = label.querySelector('.morph-arrow');
+        if (arrow) arrow.remove();
+        label.removeAttribute('font-size');
+        return;
+    }
+
+    // Interpolate dose number
+    const cur = doseMorph.oldNum + (doseMorph.newNum - doseMorph.oldNum) * doseT;
+    const display = doseMorph.decimals > 0 ? cur.toFixed(doseMorph.decimals) : String(Math.round(cur));
+    _setDoseLabelFirstTextNode(el, `${doseMorph.prefix}${display}${doseMorph.unit}`);
+
+    // Pulsing font on label — only affects inherited text; tspan children with
+    // their own font-size (Rx badge 7px, contribution 8px) are unaffected.
+    const baseFontSize = 11;
+    const pulse = Math.sin(Math.PI * doseT);
+    const pulsedSize = baseFontSize * (1 + 0.18 * pulse);
+    label.setAttribute('font-size', pulsedSize.toFixed(1));
+
+    // Arrow indicator: find existing or create once, then update opacity each frame
+    if (doseT > 0.01) {
+        let arrowSpan = label.querySelector('.morph-arrow') as SVGTSpanElement | null;
+        if (!arrowSpan) {
+            arrowSpan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+            arrowSpan.setAttribute('class', 'morph-arrow');
+            arrowSpan.setAttribute('dx', '2');
+            arrowSpan.textContent = doseMorph.isUp ? ' \u25B2' : ' \u25BC';
+            arrowSpan.setAttribute('fill', doseMorph.isUp ? '#4ade80' : '#f87171');
+            // Insert after first text node, before Rx badge / contribution tspans
+            let firstText: ChildNode | null = label.firstChild;
+            while (firstText && firstText.nodeType !== Node.TEXT_NODE) firstText = firstText.nextSibling;
+            if (firstText && firstText.nextSibling) {
+                label.insertBefore(arrowSpan, firstText.nextSibling);
+            } else {
+                label.appendChild(arrowSpan);
+            }
+        }
+        arrowSpan.setAttribute('fill-opacity', Math.min(1, doseT / 0.4).toFixed(2));
     }
 }
