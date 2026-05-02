@@ -116,3 +116,7 @@ export function stageProviderKey(stage: string): string {
 export function providerApiKeyKey(provider: string): string {
     return `lx_studio_key_${provider}`;
 }
+
+export function legacyProviderApiKeyKey(provider: string): string {
+    return `cortex_key_${provider}`;
+}

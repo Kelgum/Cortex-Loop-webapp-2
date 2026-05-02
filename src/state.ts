@@ -4,7 +4,14 @@
  * Depends on: constants (MODEL_OPTIONS), types
  */
 import { MODEL_OPTIONS, mapModelAcrossProviders } from './constants';
-import { providerApiKeyKey, settingsStore, stageModelKey, stageProviderKey, STORAGE_KEYS } from './settings-store';
+import {
+    legacyProviderApiKeyKey,
+    providerApiKeyKey,
+    settingsStore,
+    stageModelKey,
+    stageProviderKey,
+    STORAGE_KEYS,
+} from './settings-store';
 import type {
     PipelineStage,
     PhaseLabel,
@@ -31,7 +38,19 @@ import type {
     AgentMatchPhase,
 } from './types';
 
-const CONFIG_KEYS = (typeof window !== 'undefined' ? (window as any).LX_STUDIO_CONFIG?.keys : null) || {};
+const CONFIG_KEYS =
+    (typeof window !== 'undefined'
+        ? (window as any).LX_STUDIO_CONFIG?.keys || (window as any).CORTEX_CONFIG?.keys
+        : null) || {};
+
+function getConfiguredProviderKey(provider: string): string {
+    return (
+        settingsStore.getString(providerApiKeyKey(provider)) ||
+        settingsStore.getString(legacyProviderApiKeyKey(provider)) ||
+        CONFIG_KEYS[provider] ||
+        ''
+    );
+}
 
 const STAGE_IDS = [
     'fast',
@@ -295,10 +314,10 @@ export const AppState: IAppState = {
     })(),
     selectedLLM: INITIAL_PROVIDER,
     apiKeys: {
-        anthropic: settingsStore.getString(providerApiKeyKey('anthropic')) || CONFIG_KEYS.anthropic || '',
-        openai: settingsStore.getString(providerApiKeyKey('openai')) || CONFIG_KEYS.openai || '',
-        grok: settingsStore.getString(providerApiKeyKey('grok')) || CONFIG_KEYS.grok || '',
-        gemini: settingsStore.getString(providerApiKeyKey('gemini')) || CONFIG_KEYS.gemini || '',
+        anthropic: getConfiguredProviderKey('anthropic'),
+        openai: getConfiguredProviderKey('openai'),
+        grok: getConfiguredProviderKey('grok'),
+        gemini: getConfiguredProviderKey('gemini'),
     },
     stageProviders: {
         fast: resolveStoredStageProvider('fast'),
