@@ -7,6 +7,8 @@ import { settingsStore } from './settings-store';
 
 const SESSION_CACHE_KEY = 'lx_studio_session_cache_bundle';
 const SESSION_CACHE_ENABLED_KEY = 'lx_studio_session_cache_enabled';
+const LEGACY_SESSION_CACHE_KEY = 'cortex_session_cache_bundle';
+const LEGACY_SESSION_CACHE_ENABLED_KEY = 'cortex_session_cache_enabled';
 const CACHE_SCHEMA = 2;
 
 export interface CacheMeta {
@@ -31,6 +33,11 @@ export interface SessionCacheBundle {
     stages: Record<string, CacheEntryEnvelope>;
 }
 
+type LegacySessionCacheBundle = Omit<SessionCacheBundle, '__lxStudioCache'> & {
+    __cortexCache?: number;
+    __lxStudioCache?: number;
+};
+
 function buildMeta(stageClass: string, meta?: Partial<CacheMeta>): CacheMeta {
     return {
         stageClass,
@@ -40,22 +47,40 @@ function buildMeta(stageClass: string, meta?: Partial<CacheMeta>): CacheMeta {
     };
 }
 
-function isSessionCacheBundle(value: any): value is SessionCacheBundle {
-    return (
+function normalizeSessionCacheBundle(value: any): SessionCacheBundle | null {
+    const hasCurrentSchema = value?.__lxStudioCache === CACHE_SCHEMA;
+    const hasLegacySchema = value?.__cortexCache === CACHE_SCHEMA;
+    if (
         !!value &&
         typeof value === 'object' &&
-        value.__lxStudioCache === CACHE_SCHEMA &&
+        (hasCurrentSchema || hasLegacySchema) &&
         typeof value.runId === 'string' &&
         typeof value.createdAt === 'string' &&
         typeof value.completedAt === 'string' &&
         !!value.stages &&
         typeof value.stages === 'object'
-    );
+    ) {
+        const { __cortexCache: _legacyMarker, ...bundle } = value as LegacySessionCacheBundle;
+        return {
+            ...bundle,
+            __lxStudioCache: CACHE_SCHEMA,
+        };
+    }
+    return null;
 }
 
 function readBundle(): SessionCacheBundle | null {
     const parsed = settingsStore.getJson<any>(SESSION_CACHE_KEY, null);
-    return isSessionCacheBundle(parsed) ? parsed : null;
+    const current = normalizeSessionCacheBundle(parsed);
+    if (current) return current;
+
+    const legacyParsed = settingsStore.getJson<any>(LEGACY_SESSION_CACHE_KEY, null);
+    const legacy = normalizeSessionCacheBundle(legacyParsed);
+    if (legacy) {
+        writeBundle(legacy);
+        return legacy;
+    }
+    return null;
 }
 
 function writeBundle(bundle: SessionCacheBundle | null): boolean {
@@ -67,7 +92,10 @@ function writeBundle(bundle: SessionCacheBundle | null): boolean {
 }
 
 function readEnabled(): boolean {
-    return settingsStore.getBoolean(SESSION_CACHE_ENABLED_KEY, false);
+    return (
+        settingsStore.getBoolean(SESSION_CACHE_ENABLED_KEY, false) ||
+        settingsStore.getBoolean(LEGACY_SESSION_CACHE_ENABLED_KEY, false)
+    );
 }
 
 function writeEnabled(enabled: boolean): void {
@@ -261,7 +289,7 @@ export const LLMCache = {
     },
 
     loadBundle(bundle: SessionCacheBundle): void {
-        this._bundle = bundle;
+        this._bundle = normalizeSessionCacheBundle(bundle) || bundle;
         this._enabled = true;
         this._persistBundle();
         this._persistEnabled();
