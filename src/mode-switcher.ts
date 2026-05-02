@@ -218,7 +218,7 @@ export function initModeSwitcher(): void {
     tabsEl.className = 'mode-tabs';
     tabsEl.innerHTML = `
         <button class="mode-tab" data-mode="stream">Stream</button>
-        <button class="mode-tab" data-mode="design">Design</button>
+        <button class="mode-tab" data-mode="design">Studio</button>
         <span class="mode-tab-indicator"></span>
     `;
     logo.insertAdjacentElement('afterend', tabsEl);
@@ -254,7 +254,7 @@ export function initModeSwitcher(): void {
     if (_gridEl) {
         _gridEl.addEventListener('click', handleCardClick);
 
-        // Handle "Open in Design" from expanded cards
+        // Handle "Open in Studio" from expanded cards
         _gridEl.addEventListener('card-open-design', ((e: CustomEvent) => {
             const id = e.detail?.id;
             if (id) {
@@ -527,7 +527,7 @@ function updateStreamHint(): void {
     hintExample.textContent =
         count > 0
             ? `Browse ${count} protocol${count !== 1 ? 's' : ''} by effect, substance, or goal`
-            : 'No protocols saved yet — switch to Design to create your first';
+            : 'No protocols saved yet - switch to Studio to create your first';
     hintExample.removeAttribute('href');
     hintExample.style.cursor = 'default';
 }
@@ -1973,7 +1973,7 @@ function renderStreamSections(): void {
     const activeId = getLoadedCycleId();
 
     if (index.length === 0) {
-        _gridEl.innerHTML = `<div class="stream-empty">No protocols yet. Switch to <strong>Design</strong> to create your first.</div>`;
+        _gridEl.innerHTML = `<div class="stream-empty">No protocols yet. Switch to <strong>Studio</strong> to create your first.</div>`;
         return;
     }
 
@@ -2096,7 +2096,7 @@ function renderStreamSections(): void {
     }
 
     if (sectionsHtml.length === 0) {
-        _gridEl.innerHTML = `<div class="stream-empty">No protocols yet. Switch to <strong>Design</strong> to create your first.</div>`;
+        _gridEl.innerHTML = `<div class="stream-empty">No protocols yet. Switch to <strong>Studio</strong> to create your first.</div>`;
         return;
     }
 
@@ -2169,7 +2169,7 @@ function renderStreamGrid(filter: string): void {
     if (filtered.length === 0) {
         const msg =
             index.length === 0
-                ? 'No protocols yet. Switch to <strong>Design</strong> to create your first.'
+                ? 'No protocols yet. Switch to <strong>Studio</strong> to create your first.'
                 : 'No protocols match your search';
         _gridEl.innerHTML = `<div class="stream-empty">${msg}</div>`;
         return;
@@ -2240,7 +2240,7 @@ function handleCardClick(e: Event): void {
         e.stopPropagation();
         enterCardEdit(card, id);
     } else {
-        // All cards (wide + narrow): expand inline. "Open in Design" inside the
+        // All cards (wide + narrow): expand inline. "Open in Studio" inside the
         // expand panel triggers card-open-design → handleStreamLoad for full load.
         e.preventDefault();
         e.stopPropagation();

@@ -354,7 +354,7 @@ function buildExpandPanel(entry: SavedCycleIndexEntry): HTMLElement {
                 <span class="cg-expand-add-label">${isInStream(entry.id) ? 'In Stream' : 'Add to Stream'}</span>
             </button>
             <button class="cg-expand-design-link" data-cycle-id="${escapeHtml(entry.id)}">
-                Open in Design
+                Open in Studio
             </button>
             <span class="cg-expand-prompt-inline">${escapeHtml(entry.prompt || '')}</span>
         </div>
