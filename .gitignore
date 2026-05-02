@@ -4,8 +4,10 @@ config.js
 node_modules/
 dist/
 .cortex-debug/
+.lx-studio-debug/
 saved-cycles/
 .ab-decisions.json
 pipeline-presets.json
 default-preset.json
 .cortex-logs/
+.lx-studio-logs/
