@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-const CACHE_SCHEMA = 1;
+const CACHE_SCHEMA = 2;
 const PROMPT = '4 hours of deep focus, no sleep quality impact';
 const STREAM_CARD_ID = 'stream-card-expand-test';
 const HOURS = Array.from({ length: 25 }, (_, idx) => 6 + idx);
@@ -36,15 +36,14 @@ function buildChannelData(base: number, amplitude: number) {
 }
 
 function buildCacheEnvelope(stageClass: string, payload: unknown) {
-    return JSON.stringify({
-        __lxStudioCache: CACHE_SCHEMA,
+    return {
         payload,
         meta: {
             stageClass,
-            cacheKey: `lx_studio_cache_${stageClass}`,
+            cacheKey: `session:${stageClass}`,
             cachedAt: '2026-03-06T00:00:00.000Z',
         },
-    });
+    };
 }
 
 function buildStreamCardIcon() {
@@ -94,6 +93,10 @@ function buildStreamCardRecord() {
         ...indexEntry,
         createdAt: '2026-04-10T09:00:00.000Z',
         bundle: {
+            __lxStudioCache: CACHE_SCHEMA,
+            runId: 'stream-card-run',
+            createdAt: '2026-04-10T09:00:00.000Z',
+            completedAt: '2026-04-10T09:01:00.000Z',
             stages: {
                 'fast-model': {
                     payload: {
@@ -130,16 +133,6 @@ async function seedCachedPipeline(page: Page) {
         buildCurve('Focus', '#60a5fa', 36, 68),
         buildCurve('Calm', '#34d399', 42, 58),
     ];
-
-    const enabled = {
-        'fast-model': true,
-        'main-model': true,
-        'intervention-model': true,
-        'biometric-rec-model': true,
-        'biometric-profile-model': true,
-        'biometric-channel-model': true,
-        'biometric-model': true,
-    };
 
     const cachedEntries = {
         'fast-model': {
@@ -218,24 +211,31 @@ async function seedCachedPipeline(page: Page) {
     };
 
     await page.addInitScript(
-        ({ enabledMap, entries }) => {
+        ({ cacheSchema, entries }) => {
             window.localStorage.clear();
             window.sessionStorage.clear();
             window.localStorage.setItem('lx_studio_sherlock_enabled', 'false');
             window.localStorage.setItem('lx_studio_llm', 'anthropic');
-            window.localStorage.setItem('lx_studio_cache_enabled', JSON.stringify(enabledMap));
+            window.localStorage.setItem('lx_studio_session_cache_enabled', 'true');
+            window.localStorage.setItem(
+                'lx_studio_session_cache_bundle',
+                JSON.stringify({
+                    __lxStudioCache: cacheSchema,
+                    runId: 'e2e-cached-run',
+                    createdAt: '2026-03-06T00:00:00.000Z',
+                    completedAt: '2026-03-06T00:01:00.000Z',
+                    stages: entries,
+                }),
+            );
             window.localStorage.setItem('lx_studio_theme', 'dark');
             window.localStorage.setItem('lx_studio_max_effects', '2');
-            for (const [stageClass, payload] of Object.entries(entries)) {
-                window.localStorage.setItem(`lx_studio_cache_${stageClass}`, JSON.stringify(payload));
-            }
         },
         {
-            enabledMap: enabled,
+            cacheSchema: CACHE_SCHEMA,
             entries: Object.fromEntries(
                 Object.entries(cachedEntries).map(([stageClass, payload]) => [
                     stageClass,
-                    JSON.parse(buildCacheEnvelope(stageClass, payload)),
+                    buildCacheEnvelope(stageClass, payload),
                 ]),
             ),
         },
@@ -320,13 +320,15 @@ test('replays the cached prompt-to-biometric flow', async ({ page }) => {
     await expect(vcrLeftLabel).toHaveText('', { timeout: 30_000 });
     await interventionPlay.click();
 
-    const goButton = page.locator('#bio-go-btn');
-    await expect(goButton).toBeEnabled({ timeout: 15_000 });
-    await goButton.click();
+    await expect(vcrRightLabel).toHaveText('Select Devices', { timeout: 15_000 });
+    await page.locator('.bio-dp-card[data-key="watch"]').click();
+    await page.waitForTimeout(1000);
+    await expect(interventionPlay).toBeEnabled({ timeout: 15_000 });
+    await interventionPlay.click();
 
-    const submitButton = page.locator('#bio-submit-btn');
-    await expect(submitButton).toBeVisible({ timeout: 10_000 });
-    await submitButton.click();
+    await expect(vcrRightLabel).toHaveText('Run Biometric Loop', { timeout: 15_000 });
+    await expect(interventionPlay).toBeEnabled({ timeout: 15_000 });
+    await interventionPlay.click();
 
     await page.waitForFunction(() => {
         const group = document.querySelector('#phase-biometric-strips');

@@ -1301,11 +1301,13 @@ export default defineConfig({
         strictPort: !!process.env.PORT,
         watch: {
             ignored: [
+                '**/.cortex-debug/**',
                 '**/.lx-studio-debug/**',
                 '**/saved-cycles/**',
                 '**/custom-sections/**',
                 '**/pipeline-presets.json',
                 '**/section-order.json',
+                '**/.cortex-logs/**',
                 '**/.lx-studio-logs/**',
             ],
         },

@@ -34,12 +34,31 @@ function getStorage(kind: 'local' | 'session'): Storage | null {
     return kind === 'local' ? window.localStorage : window.sessionStorage;
 }
 
+function legacyStorageKey(key: string): string | null {
+    return key.startsWith('lx_studio_') ? `cortex_${key.slice('lx_studio_'.length)}` : null;
+}
+
 class SettingsStore {
     constructor(private readonly kind: 'local' | 'session') {}
 
     getString(key: string): string | null {
         try {
-            return getStorage(this.kind)?.getItem(key) ?? null;
+            const storage = getStorage(this.kind);
+            const current = storage?.getItem(key);
+            if (current != null) return current;
+
+            const legacyKey = legacyStorageKey(key);
+            if (!storage || !legacyKey) return null;
+
+            const legacy = storage.getItem(legacyKey);
+            if (legacy == null) return null;
+
+            try {
+                storage.setItem(key, legacy);
+            } catch {
+                // Read-through migration is best effort; the legacy value is still usable.
+            }
+            return legacy;
         } catch {
             return null;
         }
@@ -70,7 +89,10 @@ class SettingsStore {
 
     setString(key: string, value: string): boolean {
         try {
-            getStorage(this.kind)?.setItem(key, value);
+            const storage = getStorage(this.kind);
+            storage?.setItem(key, value);
+            const legacyKey = legacyStorageKey(key);
+            if (legacyKey) storage?.removeItem(legacyKey);
             return true;
         } catch {
             // Ignore quota/storage errors. The in-memory state remains authoritative.
@@ -84,7 +106,10 @@ class SettingsStore {
 
     remove(key: string): void {
         try {
-            getStorage(this.kind)?.removeItem(key);
+            const storage = getStorage(this.kind);
+            storage?.removeItem(key);
+            const legacyKey = legacyStorageKey(key);
+            if (legacyKey) storage?.removeItem(legacyKey);
         } catch {
             // Ignore storage errors.
         }
