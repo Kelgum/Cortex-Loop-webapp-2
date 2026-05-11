@@ -3,9 +3,23 @@
  * Exports: DebugLog
  * Depends on: constants (MODEL_OPTIONS, PROVIDER_LABELS, PROVIDER_IDS), state (AppState, switchStageProvider)
  */
-import { MODEL_OPTIONS, PROVIDER_LABELS, PROVIDER_IDS } from './constants';
-import { AppState, switchStageProvider, capturePresetSnapshot, applyPresetSnapshot } from './state';
-import { settingsStore, stageModelKey, STORAGE_KEYS } from './settings-store';
+import {
+    MODEL_OPTIONS,
+    PROVIDER_LABELS,
+    PROVIDER_IDS,
+    EFFORT_LABELS,
+    effortOptionsForModel,
+} from './constants';
+import {
+    AppState,
+    switchStageProvider,
+    switchStageModel,
+    switchStageEffort,
+    switchStageFastMode,
+    capturePresetSnapshot,
+    applyPresetSnapshot,
+} from './state';
+import { settingsStore, STORAGE_KEYS } from './settings-store';
 import { LLMCache } from './llm-cache';
 import { PROMPTS } from './prompts';
 import { initDashboard, openDashboard } from './agent-performance-dashboard';
@@ -434,9 +448,9 @@ export const DebugLog = {
             this._populateSelect(select, stage.id);
             select.addEventListener('change', () => {
                 const configStage = resolveModelConfigStage(stage.id);
-                AppState.stageModels[configStage] = select.value;
-                settingsStore.setString(stageModelKey(configStage), select.value);
+                switchStageModel(configStage, select.value);
                 fitSelectWidthToLabel(select);
+                this._refreshEffortAndFastModeControls(stage.id);
             });
             header.appendChild(select);
 
@@ -456,8 +470,41 @@ export const DebugLog = {
                 switchStageProvider(configStage, providerSelect.value);
                 // Re-populate model dropdown for new provider
                 this._populateSelect(select, stage.id);
+                this._refreshEffortAndFastModeControls(stage.id);
             });
             header.appendChild(providerSelect);
+
+            // Effort selector (auto-hides when the chosen model doesn't expose
+            // an effort knob). Defaults to the lowest / fastest value.
+            const effortSelect = document.createElement('select');
+            effortSelect.className = 'agent-effort-select';
+            effortSelect.dataset.stage = stage.id;
+            effortSelect.title = 'Reasoning effort — lower = faster, higher = more thinking tokens';
+            effortSelect.addEventListener('change', () => {
+                switchStageEffort(configStage, effortSelect.value);
+                fitSelectWidthToLabel(effortSelect);
+            });
+            header.appendChild(effortSelect);
+
+            // Fast Mode toggle — provider-specific premium-latency tier.
+            const fastWrap = document.createElement('label');
+            fastWrap.className = 'agent-fast-toggle';
+            const fastInput = document.createElement('input');
+            fastInput.type = 'checkbox';
+            fastInput.dataset.stage = stage.id;
+            fastInput.addEventListener('change', () => {
+                switchStageFastMode(configStage, fastInput.checked);
+                this._refreshEffortAndFastModeControls(stage.id);
+            });
+            const fastLabel = document.createElement('span');
+            fastLabel.className = 'agent-fast-toggle-label';
+            fastLabel.textContent = '⚡ Fast';
+            fastWrap.appendChild(fastInput);
+            fastWrap.appendChild(fastLabel);
+            header.appendChild(fastWrap);
+
+            this._populateEffortSelect(effortSelect, stage.id);
+            this._syncFastModeToggle(fastWrap, fastInput, stage.id);
 
             const status = document.createElement('div');
             status.className = 'agent-card-status';
@@ -535,10 +582,76 @@ export const DebugLog = {
         select.value = resolved;
 
         if (resolved && stored !== resolved) {
-            AppState.stageModels[configStage] = resolved;
-            settingsStore.setString(stageModelKey(configStage), resolved);
+            switchStageModel(configStage, resolved);
         }
         fitSelectWidthToLabel(select);
+    },
+
+    _populateEffortSelect(select: HTMLSelectElement, stageId: string) {
+        const configStage = resolveModelConfigStage(stageId);
+        const provider = AppState.stageProviders[configStage] || AppState.selectedLLM;
+        const modelKey = AppState.stageModels[configStage];
+        const entry = (MODEL_OPTIONS[provider] || []).find((o: any) => o.key === modelKey);
+        const card = select.closest('.pipeline-agent-card') as HTMLElement | null;
+
+        if (!entry?.supportsEffort) {
+            select.innerHTML = '';
+            select.style.display = 'none';
+            if (card) card.classList.add('no-effort');
+            return;
+        }
+        select.style.display = '';
+        if (card) card.classList.remove('no-effort');
+
+        select.innerHTML = '';
+        const effortValues = effortOptionsForModel(entry);
+        for (const value of effortValues) {
+            const o = document.createElement('option');
+            o.value = value;
+            o.textContent = EFFORT_LABELS[value] || value;
+            select.appendChild(o);
+        }
+        const stored = AppState.stageEfforts[configStage];
+        const resolved = effortValues.includes(stored) ? stored : effortValues[0] || '';
+        select.value = resolved;
+        select.disabled = !!entry.adaptiveOnly;
+        if (entry.adaptiveOnly) {
+            select.title = 'Adaptive thinking is the only supported mode on this model.';
+        } else {
+            select.title = 'Reasoning effort — lower = faster, higher = more thinking tokens';
+        }
+        fitSelectWidthToLabel(select);
+    },
+
+    _syncFastModeToggle(wrap: HTMLElement, input: HTMLInputElement, stageId: string) {
+        const configStage = resolveModelConfigStage(stageId);
+        const provider = AppState.stageProviders[configStage] || AppState.selectedLLM;
+        const modelKey = AppState.stageModels[configStage];
+        const entry = (MODEL_OPTIONS[provider] || []).find((o: any) => o.key === modelKey);
+
+        if (!entry?.supportsFastMode) {
+            wrap.classList.add('disabled');
+            input.disabled = true;
+            input.checked = false;
+            wrap.title = 'Premium latency tier unavailable on this provider/model.';
+            return;
+        }
+        wrap.classList.remove('disabled');
+        input.disabled = false;
+        input.checked = !!AppState.stageFastMode[configStage];
+        wrap.title = 'Premium latency tier — faster output, ~3–6× cost.';
+    },
+
+    _refreshEffortAndFastModeControls(stageId: string) {
+        const effortSelect = document.querySelector(
+            `.agent-effort-select[data-stage="${stageId}"]`,
+        ) as HTMLSelectElement | null;
+        if (effortSelect) this._populateEffortSelect(effortSelect, stageId);
+        const fastInput = document.querySelector(
+            `.agent-fast-toggle input[data-stage="${stageId}"]`,
+        ) as HTMLInputElement | null;
+        const fastWrap = fastInput?.closest('.agent-fast-toggle') as HTMLElement | null;
+        if (fastInput && fastWrap) this._syncFastModeToggle(fastWrap, fastInput, stageId);
     },
 
     // ── Pipeline Preset helpers ──
@@ -646,6 +759,8 @@ export const DebugLog = {
                     body: JSON.stringify({
                         stageModels: preset.stageModels,
                         stageProviders: preset.stageProviders,
+                        stageEfforts: preset.stageEfforts,
+                        stageFastMode: preset.stageFastMode,
                     }),
                 }).catch(() => {});
             });
@@ -729,6 +844,8 @@ export const DebugLog = {
                 createdAt: now.toISOString(),
                 stageModels: snap.stageModels,
                 stageProviders: snap.stageProviders,
+                stageEfforts: snap.stageEfforts,
+                stageFastMode: snap.stageFastMode,
             };
             all.push(preset);
             await this._savePresets(all);
@@ -834,6 +951,7 @@ export const DebugLog = {
                 const configStage = resolveModelConfigStage(stage.id);
                 provSel.value = AppState.stageProviders[configStage] || AppState.selectedLLM;
             }
+            this._refreshEffortAndFastModeControls(stage.id);
         }
     },
 

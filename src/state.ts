@@ -3,11 +3,13 @@
  * Exports: AppState, PhaseState, BiometricState, SimulationState, RevisionState, CompileState, TimelineState, SherlockState, DividerState, getStageModel, syncStageModelsForProvider
  * Depends on: constants (MODEL_OPTIONS), types
  */
-import { MODEL_OPTIONS, mapModelAcrossProviders } from './constants';
+import { MODEL_OPTIONS, mapModelAcrossProviders, defaultEffortForModel, effortOptionsForModel } from './constants';
 import {
     legacyProviderApiKeyKey,
     providerApiKeyKey,
     settingsStore,
+    stageEffortKey,
+    stageFastModeKey,
     stageModelKey,
     stageProviderKey,
     STORAGE_KEYS,
@@ -76,102 +78,82 @@ const STAGE_IDS = [
     'socrx',
 ];
 
+// Stage → tier classification (used to assign default models per provider).
+//   0 = fast (extraction, short narration)
+//   1 = mid  (some reasoning, smaller JSON)
+//   2 = main (large JSON, full reasoning)
+const STAGE_TIER: Record<string, 0 | 1 | 2> = {
+    fast: 0,
+    agentMatch: 0,
+    biometricRec: 0,
+    biometricProfile: 0,
+    biometricChannel: 0,
+    biometric: 0,
+    sherlock: 0,
+    sherlockRevision: 0,
+    sherlock7d: 0,
+    socrx: 0,
+    spotterDaily: 0,
+    strategistBio: 1,
+    strategistBioDaily: 1,
+    sherlockExtended: 1,
+    curves: 2,
+    intervention: 2,
+    revision: 2,
+    knight: 2,
+    grandmasterDaily: 2,
+    curvesExtended: 2,
+    interventionExtended: 2,
+};
+
+// Per-provider model key per tier slot. Mid-tier defaults are the new addition.
+const TIER_DEFAULT_KEYS: Record<string, Record<0 | 1 | 2, string>> = {
+    anthropic: { 0: 'haiku', 1: 'sonnet', 2: 'opus47' },
+    openai: { 0: '5.5-instant', 1: '5.4-mini', 2: '5.5' },
+    grok: { 0: 'fast', 1: '4-20', 2: '4-3' },
+    gemini: { 0: 'flash-lite-preview', 1: 'flash-25', 2: 'flash-preview' },
+};
+
+function buildStageDefaults(provider: string): Record<string, string> {
+    const tierMap = TIER_DEFAULT_KEYS[provider];
+    if (!tierMap) return {};
+    const result: Record<string, string> = {};
+    for (const stage of STAGE_IDS) {
+        const tier = STAGE_TIER[stage] ?? 0;
+        result[stage] = tierMap[tier];
+    }
+    return result;
+}
+
 const STAGE_DEFAULTS_BY_PROVIDER: any = {
-    anthropic: {
-        fast: 'haiku',
-        curves: 'opus',
-        intervention: 'opus',
-        biometricRec: 'haiku',
-        biometricProfile: 'haiku',
-        biometricChannel: 'haiku',
-        biometric: 'haiku',
-        revision: 'opus',
-        sherlock: 'haiku',
-        sherlockRevision: 'haiku',
-        strategistBio: 'haiku',
-        knight: 'opus',
-        spotterDaily: 'haiku',
-        strategistBioDaily: 'haiku',
-        grandmasterDaily: 'opus',
-        agentMatch: 'haiku',
-        sherlock7d: 'haiku',
-        curvesExtended: 'opus',
-        interventionExtended: 'opus',
-        sherlockExtended: 'haiku',
-        socrx: 'haiku',
-    },
-    openai: {
-        fast: '5.3-instant',
-        curves: '5.4-thinking',
-        intervention: '5.4-thinking',
-        biometricRec: '5.3-instant',
-        biometricProfile: '5.3-instant',
-        biometricChannel: '5.3-instant',
-        biometric: '5.3-instant',
-        revision: '5.4-thinking',
-        sherlock: '5.3-instant',
-        sherlockRevision: '5.3-instant',
-        strategistBio: '5.3-instant',
-        knight: '5.4-thinking',
-        spotterDaily: '5.3-instant',
-        strategistBioDaily: '5.3-instant',
-        grandmasterDaily: '5.4-thinking',
-        agentMatch: '5.3-instant',
-        sherlock7d: '5.3-instant',
-        curvesExtended: '5.4-thinking',
-        interventionExtended: '5.4-thinking',
-        sherlockExtended: '5.3-instant',
-        socrx: '5.3-instant',
-    },
-    grok: {
-        fast: 'fast',
-        curves: 'full',
-        intervention: 'full',
-        biometricRec: 'fast',
-        biometricProfile: 'fast',
-        biometricChannel: 'fast',
-        biometric: 'fast',
-        revision: 'full',
-        sherlock: 'fast',
-        sherlockRevision: 'fast',
-        strategistBio: 'fast',
-        knight: 'full',
-        spotterDaily: 'fast',
-        strategistBioDaily: 'fast',
-        grandmasterDaily: 'full',
-        agentMatch: 'fast',
-        sherlock7d: 'fast',
-        curvesExtended: 'full',
-        interventionExtended: 'full',
-        sherlockExtended: 'fast',
-        socrx: 'fast',
-    },
-    gemini: {
-        fast: 'flash-lite',
-        curves: 'pro-preview',
-        intervention: 'pro-preview',
-        biometricRec: 'flash-lite',
-        biometricProfile: 'flash-lite',
-        biometricChannel: 'flash-lite',
-        biometric: 'flash-lite',
-        revision: 'pro-preview',
-        sherlock: 'flash-lite',
-        sherlockRevision: 'flash-lite',
-        strategistBio: 'flash-lite',
-        knight: 'pro-preview',
-        spotterDaily: 'flash-lite',
-        strategistBioDaily: 'flash-lite',
-        grandmasterDaily: 'pro-preview',
-        agentMatch: 'flash-lite',
-        sherlock7d: 'flash-lite',
-        curvesExtended: 'pro-preview',
-        interventionExtended: 'pro-preview',
-        sherlockExtended: 'flash-lite',
-        socrx: 'flash-lite',
-    },
+    anthropic: buildStageDefaults('anthropic'),
+    openai: buildStageDefaults('openai'),
+    grok: buildStageDefaults('grok'),
+    gemini: buildStageDefaults('gemini'),
 };
 
 const LEGACY_MAP: any = { fast: 0, main: -1 };
+
+// Map of retired model keys → current replacement (per provider). Lets us migrate
+// presets stored before the May 2026 model refresh without forcing the user to
+// reconfigure each stage manually.
+const LEGACY_MODEL_KEY_MAP: Record<string, Record<string, string>> = {
+    openai: {
+        '5.3-instant': '5.5-instant',
+        '5.4-thinking': '5.5',
+    },
+    gemini: {
+        // 'flash-lite-preview' and 'flash-preview' are still valid keys but the
+        // underlying model id changed; mapping handled by entry definition.
+    },
+    grok: {
+        'fast-non-reasoning': 'fast',
+    },
+    anthropic: {
+        sonnet45: 'sonnet',
+        opus46: 'opus',
+    },
+};
 
 const INITIAL_PROVIDER = settingsStore.getString(STORAGE_KEYS.selectedLlm) || 'anthropic';
 
@@ -183,6 +165,17 @@ function getDefaultStageModelKey(stage: string, provider: string) {
     const defaults = getProviderDefaults(provider);
     const opts = MODEL_OPTIONS[provider] || [];
     return defaults[stage] || opts[0]?.key || '';
+}
+
+function getModelEntry(provider: string, modelKey: string): any | null {
+    const opts = MODEL_OPTIONS[provider] || [];
+    return opts.find((o: any) => o.key === modelKey) || null;
+}
+
+function getDefaultStageEffort(stage: string, provider: string): string {
+    const modelKey = getDefaultStageModelKey(stage, provider);
+    const entry = getModelEntry(provider, modelKey);
+    return defaultEffortForModel(entry);
 }
 
 function resolveStoredStageProvider(stage: string): string {
@@ -202,8 +195,46 @@ function resolveStoredStageModel(stage: string, provider: string) {
         return opts[idx]?.key || fallback;
     }
 
+    const legacyForProvider = LEGACY_MODEL_KEY_MAP[provider] || {};
+    if (stored in legacyForProvider) {
+        const migrated = legacyForProvider[stored];
+        if (opts.some((o: any) => o.key === migrated)) return migrated;
+    }
+
     if (opts.some((o: any) => o.key === stored)) return stored;
     return fallback;
+}
+
+function resolveStoredStageEffort(stage: string, provider: string, modelKey: string): string {
+    const entry = getModelEntry(provider, modelKey);
+    const defaultEffort = defaultEffortForModel(entry);
+    if (!entry?.supportsEffort) return '';
+
+    const stored = settingsStore.getString(stageEffortKey(stage));
+    if (!stored) return defaultEffort;
+
+    if (entry.adaptiveOnly) return 'adaptive';
+    const allowed = effortOptionsForModel(entry);
+    return allowed.includes(stored) ? stored : defaultEffort;
+}
+
+function resolveStoredStageFastMode(stage: string, provider: string, modelKey: string): boolean {
+    const entry = getModelEntry(provider, modelKey);
+    if (!entry?.supportsFastMode) return false;
+    return settingsStore.getBoolean(stageFastModeKey(stage), false);
+}
+
+function refreshStageEffortAndFastMode(stage: string, provider: string, modelKey: string) {
+    const entry = getModelEntry(provider, modelKey);
+    const effort = entry?.supportsEffort ? defaultEffortForModel(entry) : '';
+    AppState.stageEfforts[stage] = effort;
+    if (effort) settingsStore.setString(stageEffortKey(stage), effort);
+    else settingsStore.remove(stageEffortKey(stage));
+
+    if (!entry?.supportsFastMode) {
+        AppState.stageFastMode[stage] = false;
+        settingsStore.remove(stageFastModeKey(stage));
+    }
 }
 
 export function syncStageModelsForProvider(provider: string) {
@@ -217,6 +248,7 @@ export function syncStageModelsForProvider(provider: string) {
         AppState.stageModels[stage] = resolved;
         settingsStore.setString(stageProviderKey(stage), provider);
         settingsStore.setString(stageModelKey(stage), resolved);
+        refreshStageEffortAndFastMode(stage, provider, resolved);
     }
 }
 
@@ -233,6 +265,59 @@ export function switchStageProvider(stage: string, newProvider: string) {
     AppState.stageModels[stage] = resolved;
     settingsStore.setString(stageProviderKey(stage), newProvider);
     settingsStore.setString(stageModelKey(stage), resolved);
+    refreshStageEffortAndFastMode(stage, newProvider, resolved);
+}
+
+/**
+ * Update the model for a single pipeline stage. Resets effort/fastMode to the
+ * new model's defaults (lowest effort, fastMode off).
+ */
+export function switchStageModel(stage: string, newModelKey: string) {
+    const provider = AppState.stageProviders[stage];
+    const opts = MODEL_OPTIONS[provider] || [];
+    const resolved = opts.some((o: any) => o.key === newModelKey) ? newModelKey : getDefaultStageModelKey(stage, provider);
+
+    AppState.stageModels[stage] = resolved;
+    settingsStore.setString(stageModelKey(stage), resolved);
+    refreshStageEffortAndFastMode(stage, provider, resolved);
+}
+
+/**
+ * Update the effort level for a single pipeline stage. Validated against the
+ * selected model's allowed effort options.
+ */
+export function switchStageEffort(stage: string, effort: string) {
+    const provider = AppState.stageProviders[stage];
+    const modelKey = AppState.stageModels[stage];
+    const entry = getModelEntry(provider, modelKey);
+    if (!entry?.supportsEffort) return;
+    if (entry.adaptiveOnly) {
+        AppState.stageEfforts[stage] = 'adaptive';
+        settingsStore.setString(stageEffortKey(stage), 'adaptive');
+        return;
+    }
+    const allowed = effortOptionsForModel(entry);
+    const next = allowed.includes(effort) ? effort : defaultEffortForModel(entry);
+    AppState.stageEfforts[stage] = next;
+    settingsStore.setString(stageEffortKey(stage), next);
+}
+
+/**
+ * Toggle the Fast Mode flag for a single pipeline stage. Silently ignored when
+ * the selected model does not support a premium-latency tier.
+ */
+export function switchStageFastMode(stage: string, enabled: boolean) {
+    const provider = AppState.stageProviders[stage];
+    const modelKey = AppState.stageModels[stage];
+    const entry = getModelEntry(provider, modelKey);
+    if (!entry?.supportsFastMode) {
+        AppState.stageFastMode[stage] = false;
+        settingsStore.remove(stageFastModeKey(stage));
+        return;
+    }
+    AppState.stageFastMode[stage] = enabled;
+    if (enabled) settingsStore.setString(stageFastModeKey(stage), 'true');
+    else settingsStore.remove(stageFastModeKey(stage));
 }
 
 /**
@@ -241,10 +326,14 @@ export function switchStageProvider(stage: string, newProvider: string) {
 export function capturePresetSnapshot(): {
     stageModels: Record<string, string>;
     stageProviders: Record<string, string>;
+    stageEfforts: Record<string, string>;
+    stageFastMode: Record<string, boolean>;
 } {
     return {
         stageModels: { ...AppState.stageModels },
         stageProviders: { ...AppState.stageProviders },
+        stageEfforts: { ...AppState.stageEfforts },
+        stageFastMode: { ...AppState.stageFastMode },
     };
 }
 
@@ -256,6 +345,8 @@ export function capturePresetSnapshot(): {
 export function applyPresetSnapshot(snapshot: {
     stageModels: Record<string, string>;
     stageProviders: Record<string, string>;
+    stageEfforts?: Record<string, string>;
+    stageFastMode?: Record<string, boolean>;
 }): void {
     for (const stage of STAGE_IDS) {
         const provider = snapshot.stageProviders?.[stage];
@@ -263,15 +354,40 @@ export function applyPresetSnapshot(snapshot: {
 
         const modelKey = snapshot.stageModels?.[stage];
         const opts = MODEL_OPTIONS[validProvider] || [];
+        const legacyForProvider = LEGACY_MODEL_KEY_MAP[validProvider] || {};
+        const migrated = modelKey && legacyForProvider[modelKey];
+        const candidate = migrated || modelKey;
         const validModel =
-            modelKey && opts.some((o: any) => o.key === modelKey)
-                ? modelKey
+            candidate && opts.some((o: any) => o.key === candidate)
+                ? candidate
                 : getDefaultStageModelKey(stage, validProvider);
 
         AppState.stageProviders[stage] = validProvider;
         AppState.stageModels[stage] = validModel;
         settingsStore.setString(stageProviderKey(stage), validProvider);
         settingsStore.setString(stageModelKey(stage), validModel);
+
+        const entry = getModelEntry(validProvider, validModel);
+        const defaultEffort = defaultEffortForModel(entry);
+        const requestedEffort = snapshot.stageEfforts?.[stage];
+        let effort = defaultEffort;
+        if (entry?.supportsEffort && requestedEffort) {
+            if (entry.adaptiveOnly) {
+                effort = 'adaptive';
+            } else {
+                const allowed = effortOptionsForModel(entry);
+                effort = allowed.includes(requestedEffort) ? requestedEffort : defaultEffort;
+            }
+        }
+        AppState.stageEfforts[stage] = effort;
+        if (effort) settingsStore.setString(stageEffortKey(stage), effort);
+        else settingsStore.remove(stageEffortKey(stage));
+
+        const fastModeRequested = snapshot.stageFastMode?.[stage] === true;
+        const fastMode = entry?.supportsFastMode ? fastModeRequested : false;
+        AppState.stageFastMode[stage] = fastMode;
+        if (fastMode) settingsStore.setString(stageFastModeKey(stage), 'true');
+        else settingsStore.remove(stageFastModeKey(stage));
     }
 }
 
@@ -342,35 +458,31 @@ export const AppState: IAppState = {
         sherlockExtended: resolveStoredStageProvider('sherlockExtended'),
         socrx: resolveStoredStageProvider('socrx'),
     },
-    stageModels: {
-        fast: resolveStoredStageModel('fast', resolveStoredStageProvider('fast')),
-        curves: resolveStoredStageModel('curves', resolveStoredStageProvider('curves')),
-        intervention: resolveStoredStageModel('intervention', resolveStoredStageProvider('intervention')),
-        biometricRec: resolveStoredStageModel('biometricRec', resolveStoredStageProvider('biometricRec')),
-        biometricProfile: resolveStoredStageModel('biometricProfile', resolveStoredStageProvider('biometricProfile')),
-        biometricChannel: resolveStoredStageModel('biometricChannel', resolveStoredStageProvider('biometricChannel')),
-        biometric: resolveStoredStageModel('biometric', resolveStoredStageProvider('biometric')),
-        revision: resolveStoredStageModel('revision', resolveStoredStageProvider('revision')),
-        sherlock: resolveStoredStageModel('sherlock', resolveStoredStageProvider('sherlock')),
-        sherlockRevision: resolveStoredStageModel('sherlockRevision', resolveStoredStageProvider('sherlockRevision')),
-        strategistBio: resolveStoredStageModel('strategistBio', resolveStoredStageProvider('strategistBio')),
-        knight: resolveStoredStageModel('knight', resolveStoredStageProvider('knight')),
-        spotterDaily: resolveStoredStageModel('spotterDaily', resolveStoredStageProvider('spotterDaily')),
-        strategistBioDaily: resolveStoredStageModel(
-            'strategistBioDaily',
-            resolveStoredStageProvider('strategistBioDaily'),
-        ),
-        grandmasterDaily: resolveStoredStageModel('grandmasterDaily', resolveStoredStageProvider('grandmasterDaily')),
-        agentMatch: resolveStoredStageModel('agentMatch', resolveStoredStageProvider('agentMatch')),
-        sherlock7d: resolveStoredStageModel('sherlock7d', resolveStoredStageProvider('sherlock7d')),
-        curvesExtended: resolveStoredStageModel('curvesExtended', resolveStoredStageProvider('curvesExtended')),
-        interventionExtended: resolveStoredStageModel(
-            'interventionExtended',
-            resolveStoredStageProvider('interventionExtended'),
-        ),
-        sherlockExtended: resolveStoredStageModel('sherlockExtended', resolveStoredStageProvider('sherlockExtended')),
-        socrx: resolveStoredStageModel('socrx', resolveStoredStageProvider('socrx')),
-    },
+    stageModels: (() => {
+        const out: any = {};
+        for (const stage of STAGE_IDS) {
+            out[stage] = resolveStoredStageModel(stage, resolveStoredStageProvider(stage));
+        }
+        return out;
+    })(),
+    stageEfforts: (() => {
+        const out: any = {};
+        for (const stage of STAGE_IDS) {
+            const provider = resolveStoredStageProvider(stage);
+            const modelKey = resolveStoredStageModel(stage, provider);
+            out[stage] = resolveStoredStageEffort(stage, provider, modelKey);
+        }
+        return out;
+    })(),
+    stageFastMode: (() => {
+        const out: any = {};
+        for (const stage of STAGE_IDS) {
+            const provider = resolveStoredStageProvider(stage);
+            const modelKey = resolveStoredStageModel(stage, provider);
+            out[stage] = resolveStoredStageFastMode(stage, provider, modelKey);
+        }
+        return out;
+    })(),
     turboTargetPhase: _turboTarget,
 };
 
@@ -394,12 +506,22 @@ export function getStageModel(stage: any) {
     }
 
     const entry = opts.find((o: any) => o.key === resolvedKey) || opts[0] || { model: 'unknown', type: 'openai' };
+    const effort = entry?.supportsEffort
+        ? AppState.stageEfforts[stage] || defaultEffortForModel(entry)
+        : '';
+    const fastMode = entry?.supportsFastMode ? !!AppState.stageFastMode[stage] : false;
     return {
         model: entry.model,
         type: entry.type,
         provider,
         key: AppState.apiKeys[provider],
-        reasoningEffort: entry.reasoningEffort,
+        effort,
+        effortFamily: entry?.effortFamily,
+        adaptiveOnly: !!entry?.adaptiveOnly,
+        fastMode,
+        // Back-compat alias for the older OpenAI-only field name; callers that
+        // still read `reasoningEffort` get the OpenAI-flavoured value.
+        reasoningEffort: entry?.effortFamily === 'openai' ? effort : undefined,
     };
 }
 
@@ -427,13 +549,31 @@ export function resolveStageModelForProvider(stage: any, providerOverride: strin
     const resolvedKey = opts.some((o: any) => o.key === preferredKey) ? preferredKey : fallbackKey;
     const entry = opts.find((o: any) => o.key === resolvedKey) || opts[0] || { model: 'unknown', type: 'openai' };
 
+    // Cross-provider effort transfer: keep the user's intent (lowest stays lowest)
+    // by carrying the same effort *position* across providers when possible.
+    let effort = '';
+    if (entry?.supportsEffort) {
+        if (entry.adaptiveOnly) {
+            effort = 'adaptive';
+        } else if (provider === currentProvider) {
+            effort = AppState.stageEfforts[stage] || defaultEffortForModel(entry);
+        } else {
+            effort = defaultEffortForModel(entry);
+        }
+    }
+    const fastMode = entry?.supportsFastMode && provider === currentProvider ? !!AppState.stageFastMode[stage] : false;
+
     return {
         model: entry.model,
         type: entry.type,
         provider,
         key: AppState.apiKeys[provider],
         modelKey: resolvedKey,
-        reasoningEffort: entry.reasoningEffort,
+        effort,
+        effortFamily: entry?.effortFamily,
+        adaptiveOnly: !!entry?.adaptiveOnly,
+        fastMode,
+        reasoningEffort: entry?.effortFamily === 'openai' ? effort : undefined,
         tier: entry.tier ?? 0,
         maxOutput: entry.maxOutput as number | undefined,
     };

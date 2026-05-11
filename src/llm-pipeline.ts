@@ -3,7 +3,12 @@
  * Exports: callFastModel, callMainModelForCurves, callInterventionModel, callRevisionModel, callSherlockModel, callSherlockRevisionModel, extractAndParseJSON
  * Depends on: constants (API_ENDPOINTS), state (AppState, getStageModel), prompts (PROMPTS), debug-panel (DebugLog)
  */
-import { API_ENDPOINTS, BADGE_CATEGORIES } from './constants';
+import {
+    API_ENDPOINTS,
+    BADGE_CATEGORIES,
+    ANTHROPIC_THINKING_BUDGETS,
+    GEMINI_25_THINKING_BUDGETS,
+} from './constants';
 import {
     AppState,
     PhaseState,
@@ -31,6 +36,15 @@ import { LLMLog, classifyError, inferErrorContext, generateCallId } from './llm-
 
 export { getStageModel } from './state';
 
+export type LlmCallOptions = {
+    effort?: string;
+    effortFamily?: string;
+    adaptiveOnly?: boolean;
+    fastMode?: boolean;
+    // Legacy alias — when callers only have a raw OpenAI-style effort string.
+    reasoningEffort?: string;
+};
+
 /** Routed generic LLM call — exported for use by week-orchestrator and other modules. */
 export async function callGenericRouted(
     userPrompt: any,
@@ -40,9 +54,15 @@ export async function callGenericRouted(
     provider: any,
     systemPrompt: any,
     maxTokens: any,
-    reasoningEffort?: string,
+    options: string | LlmCallOptions | undefined = undefined,
 ): Promise<unknown> {
-    return callGeneric(userPrompt, key, model, type, provider, systemPrompt, maxTokens, reasoningEffort);
+    return callGeneric(userPrompt, key, model, type, provider, systemPrompt, maxTokens, options);
+}
+
+function normalizeCallOptions(options: string | LlmCallOptions | undefined): LlmCallOptions {
+    if (!options) return {};
+    if (typeof options === 'string') return { reasoningEffort: options, effort: options };
+    return options;
 }
 
 async function callGeneric(
@@ -53,13 +73,14 @@ async function callGeneric(
     provider: any,
     systemPrompt: any,
     maxTokens: any,
-    reasoningEffort?: string,
+    options: string | LlmCallOptions | undefined = undefined,
     timeoutMs?: number,
 ) {
     const timeout = timeoutMs ?? REQUEST_TIMEOUT_FAST_MS;
+    const opts = normalizeCallOptions(options);
     switch (type) {
         case 'anthropic':
-            return callAnthropicGeneric(userPrompt, key, model, systemPrompt, maxTokens, timeout);
+            return callAnthropicGeneric(userPrompt, key, model, systemPrompt, maxTokens, opts, timeout);
         case 'openai':
             return callOpenAIGeneric(
                 userPrompt,
@@ -69,11 +90,11 @@ async function callGeneric(
                 systemPrompt,
                 maxTokens,
                 provider === 'grok' ? 'grok' : 'openai',
-                reasoningEffort,
+                opts,
                 timeout,
             );
         case 'gemini':
-            return callGeminiGeneric(userPrompt, key, model, systemPrompt, maxTokens, timeout);
+            return callGeminiGeneric(userPrompt, key, model, systemPrompt, maxTokens, opts, timeout);
         default:
             return callOpenAIGeneric(
                 userPrompt,
@@ -83,7 +104,7 @@ async function callGeneric(
                 systemPrompt,
                 maxTokens,
                 'openai',
-                reasoningEffort,
+                opts,
                 timeout,
             );
     }
@@ -102,6 +123,10 @@ type StageProviderContext = {
     key: string;
     modelKey: string;
     reasoningEffort?: string;
+    effort?: string;
+    effortFamily?: string;
+    adaptiveOnly?: boolean;
+    fastMode?: boolean;
     timeoutMs: number;
     callGeneric: typeof callGeneric;
 };
@@ -241,6 +266,14 @@ export async function callStageWithFallback<TResult>(options: StageFallbackOptio
         });
         const started = performance.now();
 
+        const stageCallOpts: LlmCallOptions = {
+            effort: modelInfo.effort,
+            effortFamily: modelInfo.effortFamily,
+            adaptiveOnly: modelInfo.adaptiveOnly,
+            fastMode: modelInfo.fastMode,
+            reasoningEffort: modelInfo.reasoningEffort,
+        };
+
         try {
             const result = options.executeWithProvider
                 ? await options.executeWithProvider({
@@ -256,9 +289,21 @@ export async function callStageWithFallback<TResult>(options: StageFallbackOptio
                       key: modelInfo.key,
                       modelKey: modelInfo.modelKey,
                       reasoningEffort: modelInfo.reasoningEffort,
+                      effort: modelInfo.effort,
+                      effortFamily: modelInfo.effortFamily,
+                      adaptiveOnly: modelInfo.adaptiveOnly,
+                      fastMode: modelInfo.fastMode,
                       timeoutMs,
-                      callGeneric: (up: any, k: any, m: any, t: any, p: any, sp: any, mt: any, re?: string) =>
-                          callGeneric(up, k, m, t, p, sp, mt, re, timeoutMs),
+                      callGeneric: (
+                          up: any,
+                          k: any,
+                          m: any,
+                          t: any,
+                          p: any,
+                          sp: any,
+                          mt: any,
+                          o?: string | LlmCallOptions,
+                      ) => callGeneric(up, k, m, t, p, sp, mt, o ?? stageCallOpts, timeoutMs),
                   })
                 : await callGeneric(
                       options.userPrompt,
@@ -268,7 +313,7 @@ export async function callStageWithFallback<TResult>(options: StageFallbackOptio
                       provider,
                       options.systemPrompt,
                       effectiveMaxTokens,
-                      modelInfo.reasoningEffort,
+                      stageCallOpts,
                       timeoutMs,
                   );
 
@@ -489,22 +534,38 @@ function buildProviderError(providerLabel: string, status: number, info: Provide
     return err;
 }
 
-function buildGeminiGenerationConfig(model: string, maxTokens: number) {
+const GEMINI_THINKING_LEVELS: Record<string, string> = {
+    minimal: 'MINIMAL',
+    low: 'LOW',
+    medium: 'MEDIUM',
+    high: 'HIGH',
+};
+
+function buildGeminiGenerationConfig(model: string, maxTokens: number, options: LlmCallOptions = {}) {
     // Gemini thinking-model handling:
-    //  • 3.1+ models REQUIRE thinking (budget 0 → HTTP 400). Give a small budget
-    //    so thinking tokens don't starve the actual JSON response.
-    //  • 2.5-pro/flash and 3.0 models default to thinking ON, which eats the
-    //    output budget and truncates JSON. Disable it (budget 0).
-    //  • Legacy flash-lite models before 3.1 have no thinking mode — leave config alone.
-    const isThinkingRequired = /^gemini-(3\.[1-9]|[4-9])/.test(model);
-    const isThinkingOptional = !isThinkingRequired && /^gemini-(3|2\.5-(pro|flash))(?!-lite)/.test(model);
+    //  • 3.x models use `thinkingLevel` (MINIMAL/LOW/MEDIUM/HIGH).
+    //  • 2.5 models still use `thinkingBudget` (token integer).
+    //  • Legacy flash-lite models before 3.1 have no thinking mode.
+    const is3x = /^gemini-(3|[4-9])/.test(model);
+    const is25 = /^gemini-2\.5/.test(model);
+    const isLegacyFlashLite = /^gemini-2\.5-flash-lite$/.test(model);
     const generationConfig: any = { maxOutputTokens: maxTokens };
-    if (isThinkingRequired) {
-        const thinkBudget = 2048;
-        generationConfig.thinkingConfig = { thinkingBudget: thinkBudget };
-        generationConfig.maxOutputTokens = maxTokens + thinkBudget;
-    } else if (isThinkingOptional) {
-        generationConfig.thinkingConfig = { thinkingBudget: 0 };
+
+    if (is3x) {
+        const effort = options.effortFamily === 'gemini' ? options.effort : '';
+        const level = effort && GEMINI_THINKING_LEVELS[effort] ? GEMINI_THINKING_LEVELS[effort] : 'MINIMAL';
+        generationConfig.thinkingConfig = { thinkingLevel: level };
+        // Reserve extra headroom for thinking tokens at higher levels so they
+        // don't starve the JSON output.
+        const extraBudget =
+            level === 'HIGH' ? 8192 : level === 'MEDIUM' ? 4096 : level === 'LOW' ? 2048 : 512;
+        generationConfig.maxOutputTokens = maxTokens + extraBudget;
+    } else if (is25 && !isLegacyFlashLite) {
+        const effort = options.effortFamily === 'gemini-2.5' ? options.effort : '';
+        const mappedBudget = effort ? GEMINI_25_THINKING_BUDGETS[effort] : undefined;
+        const budget = typeof mappedBudget === 'number' ? mappedBudget : 0;
+        generationConfig.thinkingConfig = { thinkingBudget: budget };
+        if (budget > 0) generationConfig.maxOutputTokens = maxTokens + budget;
     }
     return generationConfig;
 }
@@ -1123,14 +1184,32 @@ export async function callAnthropicGeneric(
     model: any,
     systemPrompt: any,
     maxTokens: any,
+    options: LlmCallOptions = {},
     timeoutMs = REQUEST_TIMEOUT_FAST_MS,
 ) {
-    const requestBody = {
+    const requestBody: any = {
         model,
         max_tokens: maxTokens,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
     };
+
+    // Effort → extended-thinking budget. Adaptive-only models (Opus 4.7) omit
+    // the thinking block entirely; the model decides whether to think.
+    const effort = options.effort;
+    if (effort && !options.adaptiveOnly) {
+        const budget = ANTHROPIC_THINKING_BUDGETS[effort];
+        if (typeof budget === 'number' && budget > 0) {
+            requestBody.thinking = { type: 'enabled', budget_tokens: budget };
+            // Extended thinking budget is taken from max_tokens, so widen the cap.
+            requestBody.max_tokens = maxTokens + budget;
+        }
+    }
+
+    const betaFlags: string[] = [];
+    if (maxTokens > 4096) betaFlags.push('max-tokens-3-5-sonnet-2024-07-15');
+    if (options.fastMode) betaFlags.push('fast-mode-2026-04-01');
+
     try {
         const data = await fetchJsonWithRetry(
             API_ENDPOINTS.anthropic,
@@ -1139,7 +1218,7 @@ export async function callAnthropicGeneric(
                 headers: {
                     'Content-Type': 'application/json',
                     'x-api-key': apiKey,
-                    ...(maxTokens > 4096 ? { 'anthropic-beta': 'max-tokens-3-5-sonnet-2024-07-15' } : {}),
+                    ...(betaFlags.length ? { 'anthropic-beta': betaFlags.join(',') } : {}),
                     'anthropic-version': '2023-06-01',
                     'anthropic-dangerous-direct-browser-access': 'true',
                 },
@@ -1171,8 +1250,8 @@ export async function callOpenAIGeneric(
     endpoint: any,
     systemPrompt: any,
     maxTokens: any,
-    providerLabel = 'openai',
-    reasoningEffort?: string,
+    providerLabel: string | undefined = 'openai',
+    options: LlmCallOptions = {},
     timeoutMs = REQUEST_TIMEOUT_FAST_MS,
 ) {
     // OpenAI o-series reasoning models require max_completion_tokens and developer role.
@@ -1193,9 +1272,24 @@ export async function callOpenAIGeneric(
             { role: 'user', content: userPrompt },
         ],
     };
-    const resolvedReasoningEffort = reasoningEffort || (isOSeries ? 'low' : '');
-    if (resolvedReasoningEffort) {
-        requestBody.reasoning_effort = resolvedReasoningEffort;
+
+    const effort = options.effort || options.reasoningEffort || '';
+    if (providerLabel === 'grok') {
+        // xAI uses a nested reasoning shape; only set when the user actually
+        // picked an effort, and never on the unified 4.1 Fast model.
+        if (effort && !/grok-4-1-fast/.test(model)) {
+            requestBody.reasoning = { effort };
+        }
+    } else {
+        const resolved = effort || (isOSeries ? 'low' : '');
+        if (resolved) {
+            requestBody.reasoning_effort = resolved;
+        }
+    }
+
+    // Priority/Fast Mode → OpenAI service_tier. Grok has no priority tier today.
+    if (options.fastMode && providerLabel === 'openai') {
+        requestBody.service_tier = 'priority';
     }
     try {
         const data = await fetchJsonWithRetry(
@@ -1232,13 +1326,14 @@ export async function callGeminiGeneric(
     model: any,
     systemPrompt: any,
     maxTokens: any,
+    options: LlmCallOptions = {},
     timeoutMs = REQUEST_TIMEOUT_FAST_MS,
 ) {
     const selectedModel = String(model || '').trim();
     const requestBody = {
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: [{ parts: [{ text: userPrompt }] }],
-        generationConfig: buildGeminiGenerationConfig(selectedModel, maxTokens),
+        generationConfig: buildGeminiGenerationConfig(selectedModel, maxTokens, options),
     };
     try {
         const data = await fetchJsonWithRetry(

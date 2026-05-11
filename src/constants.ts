@@ -88,16 +88,54 @@ export const TIMING_HOURS: any = { morning: 8, midday: 12, evening: 17, bedtime:
 
 export const FAST_MODELS: any = {
     anthropic: { model: 'claude-haiku-4-5-20251001', type: 'anthropic' },
-    openai: { model: 'gpt-5.3-chat-latest', type: 'openai' },
+    openai: { model: 'gpt-5.5-instant', type: 'openai' },
     grok: { model: 'grok-4-1-fast-non-reasoning', type: 'openai' }, // xAI uses OpenAI-compatible API
-    gemini: { model: 'gemini-2.5-flash-lite', type: 'gemini' },
+    gemini: { model: 'gemini-3.1-flash-lite-preview', type: 'gemini' },
 };
 
 export const MAIN_MODELS: any = {
-    anthropic: 'claude-opus-4-6',
-    openai: 'gpt-5.4',
-    grok: 'grok-4-0709',
-    gemini: 'gemini-3.1-pro-preview',
+    anthropic: 'claude-opus-4-7',
+    openai: 'gpt-5.5',
+    grok: 'grok-4-3',
+    gemini: 'gemini-3-flash',
+};
+
+// ── Effort level catalogues per provider ──────────────────────────────
+// API parameter name + ordered list of allowed values per provider.
+// `EFFORT_LEVELS[provider][0]` is always the lowest/fastest setting and
+// becomes the default for stages whose model supports an effort knob.
+
+export const ANTHROPIC_THINKING_BUDGETS: Record<string, number> = {
+    off: 0,
+    low: 4096,
+    medium: 16384,
+    high: 32768,
+};
+
+export const GEMINI_25_THINKING_BUDGETS: Record<string, number> = {
+    off: 0,
+    low: 4096,
+    medium: 16384,
+    high: 24576,
+};
+
+export const EFFORT_LEVELS: Record<string, string[]> = {
+    openai: ['none', 'low', 'medium', 'high', 'xhigh'],
+    grok: ['none', 'low', 'medium', 'high'],
+    anthropic: ['off', 'low', 'medium', 'high'],
+    gemini: ['minimal', 'low', 'medium', 'high'],
+    'gemini-2.5': ['off', 'low', 'medium', 'high'],
+};
+
+export const EFFORT_LABELS: Record<string, string> = {
+    none: 'None',
+    off: 'Off',
+    minimal: 'Minimal',
+    low: 'Low',
+    medium: 'Medium',
+    high: 'High',
+    xhigh: 'XHigh',
+    adaptive: 'Adaptive (locked)',
 };
 
 export const MODEL_OPTIONS: any = {
@@ -109,27 +147,125 @@ export const MODEL_OPTIONS: any = {
             type: 'anthropic',
             tier: 0,
             maxOutput: 8192,
+            supportsEffort: false,
+            supportsFastMode: false,
+            isProviderDefaultForTier: true,
         },
-        { key: 'sonnet', model: 'claude-sonnet-4-6', label: 'Sonnet 4.6', type: 'anthropic', tier: 1 },
-        { key: 'opus', model: 'claude-opus-4-6', label: 'Opus 4.6', type: 'anthropic', tier: 2 },
+        {
+            key: 'sonnet',
+            model: 'claude-sonnet-4-6',
+            label: 'Sonnet 4.6',
+            type: 'anthropic',
+            tier: 1,
+            supportsEffort: true,
+            effortFamily: 'anthropic',
+            defaultEffort: 'off',
+            supportsFastMode: false,
+            isProviderDefaultForTier: true,
+        },
+        {
+            key: 'opus',
+            model: 'claude-opus-4-6',
+            label: 'Opus 4.6',
+            type: 'anthropic',
+            tier: 2,
+            supportsEffort: true,
+            effortFamily: 'anthropic',
+            defaultEffort: 'off',
+            supportsFastMode: true, // Anthropic Fast Mode (Beta) is Opus 4.6-only today
+        },
+        {
+            key: 'opus47',
+            model: 'claude-opus-4-7',
+            label: 'Opus 4.7',
+            type: 'anthropic',
+            tier: 2,
+            supportsEffort: true,
+            adaptiveOnly: true,
+            effortFamily: 'anthropic',
+            defaultEffort: 'adaptive',
+            supportsFastMode: false,
+            isProviderDefaultForTier: true,
+        },
     ],
     openai: [
         {
-            key: '5.3-instant',
-            model: 'gpt-5.3-chat-latest',
-            label: '5.3 Instant',
+            key: '5.5-instant',
+            model: 'gpt-5.5-instant',
+            label: '5.5 Instant',
             type: 'openai',
             tier: 0,
             maxOutput: 8192,
+            supportsEffort: false,
+            supportsFastMode: true,
+            isProviderDefaultForTier: true,
         },
-        { key: '5.4', model: 'gpt-5.4', label: '5.4', type: 'openai', tier: 1 },
         {
-            key: '5.4-thinking',
+            key: '5.4-nano',
+            model: 'gpt-5.4-nano',
+            label: '5.4 Nano',
+            type: 'openai',
+            tier: 0,
+            maxOutput: 8192,
+            supportsEffort: false,
+            supportsFastMode: true,
+        },
+        {
+            key: '5.4-mini',
+            model: 'gpt-5.4-mini',
+            label: '5.4 Mini',
+            type: 'openai',
+            tier: 1,
+            supportsEffort: true,
+            effortFamily: 'openai',
+            defaultEffort: 'none',
+            supportsFastMode: true,
+            isProviderDefaultForTier: true,
+        },
+        {
+            key: '5.4',
             model: 'gpt-5.4',
-            label: '5.4 Thinking',
+            label: '5.4',
             type: 'openai',
             tier: 2,
-            reasoningEffort: 'high',
+            supportsEffort: true,
+            effortFamily: 'openai',
+            defaultEffort: 'none',
+            supportsFastMode: true,
+        },
+        {
+            key: '5.5',
+            model: 'gpt-5.5',
+            label: '5.5',
+            type: 'openai',
+            tier: 2,
+            supportsEffort: true,
+            effortFamily: 'openai',
+            defaultEffort: 'none',
+            supportsFastMode: true,
+            isProviderDefaultForTier: true,
+        },
+        {
+            key: '5.5-thinking',
+            model: 'gpt-5.5-thinking',
+            label: '5.5 Thinking',
+            type: 'openai',
+            tier: 2,
+            supportsEffort: true,
+            effortFamily: 'openai',
+            defaultEffort: 'none',
+            supportsFastMode: true,
+        },
+        {
+            key: '5.5-pro',
+            model: 'gpt-5.5-pro',
+            label: '5.5 Pro',
+            type: 'openai',
+            tier: 2,
+            supportsEffort: true,
+            effortFamily: 'openai',
+            defaultEffort: 'none',
+            supportsFastMode: true,
         },
     ],
     grok: [
@@ -140,8 +276,45 @@ export const MODEL_OPTIONS: any = {
             type: 'openai',
             tier: 0,
             maxOutput: 8192,
+            supportsEffort: false,
+            supportsFastMode: false,
+            isProviderDefaultForTier: true,
         },
-        { key: 'full', model: 'grok-4-0709', label: '4', type: 'openai', tier: 2 },
+        {
+            key: '4-20',
+            model: 'grok-4-20',
+            label: '4.20',
+            type: 'openai',
+            tier: 1,
+            supportsEffort: true,
+            effortFamily: 'grok',
+            defaultEffort: 'none',
+            supportsFastMode: false,
+            isProviderDefaultForTier: true,
+        },
+        {
+            key: 'full',
+            model: 'grok-4-0709',
+            label: '4',
+            type: 'openai',
+            tier: 2,
+            supportsEffort: true,
+            effortFamily: 'grok',
+            defaultEffort: 'none',
+            supportsFastMode: false,
+        },
+        {
+            key: '4-3',
+            model: 'grok-4-3',
+            label: '4.3',
+            type: 'openai',
+            tier: 2,
+            supportsEffort: true,
+            effortFamily: 'grok',
+            defaultEffort: 'none',
+            supportsFastMode: false,
+            isProviderDefaultForTier: true,
+        },
     ],
     gemini: [
         {
@@ -151,6 +324,10 @@ export const MODEL_OPTIONS: any = {
             type: 'gemini',
             tier: 0,
             maxOutput: 8192,
+            supportsEffort: true,
+            effortFamily: 'gemini-2.5',
+            defaultEffort: 'off',
+            supportsFastMode: false,
         },
         {
             key: 'flash-lite-preview',
@@ -158,11 +335,72 @@ export const MODEL_OPTIONS: any = {
             label: '3.1 Flash Lite Preview',
             type: 'gemini',
             tier: 0,
+            supportsEffort: true,
+            effortFamily: 'gemini',
+            defaultEffort: 'minimal',
+            supportsFastMode: false,
+            isProviderDefaultForTier: true,
         },
-        { key: 'flash-preview', model: 'gemini-3-flash-preview', label: '3 Flash Preview', type: 'gemini', tier: 1 },
-        { key: 'pro-preview', model: 'gemini-3.1-pro-preview', label: '3.1 Pro Preview', type: 'gemini', tier: 2 },
+        {
+            key: 'flash-25',
+            model: 'gemini-2.5-flash',
+            label: '2.5 Flash',
+            type: 'gemini',
+            tier: 1,
+            supportsEffort: true,
+            effortFamily: 'gemini-2.5',
+            defaultEffort: 'off',
+            supportsFastMode: false,
+            isProviderDefaultForTier: true,
+        },
+        {
+            key: 'flash-preview',
+            model: 'gemini-3-flash',
+            label: '3 Flash',
+            type: 'gemini',
+            tier: 2,
+            supportsEffort: true,
+            effortFamily: 'gemini',
+            defaultEffort: 'minimal',
+            supportsFastMode: false,
+            isProviderDefaultForTier: true,
+        },
+        {
+            key: 'pro-preview',
+            model: 'gemini-3.1-pro-preview',
+            label: '3.1 Pro Preview',
+            type: 'gemini',
+            tier: 2,
+            supportsEffort: true,
+            effortFamily: 'gemini',
+            defaultEffort: 'minimal',
+            supportsFastMode: false,
+        },
     ],
 };
+
+/**
+ * Allowed effort values for a model entry. Adaptive-only models (Opus 4.7) return
+ * a single `['adaptive']` so the dropdown shows a locked badge.
+ */
+export function effortOptionsForModel(entry: any): string[] {
+    if (!entry?.supportsEffort) return [];
+    if (entry.adaptiveOnly) return ['adaptive'];
+    const family = entry.effortFamily;
+    return family && EFFORT_LEVELS[family] ? EFFORT_LEVELS[family] : [];
+}
+
+/**
+ * Default (lowest / fastest) effort value for a model entry, or empty string if
+ * the model does not expose an effort knob.
+ */
+export function defaultEffortForModel(entry: any): string {
+    if (!entry?.supportsEffort) return '';
+    if (entry.adaptiveOnly) return 'adaptive';
+    if (entry.defaultEffort) return entry.defaultEffort;
+    const opts = effortOptionsForModel(entry);
+    return opts[0] || '';
+}
 
 export const PROVIDER_LABELS: Record<string, string> = {
     anthropic: 'Claude',
@@ -186,11 +424,23 @@ export function mapModelAcrossProviders(fromProvider: string, fromKey: string, t
     const fromTier = fromEntry.tier;
     let best = toOpts[0];
     let bestDist = Math.abs(best.tier - fromTier);
+    let bestIsTierDefault = !!best.isProviderDefaultForTier;
     for (const opt of toOpts) {
         const dist = Math.abs(opt.tier - fromTier);
-        if (dist < bestDist || (dist === bestDist && opt.tier < best.tier)) {
+        const isTierDefault = !!opt.isProviderDefaultForTier;
+        // Tie-break order:
+        //   1. Strictly closer tier always wins.
+        //   2. Same distance, lower tier wins (downward bias when fromTier sits between two tiers).
+        //   3. Same distance + same tier — the entry explicitly marked as the
+        //      provider's tier default wins (e.g. Opus 4.7 over Opus 4.6).
+        if (
+            dist < bestDist ||
+            (dist === bestDist && opt.tier < best.tier) ||
+            (dist === bestDist && opt.tier === best.tier && isTierDefault && !bestIsTierDefault)
+        ) {
             best = opt;
             bestDist = dist;
+            bestIsTierDefault = isTierDefault;
         }
     }
     return best.key;

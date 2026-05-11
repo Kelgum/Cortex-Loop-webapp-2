@@ -565,6 +565,8 @@ export interface IAppState {
     apiKeys: Record<string, string>;
     stageProviders: Record<PipelineStage, string>;
     stageModels: Record<PipelineStage, string>;
+    stageEfforts: Record<PipelineStage, string>;
+    stageFastMode: Record<PipelineStage, boolean>;
     turboTargetPhase: number;
 }
 

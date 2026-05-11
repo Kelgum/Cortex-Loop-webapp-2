@@ -15,10 +15,10 @@ describe('revision model defaults', () => {
 
     it('resolves Grandmaster defaults to the main-tier model for every provider', () => {
         const expectations = [
-            ['anthropic', 'claude-opus-4-6'],
-            ['openai', 'gpt-5.4'],
-            ['grok', 'grok-4-0709'],
-            ['gemini', 'gemini-3.1-pro-preview'],
+            ['anthropic', 'claude-opus-4-7'],
+            ['openai', 'gpt-5.5'],
+            ['grok', 'grok-4-3'],
+            ['gemini', 'gemini-3-flash'],
         ] as const;
 
         for (const [provider, expectedModel] of expectations) {
@@ -32,8 +32,8 @@ describe('revision model defaults', () => {
     it('preserves an explicit user override for the revision stage', () => {
         AppState.selectedLLM = 'openai';
         AppState.stageProviders.revision = 'openai';
-        AppState.stageModels.revision = '5.3-instant';
+        AppState.stageModels.revision = '5.5-instant';
 
-        expect(getStageModel('revision').model).toBe('gpt-5.3-chat-latest');
+        expect(getStageModel('revision').model).toBe('gpt-5.5-instant');
     });
 });

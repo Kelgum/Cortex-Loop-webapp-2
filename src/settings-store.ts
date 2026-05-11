@@ -138,6 +138,14 @@ export function stageProviderKey(stage: string): string {
     return `lx_studio_stage_provider_${stage}`;
 }
 
+export function stageEffortKey(stage: string): string {
+    return `lx_studio_stage_effort_${stage}`;
+}
+
+export function stageFastModeKey(stage: string): string {
+    return `lx_studio_stage_fast_${stage}`;
+}
+
 export function providerApiKeyKey(provider: string): string {
     return `lx_studio_key_${provider}`;
 }
