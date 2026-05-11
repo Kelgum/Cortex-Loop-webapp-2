@@ -1366,14 +1366,6 @@ body.light-mode .agent-fast-toggle:hover {
     margin-left: auto;
 }
 
-.agent-duration {
-    font-size: 10px;
-    font-family: var(--font-mono);
-    color: var(--text-muted);
-    opacity: 0.65;
-    white-space: nowrap;
-}
-
 .agent-row-actions {
     display: flex;
     align-items: center;
@@ -1426,6 +1418,8 @@ body.light-mode .agent-fast-toggle:hover {
 .agent-source-badge.cached {
     color: #34d399;
     background: rgba(52, 211, 153, 0.14);
+    padding: 1px 4px;
+    cursor: help;
 }
 
 .agent-chevron {
@@ -1456,14 +1450,6 @@ body.light-mode .agent-fast-toggle:hover {
 
 .pipeline-agent-card.expanded.user-collapsed .agent-chevron {
     transform: rotate(-90deg);
-}
-
-.agent-idle-badge {
-    font-size: 9px;
-    font-family: var(--font-mono);
-    color: var(--text-muted);
-    opacity: 0.4;
-    letter-spacing: 0.05em;
 }
 
 .agent-cache-btn {
