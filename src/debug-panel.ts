@@ -508,10 +508,6 @@ export const DebugLog = {
 
             const status = document.createElement('div');
             status.className = 'agent-card-status';
-            const idleBadge = document.createElement('span');
-            idleBadge.className = 'agent-idle-badge';
-            idleBadge.textContent = 'Ready';
-            status.appendChild(idleBadge);
             header.appendChild(status);
 
             const actions = document.createElement('div');
@@ -1025,17 +1021,13 @@ export const DebugLog = {
                     if (mode) {
                         const source = document.createElement('span');
                         source.className = `agent-source-badge ${mode}`;
-                        source.textContent = mode === 'cached' ? 'Cached' : 'Live';
-                        status.appendChild(source);
-                    }
-                    if (last.duration != null) {
-                        const durationLabel = formatStageDuration(last.duration);
-                        if (durationLabel) {
-                            const dur = document.createElement('span');
-                            dur.className = 'agent-duration';
-                            dur.textContent = durationLabel;
-                            status.appendChild(dur);
+                        if (mode === 'cached') {
+                            source.textContent = 'C';
+                            source.title = 'Cached';
+                        } else {
+                            source.textContent = 'Live';
                         }
+                        status.appendChild(source);
                     }
                     if (last.error) {
                         const err = document.createElement('span');
@@ -1061,11 +1053,6 @@ export const DebugLog = {
                 }
             } else {
                 // Keep card expandable even before the stage has any logs.
-                const idle = document.createElement('span');
-                idle.className = 'agent-idle-badge';
-                idle.textContent = 'Ready';
-                status.appendChild(idle);
-
                 body.appendChild(this._buildEntryBody({}, { showPlaceholders: true, stageId: stage.id }));
             }
         }
