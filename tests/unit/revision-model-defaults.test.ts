@@ -18,7 +18,7 @@ describe('revision model defaults', () => {
             ['anthropic', 'claude-opus-4-7'],
             ['openai', 'gpt-5.5'],
             ['grok', 'grok-4-3'],
-            ['gemini', 'gemini-3-flash'],
+            ['gemini', 'gemini-3.5-flash'],
         ] as const;
 
         for (const [provider, expectedModel] of expectations) {

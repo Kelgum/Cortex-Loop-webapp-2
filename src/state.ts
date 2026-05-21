@@ -111,7 +111,10 @@ const TIER_DEFAULT_KEYS: Record<string, Record<0 | 1 | 2, string>> = {
     anthropic: { 0: 'haiku', 1: 'sonnet', 2: 'opus47' },
     openai: { 0: '5.5-instant', 1: '5.4-mini', 2: '5.5' },
     grok: { 0: 'fast', 1: '4-20', 2: '4-3' },
-    gemini: { 0: 'flash-lite-preview', 1: 'flash-25', 2: 'flash-preview' },
+    // Gemini 3.5 Flash (May 2026 release) is now the Main default: Intelligence
+    // Index 55, ~4× faster than comparable frontier models, beats 3.1 Pro on
+    // coding/agentic benchmarks at $1.50/$9 per Mt.
+    gemini: { 0: 'flash-lite-preview', 1: 'flash-25', 2: 'flash-35' },
 };
 
 function buildStageDefaults(provider: string): Record<string, string> {
@@ -145,6 +148,8 @@ const LEGACY_MODEL_KEY_MAP: Record<string, Record<string, string>> = {
     gemini: {
         // 'flash-lite-preview' and 'flash-preview' are still valid keys but the
         // underlying model id changed; mapping handled by entry definition.
+        // No automatic upgrade from flash-preview → flash-35: users who picked
+        // 3 Flash explicitly keep it. Only the default for new installs flips.
     },
     grok: {
         'fast-non-reasoning': 'fast',
