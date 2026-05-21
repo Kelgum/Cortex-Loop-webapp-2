@@ -97,7 +97,7 @@ export const MAIN_MODELS: any = {
     anthropic: 'claude-opus-4-7',
     openai: 'gpt-5.5',
     grok: 'grok-4-3',
-    gemini: 'gemini-3-flash',
+    gemini: 'gemini-3.5-flash',
 };
 
 // ── Effort level catalogues per provider ──────────────────────────────
@@ -361,6 +361,21 @@ export const MODEL_OPTIONS: any = {
             tier: 2,
             supportsEffort: true,
             effortFamily: 'gemini',
+            defaultEffort: 'minimal',
+            supportsFastMode: false,
+        },
+        {
+            key: 'flash-35',
+            model: 'gemini-3.5-flash',
+            label: '3.5 Flash',
+            type: 'gemini',
+            tier: 2,
+            supportsEffort: true,
+            effortFamily: 'gemini',
+            // Google retuned low-effort thinking specifically for code and
+            // agentic tasks on 3.5 Flash, so "minimal" stays the speed-first
+            // default. Bump to "low" for the curve/intervention stages if
+            // empirical quality suffers.
             defaultEffort: 'minimal',
             supportsFastMode: false,
             isProviderDefaultForTier: true,
