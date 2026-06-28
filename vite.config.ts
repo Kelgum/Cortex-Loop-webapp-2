@@ -1,6 +1,6 @@
 import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { appendFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -201,6 +201,11 @@ const CYCLES_INDEX_PATH = resolve(CYCLES_DIR, 'index.json');
 function sanitizeCycleId(raw: unknown): string {
     const cleaned = String(raw || '').replace(/[^a-zA-Z0-9._-]/g, '');
     if (!cleaned) throw new Error('Invalid cycle ID');
+    // Refuse reserved filenames: `index` would let a PATCH treat index.json as
+    // a cycle record and overwrite it with an empty array.
+    if (cleaned === 'index' || cleaned.startsWith('index.')) {
+        throw new Error('Reserved cycle ID');
+    }
     return cleaned;
 }
 
@@ -227,7 +232,13 @@ function withIndexLock<T>(fn: () => Promise<T>): Promise<T> {
 
 async function writeCyclesIndex(entries: any[]): Promise<void> {
     await mkdir(CYCLES_DIR, { recursive: true });
-    await writeFile(CYCLES_INDEX_PATH, JSON.stringify(entries, null, 2), 'utf8');
+    // Atomic write: stage to a sibling tmp file, fsync via flush, then rename.
+    // writeFile() opens with O_TRUNC which leaves the index empty for a window
+    // — concurrent readers can see an empty file and treat it as a legitimate
+    // empty index, which is how a single failed read can clobber 50 cycles.
+    const tmpPath = `${CYCLES_INDEX_PATH}.tmp-${process.pid}-${Date.now()}`;
+    await writeFile(tmpPath, JSON.stringify(entries, null, 2), 'utf8');
+    await rename(tmpPath, CYCLES_INDEX_PATH);
 }
 
 function toSavedCycleIndexEntry(record: any) {
@@ -251,13 +262,22 @@ function toSavedCycleIndexEntry(record: any) {
         timeHorizon: record.timeHorizon,
         effectScores: record.effectScores,
         effectScoresVersion: record.effectScoresVersion,
+        protocolConfidence: record.protocolConfidence,
+        confidenceVersion: record.confidenceVersion,
         hasRxTwin: !!record.rxTwin,
         rxEffectScores: record.rxTwin?.effectScores,
+        creatorHandle: record.creatorHandle,
+        avatarUrl: record.avatarUrl,
+        creatorName: record.creatorName,
     };
     if (record.badgeCategory) entry.badgeCategory = record.badgeCategory;
     if (record.recommendedDevices) entry.recommendedDevices = record.recommendedDevices;
     if (record.substanceClasses) entry.substanceClasses = record.substanceClasses;
     if (record.timeHorizon) entry.timeHorizon = record.timeHorizon;
+    // Strip undefineds so JSON.stringify doesn't leave noise in the index.
+    for (const k of Object.keys(entry)) {
+        if (entry[k] === undefined) delete entry[k];
+    }
     return entry;
 }
 
@@ -298,19 +318,22 @@ function cycleStoragePlugin() {
                 const id = sanitizeCycleId(body?.id);
                 await mkdir(CYCLES_DIR, { recursive: true });
 
-                const filePath = resolve(CYCLES_DIR, `${id}.json`);
-                await writeFile(filePath, JSON.stringify(body), 'utf8');
+                const resultIndex = await withIndexLock(async () => {
+                    const filePath = resolve(CYCLES_DIR, `${id}.json`);
+                    await writeFile(filePath, JSON.stringify(body), 'utf8');
 
-                const index = await readCyclesIndex();
-                const entry = toSavedCycleIndexEntry(body);
-                const pos = index.findIndex((e: any) => e.id === id);
-                if (pos >= 0) {
-                    index[pos] = entry;
-                } else {
-                    index.unshift(entry);
-                }
-                await writeCyclesIndex(index);
-                sendJson(res, 200, { ok: true, index });
+                    const index = await readCyclesIndex();
+                    const entry = toSavedCycleIndexEntry(body);
+                    const pos = index.findIndex((e: any) => e.id === id);
+                    if (pos >= 0) {
+                        index[pos] = entry;
+                    } else {
+                        index.unshift(entry);
+                    }
+                    await writeCyclesIndex(index);
+                    return index;
+                });
+                sendJson(res, 200, { ok: true, index: resultIndex });
             } catch (err: any) {
                 sendJson(res, 500, { ok: false, error: err?.message });
             }
@@ -388,6 +411,15 @@ function cycleStoragePlugin() {
                     } else if (body?.rxTwin && typeof body.rxTwin === 'object') {
                         record.rxTwin = body.rxTwin;
                     }
+                    if (typeof body?.creatorHandle === 'string' || body?.creatorHandle === null) {
+                        record.creatorHandle = body.creatorHandle || undefined;
+                    }
+                    if (typeof body?.avatarUrl === 'string' || body?.avatarUrl === null) {
+                        record.avatarUrl = body.avatarUrl || undefined;
+                    }
+                    if (typeof body?.creatorName === 'string' || body?.creatorName === null) {
+                        record.creatorName = body.creatorName || undefined;
+                    }
 
                     await writeFile(filePath, JSON.stringify(record), 'utf8');
 
@@ -416,6 +448,15 @@ function cycleStoragePlugin() {
                         }
                         entry.hasRxTwin = !!record.rxTwin;
                         entry.rxEffectScores = record.rxTwin?.effectScores;
+                        if (typeof record.creatorHandle !== 'undefined') {
+                            entry.creatorHandle = record.creatorHandle;
+                        }
+                        if (typeof record.avatarUrl !== 'undefined') {
+                            entry.avatarUrl = record.avatarUrl;
+                        }
+                        if (typeof record.creatorName !== 'undefined') {
+                            entry.creatorName = record.creatorName;
+                        }
                     }
                     await writeCyclesIndex(index);
                     return index;
@@ -720,6 +761,135 @@ function presetStoragePlugin() {
 
     return {
         name: 'lx-studio-preset-storage',
+        configureServer(server: any) {
+            server.middlewares.use((req: any, res: any, next: () => void) => {
+                void handleRequest(req, res, next);
+            });
+        },
+        configurePreviewServer(server: any) {
+            server.middlewares.use((req: any, res: any, next: () => void) => {
+                void handleRequest(req, res, next);
+            });
+        },
+    };
+}
+
+// ── Stream Comments Storage Plugin ──────────────────────────────────
+// Persists LLM-authored reviews per cycle in stream-comments-data.json.
+// Same filesystem-authoritative pattern as presets/cycles/sections.
+//
+// GET    /__stream-comments       → entire { [cycleId]: Review[] } map
+// PUT    /__stream-comments/:id   → set reviews for a single cycle
+// DELETE /__stream-comments/:id   → remove a cycle's reviews
+
+const STREAM_COMMENTS_PATH = resolve(process.cwd(), 'stream-comments-data.json');
+
+interface StreamReview {
+    stars: number;
+    text: string;
+}
+
+async function readStreamComments(): Promise<Record<string, StreamReview[]>> {
+    try {
+        const raw = await readFile(STREAM_COMMENTS_PATH, 'utf8');
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+async function writeStreamComments(data: Record<string, StreamReview[]>): Promise<void> {
+    await writeFile(STREAM_COMMENTS_PATH, JSON.stringify(data, null, 2) + '\n', 'utf8');
+}
+
+function sanitizeCycleIdForComments(id: unknown): string {
+    if (typeof id !== 'string') return '';
+    const cleaned = id.trim();
+    // Must start with cycle- and contain only safe characters
+    if (!/^cycle-[A-Za-z0-9_-]+$/.test(cleaned)) return '';
+    return cleaned;
+}
+
+function validateReviews(reviews: unknown): StreamReview[] | null {
+    if (!Array.isArray(reviews)) return null;
+    if (reviews.length < 3 || reviews.length > 12) return null;
+    const out: StreamReview[] = [];
+    for (const r of reviews) {
+        if (!r || typeof r !== 'object') return null;
+        const stars = (r as any).stars;
+        const text = (r as any).text;
+        if (typeof stars !== 'number' || stars < 1 || stars > 5) return null;
+        if (typeof text !== 'string' || text.trim().length < 10 || text.length > 2000) return null;
+        out.push({ stars, text: text.trim() });
+    }
+    return out;
+}
+
+function streamCommentsPlugin() {
+    const handleRequest = async (req: any, res: any, next: () => void) => {
+        const url = String(req.url || '').split('?')[0];
+        if (!url.startsWith('/__stream-comments')) return next();
+
+        // GET /__stream-comments — full map
+        if (req.method === 'GET' && url === '/__stream-comments') {
+            try {
+                sendJson(res, 200, await readStreamComments());
+            } catch (err: any) {
+                sendJson(res, 500, { ok: false, error: err?.message });
+            }
+            return;
+        }
+
+        // PUT /__stream-comments/:id — set reviews for one cycle
+        if (req.method === 'PUT' && url.startsWith('/__stream-comments/')) {
+            try {
+                const id = sanitizeCycleIdForComments(url.slice('/__stream-comments/'.length));
+                if (!id) {
+                    sendJson(res, 400, { ok: false, error: 'Invalid cycle id' });
+                    return;
+                }
+                const body = await readJsonBody(req);
+                const reviews = validateReviews((body as any)?.reviews ?? body);
+                if (!reviews) {
+                    sendJson(res, 400, { ok: false, error: 'Invalid reviews payload' });
+                    return;
+                }
+                const data = await readStreamComments();
+                data[id] = reviews;
+                await writeStreamComments(data);
+                sendJson(res, 200, { ok: true, id, count: reviews.length });
+            } catch (err: any) {
+                sendJson(res, 500, { ok: false, error: err?.message });
+            }
+            return;
+        }
+
+        // DELETE /__stream-comments/:id — remove one cycle's reviews
+        if (req.method === 'DELETE' && url.startsWith('/__stream-comments/')) {
+            try {
+                const id = sanitizeCycleIdForComments(url.slice('/__stream-comments/'.length));
+                if (!id) {
+                    sendJson(res, 400, { ok: false, error: 'Invalid cycle id' });
+                    return;
+                }
+                const data = await readStreamComments();
+                if (data[id]) {
+                    delete data[id];
+                    await writeStreamComments(data);
+                }
+                sendJson(res, 200, { ok: true });
+            } catch (err: any) {
+                sendJson(res, 500, { ok: false, error: err?.message });
+            }
+            return;
+        }
+
+        next();
+    };
+
+    return {
+        name: 'lx-studio-stream-comments-storage',
         configureServer(server: any) {
             server.middlewares.use((req: any, res: any, next: () => void) => {
                 void handleRequest(req, res, next);
@@ -1292,6 +1462,7 @@ export default defineConfig({
         sectionOrderPlugin(),
         builtinOverridesPlugin(),
         presetStoragePlugin(),
+        streamCommentsPlugin(),
         abTestPlugin(),
         llmLogPlugin(),
         // camTrackerPlugin(), // disabled — re-enable later if desired

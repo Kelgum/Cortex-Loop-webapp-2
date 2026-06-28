@@ -3279,6 +3279,14 @@ body.mode-stream #hook-sentence {
         inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
+/* While a card is expanded, the grid is hidden behind the backdrop — skip
+   hover transitions and pointer events to avoid paint storms behind it. */
+body.cg-expand-active .stream-grid .cg-card,
+body.cg-expand-active .stream-grid .cg-card:hover {
+    transition: none;
+    pointer-events: none;
+}
+
 .stream-grid .cg-card-active {
     background: linear-gradient(
         180deg,
@@ -10825,7 +10833,7 @@ body.light-mode .vcr-bio-dock-icon {
 .ad-preview-overlay {
     position: fixed;
     inset: 0;
-    z-index: 200;
+    z-index: 1400;
     background: rgba(0, 0, 0, 0.7);
     display: flex;
     align-items: center;
@@ -10838,19 +10846,29 @@ body.light-mode .vcr-bio-dock-icon {
 }
 
 .ad-preview-card {
-    width: 320px;
+    width: 560px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 64px);
+    overflow-y: auto;
     background: var(--bg-surface);
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 16px;
-    padding: 24px;
+    border-radius: 18px;
+    padding: 28px;
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
 }
 
-.ad-pc-header {
+.ad-pc-header,
+.ad-pc-hero {
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 16px;
+    gap: 20px;
+    margin-bottom: 20px;
+}
+
+.ad-pc-hero .ad-pc-avatar {
+    width: 128px;
+    height: 128px;
+    font-size: 56px;
 }
 
 .ad-pc-avatar {
@@ -10889,12 +10907,87 @@ body.light-mode .vcr-bio-dock-icon {
     line-height: 1.2;
 }
 
+.ad-pc-hero .ad-pc-creator-name {
+    font-size: 24px;
+    line-height: 1.15;
+    margin-bottom: 2px;
+}
+
 .ad-pc-handle {
     font-size: 11px;
     color: var(--text-muted);
     font-family: var(--font-mono);
     opacity: 0.55;
     line-height: 1.3;
+}
+
+.ad-pc-hero .ad-pc-handle {
+    font-size: 12px;
+    opacity: 0.7;
+    margin-bottom: 6px;
+}
+
+.ad-pc-credentials {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    margin-bottom: 4px;
+}
+
+.ad-pc-followers {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    opacity: 0.75;
+}
+
+.ad-pc-followers svg {
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
+.ad-pc-rating {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 16px;
+    margin-bottom: 18px;
+    background: rgba(245, 200, 80, 0.06);
+    border: 1px solid rgba(245, 200, 80, 0.18);
+    border-radius: 12px;
+}
+
+.ad-pc-rating-stars {
+    flex: 0 0 auto;
+}
+
+.ad-pc-rating-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.ad-pc-rating-score {
+    font-family: var(--font-mono);
+    font-size: 22px;
+    font-weight: 600;
+    color: #f5c850;
+    line-height: 1;
+}
+
+.ad-pc-rating-label {
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.ad-pc-body {
+    margin-bottom: 18px;
 }
 
 .ad-pc-name {
@@ -10974,13 +11067,26 @@ body.light-mode .vcr-bio-dock-icon {
     letter-spacing: 2px;
 }
 
+.ad-pc-meta-value {
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.ad-pc-cta-row {
+    display: flex;
+    gap: 10px;
+}
+
 .ad-pc-cta {
     display: block;
+    flex: 1 1 auto;
     width: 100%;
-    padding: 10px;
+    padding: 12px;
     border-radius: 10px;
-    background: rgba(245, 200, 80, 0.12);
-    border: 1px solid rgba(245, 200, 80, 0.25);
+    background: rgba(245, 200, 80, 0.16);
+    border: 1px solid rgba(245, 200, 80, 0.3);
     color: #f5c850;
     font-size: 13px;
     font-weight: 600;
@@ -10990,7 +11096,19 @@ body.light-mode .vcr-bio-dock-icon {
 }
 
 .ad-pc-cta:hover {
-    background: rgba(245, 200, 80, 0.2);
+    background: rgba(245, 200, 80, 0.24);
+}
+
+.ad-pc-cta.ad-pc-cta-secondary {
+    background: transparent;
+    border-color: rgba(255, 255, 255, 0.12);
+    color: var(--text-secondary);
+}
+
+.ad-pc-cta.ad-pc-cta-secondary:hover {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: var(--text-primary);
 }
 
 /* ── Agent Browser grid ───────────────────────────────────────────── */
@@ -12897,21 +13015,29 @@ body.mode-stream .ms-container {
    CARD EXPANSION — inline detail panel for every card type
    ══════════════════════════════════════════════════════════════════ */
 
-/* Blurred backdrop */
+/* Blurred backdrop.
+   While the FLIP is in flight, the backdrop is a flat tint (no filter) so
+   the compositor isn't blurring the whole viewport every frame. Once the
+   card has settled, .cg-card-backdrop--rest restores the blur. */
 .cg-card-backdrop {
     position: fixed;
     inset: 0;
     z-index: 2000;
-    background: rgba(4, 7, 12, 0.32);
-    backdrop-filter: blur(3px);
-    -webkit-backdrop-filter: blur(3px);
+    background: rgba(4, 7, 12, 0.42);
     opacity: 0;
     transition: opacity 0.6s ease;
     pointer-events: none;
+    will-change: opacity;
 }
 
 .cg-card-backdrop--on {
     opacity: 1;
+}
+
+.cg-card-backdrop--rest {
+    background: rgba(4, 7, 12, 0.32);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
 }
 
 /* Row slot placeholder — keeps the row layout while the card is lifted to body */
@@ -12933,10 +13059,19 @@ body.mode-stream .ms-container {
     border-radius: 6px;
     background: #141414;
     border: none;
-    box-shadow: 0 50px 120px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    /* In-flight shadow: cheap layered shadows that composite quickly.
+       The full 120px-blur shadow is restored once .cg-expand--settled is
+       added on FLIP completion (visually identical at rest). */
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.6), 0 8px 16px rgba(0, 0, 0, 0.45),
+        0 0 0 1px rgba(255, 255, 255, 0.04);
     transform: translateZ(0);
     backface-visibility: hidden;
     will-change: transform;
+    contain: layout paint style;
+}
+
+.cg-card.cg-card-expanded.cg-expand--settled {
+    box-shadow: 0 50px 120px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
 .cg-card.cg-card-expanded > * {
@@ -12946,7 +13081,8 @@ body.mode-stream .ms-container {
 }
 
 .cg-card.cg-card-expanded > .cg-card-prompt,
-.cg-card.cg-card-expanded > .cg-card-meta {
+.cg-card.cg-card-expanded > .cg-card-meta,
+.cg-card.cg-card-expanded > .cg-card-footer {
     display: none;
 }
 
@@ -12993,7 +13129,9 @@ body.mode-stream .ms-container {
 
 
 
-.cg-card.cg-card-expanded > .cg-card-icon::after {
+/* Hero gradient overlay — only painted once the panel content has revealed,
+   so it doesn't stack atop the morphing SVG during the FLIP. */
+.cg-card.cg-card-expanded.cg-expand--revealed > .cg-card-icon::after {
     content: '';
     position: absolute;
     inset: 0;
@@ -13048,6 +13186,17 @@ body.mode-stream .ms-container {
         opacity 120ms cubic-bezier(0.22, 1, 0.36, 1),
         transform 120ms cubic-bezier(0.22, 1, 0.36, 1);
     pointer-events: none;
+}
+
+/* Reverse-FLIP guard: while the clone is shrinking back to the source
+   card, any CSS transition or animation on nested children invalidates
+   the clone's compositor layer every frame. Freeze the interior so the
+   FLIP only composites a static bitmap. The fade-out for the close button
+   and panel is handled by the clone's own opacity in the reverse FLIP. */
+.cg-card.cg-card-expanded.cg-expand--frozen,
+.cg-card.cg-card-expanded.cg-expand--frozen * {
+    animation-play-state: paused !important;
+    transition: none !important;
 }
 
 
@@ -13135,6 +13284,13 @@ body.mode-stream .ms-container {
     text-align: left;
     color: rgba(255, 255, 255, 0.85);
     font-family: 'IBM Plex Mono', monospace;
+    contain: layout paint;
+}
+
+/* Reserve space for the deferred reviews list so the panel scroll height
+   doesn't jump when comments arrive on the idle callback. */
+.cg-expand-comments-list-placeholder {
+    min-height: 360px;
 }
 
 .cg-card.cg-card-expanded > .cg-card-expand-panel::-webkit-scrollbar {
@@ -13145,7 +13301,10 @@ body.mode-stream .ms-container {
     border-radius: 3px;
 }
 
-/* Close X — anchored to the card's own top-right corner */
+/* Close X — anchored to the card's own top-right corner.
+   backdrop-filter is gated behind .cg-expand--settled to avoid an extra
+   filter layer during the FLIP. The darker base bg compensates for the
+   missing blur while in flight. */
 .cg-card.cg-card-expanded > .cg-expand-close {
     position: absolute;
     top: 14px;
@@ -13154,7 +13313,7 @@ body.mode-stream .ms-container {
     height: 34px;
     border-radius: 50%;
     border: none;
-    background: rgba(0, 0, 0, 0.6);
+    background: rgba(0, 0, 0, 0.72);
     color: #fff;
     display: flex;
     align-items: center;
@@ -13162,6 +13321,10 @@ body.mode-stream .ms-container {
     cursor: pointer;
     padding: 0;
     z-index: 5;
+}
+
+.cg-card.cg-card-expanded.cg-expand--settled > .cg-expand-close {
+    background: rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
 }
@@ -13171,6 +13334,204 @@ body.mode-stream .ms-container {
 .cg-expand-close:hover {
     background: #2b2b2b;
     border-color: #fff;
+}
+
+/* Options (triple-dot) button — sits just left of the close X. Toggles
+   cg-edit-mode on the expanded card, which reveals the comments editor
+   row and per-comment regenerate buttons. */
+.cg-card.cg-card-expanded > .cg-expand-options {
+    position: absolute;
+    top: 14px;
+    right: 56px;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0, 0, 0, 0.72);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    z-index: 5;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(10px) scale(0.96);
+    transition:
+        opacity 180ms cubic-bezier(0.22, 1, 0.36, 1),
+        transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+        background 0.15s;
+}
+
+.cg-card.cg-card-expanded.cg-expand--revealed > .cg-expand-options {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+}
+
+.cg-card.cg-card-expanded.cg-expand--collapsing > .cg-expand-options {
+    opacity: 0;
+    transform: translateY(8px);
+    transition:
+        opacity 120ms cubic-bezier(0.22, 1, 0.36, 1),
+        transform 120ms cubic-bezier(0.22, 1, 0.36, 1);
+    pointer-events: none;
+}
+
+.cg-card.cg-card-expanded.cg-expand--settled > .cg-expand-options {
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+
+.cg-card.cg-card-expanded > .cg-expand-options:hover {
+    background: rgba(0, 0, 0, 0.85);
+}
+
+/* Active state — the options button itself signals when edit mode is on. */
+.cg-card.cg-card-expanded > .cg-expand-options.cg-expand-options--active {
+    background: rgba(255, 255, 255, 0.92);
+    color: rgba(0, 0, 0, 0.9);
+}
+
+body.light-mode .cg-card.cg-card-expanded > .cg-expand-options {
+    background: rgba(255, 255, 255, 0.92);
+    color: rgba(0, 0, 0, 0.85);
+}
+
+body.light-mode .cg-card.cg-card-expanded > .cg-expand-options.cg-expand-options--active {
+    background: rgba(0, 0, 0, 0.85);
+    color: rgba(255, 255, 255, 0.95);
+}
+
+/* ── Edit-mode visibility rules ──────────────────────────────────── */
+
+/* Editor row + per-comment regenerate buttons are rendered always but
+   only become visible when the expanded card is in edit mode. */
+.cg-expand-comments-editor {
+    display: none;
+}
+
+.cg-card.cg-card-expanded.cg-edit-mode .cg-expand-comments-editor {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 14px 0 18px 0;
+    padding: 14px 16px;
+    border: 1px dashed rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.cg-expand-comments-editor-status {
+    flex: 1 1 100%;
+    min-height: 14px;
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.cg-expand-comments-regen-all-btn {
+    background: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.cg-expand-comments-regen-all-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.35);
+}
+
+.cg-expand-comments-regen-all-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+/* Per-comment regenerate icon button. Hidden by default; visible only
+   when the expanded card is in edit mode. */
+.cg-expand-comment-regen-btn {
+    display: none;
+    align-items: center;
+    gap: 4px;
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    padding: 3px 8px;
+    margin-left: auto;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+
+.cg-card.cg-card-expanded.cg-edit-mode .cg-expand-comment-regen-btn {
+    display: inline-flex;
+}
+
+.cg-expand-comment-regen-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.14);
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.cg-expand-comment-regen-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.cg-expand-comment-regen-btn--loading svg {
+    animation: cg-expand-regen-spin 0.9s linear infinite;
+}
+
+@keyframes cg-expand-regen-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* Edit-mode visual treatment — subtle highlight on each comment so the
+   editing affordance is unmistakable. */
+.cg-card.cg-card-expanded.cg-edit-mode .cg-expand-comment {
+    transition: background 0.15s ease;
+}
+
+.cg-card.cg-card-expanded.cg-edit-mode .cg-expand-comment:hover {
+    background: rgba(255, 255, 255, 0.025);
+}
+
+body.light-mode .cg-card.cg-card-expanded.cg-edit-mode .cg-expand-comments-editor {
+    border-color: rgba(0, 0, 0, 0.15);
+    background: rgba(0, 0, 0, 0.02);
+}
+
+body.light-mode .cg-expand-comments-regen-all-btn {
+    background: rgba(0, 0, 0, 0.06);
+    color: rgba(0, 0, 0, 0.85);
+    border-color: rgba(0, 0, 0, 0.25);
+}
+
+body.light-mode .cg-expand-comment-regen-btn {
+    background: rgba(0, 0, 0, 0.04);
+    color: rgba(0, 0, 0, 0.6);
+    border-color: rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .cg-expand-comment-regen-btn:hover:not(:disabled) {
+    background: rgba(0, 0, 0, 0.08);
+    color: rgba(0, 0, 0, 0.85);
+}
+
+body.light-mode .cg-expand-comments-editor-status {
+    color: rgba(0, 0, 0, 0.55);
 }
 
 /* Actions row — Netflix-style Resume button */
@@ -13373,6 +13734,371 @@ body.light-mode .cg-expand-prompt-inline {
 .cg-expand-tags {
     color: rgba(255, 255, 255, 0.85);
     font-size: 12px;
+}
+
+/* ── Light-mode overrides for the expanded card shell ──────────────── */
+body.light-mode .cg-card-backdrop {
+    background: rgba(240, 243, 247, 0.55);
+}
+body.light-mode .cg-card.cg-card-expanded {
+    background: var(--bg-elevated);
+    box-shadow: 0 30px 80px rgba(20, 30, 50, 0.22), 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+body.light-mode .cg-card.cg-card-expanded > .cg-card-icon {
+    background: var(--bg-base);
+}
+body.light-mode .cg-card.cg-card-expanded > .cg-card-icon::after {
+    background: linear-gradient(
+        to bottom,
+        rgba(228, 233, 240, 0) 40%,
+        rgba(228, 233, 240, 0.5) 72%,
+        rgba(228, 233, 240, 0.95) 100%
+    );
+}
+body.light-mode .cg-card.cg-card-expanded .cg-card-overlay-title {
+    text-shadow:
+        0 4px 24px rgba(255, 255, 255, 0.85),
+        0 2px 6px rgba(255, 255, 255, 0.9);
+}
+body.light-mode .cg-card.cg-card-expanded > .cg-card-score-line {
+    background: var(--bg-elevated);
+}
+body.light-mode .cg-card.cg-card-expanded > .cg-card-expand-panel {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+}
+body.light-mode .cg-card.cg-card-expanded > .cg-card-expand-panel::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.18);
+}
+body.light-mode .cg-card.cg-card-expanded .cg-expand-col-right {
+    scrollbar-color: rgba(0, 0, 0, 0.16) transparent;
+}
+body.light-mode .cg-card.cg-card-expanded .cg-expand-col-right::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.16);
+}
+body.light-mode .cg-card.cg-card-expanded > .cg-expand-close {
+    background: rgba(255, 255, 255, 0.7);
+    color: var(--text-primary);
+}
+body.light-mode .cg-card.cg-card-expanded > .cg-expand-close:hover {
+    background: rgba(255, 255, 255, 0.9);
+}
+body.light-mode .cg-card.cg-card-expanded .cg-expand-add {
+    background: var(--text-primary);
+    color: var(--bg-surface);
+}
+body.light-mode .cg-card.cg-card-expanded .cg-expand-add:hover {
+    background: rgba(26, 35, 51, 0.85);
+}
+body.light-mode .cg-card.cg-card-expanded .cg-expand-add.cg-expand-add-active {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+body.light-mode .cg-card.cg-card-expanded .cg-expand-design-link {
+    background: rgba(0, 0, 0, 0.08);
+    color: var(--text-primary);
+}
+body.light-mode .cg-card.cg-card-expanded .cg-expand-design-link:hover {
+    background: rgba(0, 0, 0, 0.14);
+    color: var(--text-primary);
+}
+body.light-mode .cg-card.cg-card-expanded .cg-expand-effect-tag {
+    background: rgba(0, 0, 0, 0.06);
+    color: var(--text-primary);
+}
+body.light-mode .cg-expand-prompt {
+    color: var(--text-primary);
+}
+body.light-mode .cg-card.cg-card-expanded .cg-expand-duration {
+    color: var(--text-muted);
+}
+body.light-mode .cg-expand-meta-row {
+    color: var(--text-primary);
+}
+body.light-mode .cg-expand-meta-row .cg-expand-section-label {
+    color: var(--text-muted);
+}
+body.light-mode .cg-card.cg-card-expanded .cg-expand-class-badge,
+body.light-mode .cg-card.cg-card-expanded .cg-expand-substance-item {
+    color: var(--text-primary);
+}
+body.light-mode .cg-expand-tags {
+    color: var(--text-secondary);
+}
+body.light-mode .cg-expand-comments-section {
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+/* ── Expanded card reviews section ─────────────────────────────────── */
+.cg-expand-comments-section {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    font-family: 'IBM Plex Mono', monospace;
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.cg-expand-comments-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.cg-expand-comments-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.75);
+}
+
+.cg-expand-comments-avg {
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.cg-expand-comments-count {
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.cg-expand-comments-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-height: 320px;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.cg-expand-comments-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.cg-expand-comments-list::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+}
+
+.cg-expand-comment {
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.cg-expand-comment:last-child {
+    border-bottom: none;
+}
+
+.cg-expand-comment-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.cg-expand-comment-name {
+    color: rgba(255, 255, 255, 0.95);
+    font-weight: 600;
+}
+
+.cg-expand-comment-handle {
+    color: rgba(188, 151, 82, 0.85);
+}
+
+.cg-expand-comment-verified {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: rgba(188, 151, 82, 0.18);
+    color: rgba(188, 151, 82, 0.95);
+    border: 1px solid rgba(188, 151, 82, 0.32);
+    letter-spacing: 0.04em;
+}
+
+.cg-expand-comment-stars {
+    margin-left: auto;
+}
+
+.cg-expand-comment-time {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 10px;
+}
+
+.cg-expand-comment-text {
+    margin: 6px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: rgba(255, 255, 255, 0.85);
+    font-family: 'IBM Plex Mono', monospace;
+}
+
+.cg-expand-comment-foot {
+    margin-top: 6px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.cg-expand-comment-helpful {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+body.light-mode .cg-expand-comments-section {
+    border-top-color: rgba(0, 0, 0, 0.08);
+    color: rgba(0, 0, 0, 0.8);
+}
+
+body.light-mode .cg-expand-comments-summary,
+body.light-mode .cg-expand-comment-head,
+body.light-mode .cg-expand-comment-text {
+    color: rgba(0, 0, 0, 0.7);
+}
+
+/* ── Generate Comments UI (shown when a cycle has no cached reviews) ── */
+
+.cg-expand-comments-section--empty {
+    padding-bottom: 32px;
+}
+
+.cg-expand-comments-empty-note {
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 12px;
+    font-style: italic;
+    max-width: 540px;
+}
+
+.cg-expand-comments-generator {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 18px;
+    padding: 16px;
+    border: 1px dashed rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.cg-expand-comments-gen-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-family: 'IBM Plex Mono', monospace;
+}
+
+.cg-expand-comments-gen-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.cg-expand-comments-provider,
+.cg-expand-comments-model {
+    background: rgba(0, 0, 0, 0.35);
+    color: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    min-width: 140px;
+    cursor: pointer;
+}
+
+.cg-expand-comments-provider:focus,
+.cg-expand-comments-model:focus {
+    outline: none;
+    border-color: rgba(255, 255, 255, 0.45);
+}
+
+.cg-expand-comments-generate-btn {
+    background: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.cg-expand-comments-generate-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.35);
+}
+
+.cg-expand-comments-generate-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.cg-expand-comments-gen-status {
+    flex: 1 1 100%;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.6);
+    font-family: 'IBM Plex Mono', monospace;
+    min-height: 16px;
+}
+
+body.light-mode .cg-expand-comments-generator {
+    border-color: rgba(0, 0, 0, 0.15);
+    background: rgba(0, 0, 0, 0.02);
+}
+
+body.light-mode .cg-expand-comments-provider,
+body.light-mode .cg-expand-comments-model {
+    background: rgba(255, 255, 255, 0.85);
+    color: rgba(0, 0, 0, 0.85);
+    border-color: rgba(0, 0, 0, 0.18);
+}
+
+body.light-mode .cg-expand-comments-generate-btn {
+    background: rgba(0, 0, 0, 0.06);
+    color: rgba(0, 0, 0, 0.85);
+    border-color: rgba(0, 0, 0, 0.25);
+}
+
+body.light-mode .cg-expand-comments-empty-note,
+body.light-mode .cg-expand-comments-gen-status {
+    color: rgba(0, 0, 0, 0.55);
+}
+
+body.light-mode .cg-expand-comments-gen-label {
+    color: rgba(0, 0, 0, 0.55);
+}
+
+body.light-mode .cg-expand-comment-name {
+    color: rgba(0, 0, 0, 0.9);
+}
+
+body.light-mode .cg-expand-comment-handle {
+    color: rgba(161, 125, 50, 0.9);
+}
+
+body.light-mode .cg-expand-comment-verified {
+    background: rgba(161, 125, 50, 0.12);
+    color: rgba(161, 125, 50, 0.95);
+    border-color: rgba(161, 125, 50, 0.35);
+}
+
+body.light-mode .cg-expand-comment {
+    border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .cg-expand-comment-time,
+body.light-mode .cg-expand-comment-foot,
+body.light-mode .cg-expand-comments-count {
+    color: rgba(0, 0, 0, 0.45);
 }
 
 /* ── Expanded card confidence detail ───────────────────────────────── */
@@ -13593,6 +14319,21 @@ body.light-mode .cg-card.cg-card-expanded .cg-expand-agent-score {
     position: relative;
 }
 
+/* Placeholder while the 3D scene init is deferred (hover-to-init / idle).
+   A subtle vignette suggests the device area without paying the Three.js
+   bring-up cost on every card expand. */
+.cg-trailer-device-slot--pending {
+    background:
+        radial-gradient(
+            ellipse 60% 70% at 50% 55%,
+            rgba(255, 255, 255, 0.05) 0%,
+            rgba(255, 255, 255, 0.015) 40%,
+            transparent 75%
+        ),
+        radial-gradient(ellipse 80% 50% at 50% 100%, rgba(0, 0, 0, 0.35) 0%, transparent 70%);
+    cursor: pointer;
+}
+
 /* Let the canvas render at full size, cropping the bottom */
 .cg-trailer-device-slot > .cg-trailer-device {
     position: absolute;
@@ -13743,7 +14484,8 @@ body.light-mode .cg-expand-agent-row {
 
 .cg-card.cg-card-expanded > .cg-card-expand-panel .cg-expand-meta-row,
 .cg-card.cg-card-expanded > .cg-card-expand-panel .cg-expand-agent-row,
-.cg-card.cg-card-expanded > .cg-card-expand-panel .cg-expand-substances {
+.cg-card.cg-card-expanded > .cg-card-expand-panel .cg-expand-substances,
+.cg-card.cg-card-expanded > .cg-card-expand-panel .cg-expand-comments-section {
     opacity: 0;
     transform: translateY(8px);
     transition:
@@ -13753,7 +14495,8 @@ body.light-mode .cg-expand-agent-row {
 
 .cg-card.cg-card-expanded.cg-expand--revealed > .cg-card-expand-panel .cg-expand-meta-row,
 .cg-card.cg-card-expanded.cg-expand--revealed > .cg-card-expand-panel .cg-expand-agent-row,
-.cg-card.cg-card-expanded.cg-expand--revealed > .cg-card-expand-panel .cg-expand-substances {
+.cg-card.cg-card-expanded.cg-expand--revealed > .cg-card-expand-panel .cg-expand-substances,
+.cg-card.cg-card-expanded.cg-expand--revealed > .cg-card-expand-panel .cg-expand-comments-section {
     opacity: 1;
     transform: none;
 }
@@ -14533,3 +15276,332 @@ body.light-mode .rx-badge-score-rx {
     font-size: 10px;
     font-weight: 400;
 }
+
+/* ── Stars (efficacy rating) ──────────────────────────────────────── */
+/* Monochrome treatment — no gold. Filled stars take the page text color at
+ * high opacity, empties drop to a faint outline. Reads as a premium rating
+ * pip rather than a Yelp-style gold badge. The KOL gold accent is reserved
+ * for the creator avatar / hero, not the rating. */
+
+.lx-stars {
+    display: inline-flex;
+    align-items: center;
+    line-height: 1;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.lx-star {
+    position: relative;
+    display: inline-block;
+    line-height: 1;
+}
+
+.lx-star-empty {
+    color: rgba(255, 255, 255, 0.14);
+}
+
+.lx-star-full {
+    color: rgba(255, 255, 255, 0.92);
+}
+
+.lx-star-half {
+    color: rgba(255, 255, 255, 0.14);
+}
+
+.lx-star-half-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 50%;
+    overflow: hidden;
+    color: rgba(255, 255, 255, 0.92);
+    pointer-events: none;
+}
+
+body.light-mode .lx-star-empty,
+body.light-mode .lx-star-half {
+    color: rgba(0, 0, 0, 0.16);
+}
+
+body.light-mode .lx-star-full,
+body.light-mode .lx-star-half-fill {
+    color: rgba(0, 0, 0, 0.78);
+}
+
+/* ── Agent Browser: grid card star badge ──────────────────────────── */
+
+.ab-card-stars {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.ab-card-score {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: #f5c850;
+    opacity: 0.85;
+    font-feature-settings: 'tnum';
+}
+
+/* ── Stream-mode card face: footer row (creator + rating) ─────────── */
+/* The card thumbnail occupies the top of the card; this footer holds the
+ * creator avatar + handle on the left and a single-star efficacy chip on
+ * the right (App Store style). */
+
+.cg-card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 8px 12px 0;
+    padding: 8px 0 2px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    min-width: 0;
+}
+
+.cg-card-creator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.cg-card-creator-avatar {
+    flex: 0 0 24px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    object-fit: cover;
+    overflow: hidden;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.82);
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.cg-card-creator-avatar-fallback {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.cg-card-creator-handle {
+    flex: 1 1 auto;
+    font-size: 11px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.78);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    letter-spacing: 0.005em;
+    line-height: 1.2;
+}
+
+.cg-card-rating {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    line-height: 1;
+}
+
+.cg-card-rating-star {
+    display: inline-block;
+    color: #f5c850;
+    font-size: 13px;
+    line-height: 1;
+    /* Slight optical alignment — star glyph has a heavy bottom */
+    transform: translateY(-0.5px);
+}
+
+.cg-card-rating-score {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.88);
+    font-feature-settings: 'tnum';
+    letter-spacing: 0.02em;
+}
+
+body.light-mode .cg-card-footer {
+    border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode .cg-card-creator-avatar {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.14);
+    color: rgba(0, 0, 0, 0.7);
+}
+
+body.light-mode .cg-card-creator-handle {
+    color: rgba(0, 0, 0, 0.65);
+}
+
+body.light-mode .cg-card-rating-star {
+    /* Darker gold for legibility on light surface */
+    color: #b8860b;
+}
+
+body.light-mode .cg-card-rating-score {
+    color: rgba(0, 0, 0, 0.78);
+}
+
+/* ── Expand panel: creator hero band ──────────────────────────────── */
+
+.cg-card.cg-card-expanded .cg-expand-hero {
+    display: flex;
+    align-items: flex-start;
+    gap: 18px;
+    margin: 0 0 16px;
+    padding: 18px 18px 16px;
+    background: linear-gradient(135deg, rgba(245, 200, 80, 0.07), rgba(245, 200, 80, 0.02));
+    border: 1px solid rgba(245, 200, 80, 0.18);
+    border-radius: 14px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.cg-card.cg-card-expanded .cg-expand-hero:has(.cg-expand-agent-strip:empty) {
+    display: none;
+}
+
+.cg-card.cg-card-expanded .cg-expand-hero .cg-expand-agent-strip {
+    flex: 1 1 auto;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 0;
+    background: transparent;
+    border: none;
+}
+
+.cg-card.cg-card-expanded .cg-expand-hero .cg-expand-agent-avatar {
+    flex: 0 0 96px;
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    background: rgba(245, 200, 80, 0.14);
+    border: 2px solid rgba(245, 200, 80, 0.32);
+    overflow: hidden;
+    font-size: 36px;
+    font-weight: 600;
+    color: #f5c850;
+}
+
+.cg-card.cg-card-expanded .cg-expand-hero .cg-expand-agent-avatar img {
+    opacity: 1;
+}
+
+.cg-card.cg-card-expanded .cg-expand-hero .cg-expand-agent-info {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.cg-card.cg-card-expanded .cg-expand-hero .cg-expand-agent-category {
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    color: rgba(245, 200, 80, 0.6);
+    opacity: 1;
+}
+
+.cg-card.cg-card-expanded .cg-expand-hero .cg-expand-agent-name {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.cg-card.cg-card-expanded .cg-expand-hero .cg-expand-agent-handle {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    opacity: 0.8;
+}
+
+.cg-expand-agent-credentials {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    margin-top: 2px;
+}
+
+.cg-expand-agent-followers {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    opacity: 0.8;
+}
+
+.cg-expand-agent-followers svg {
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
+.cg-expand-agent-tagline {
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+    margin-top: 4px;
+    max-width: 56ch;
+}
+
+.cg-expand-agent-rating {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.18);
+    border: 1px solid rgba(245, 200, 80, 0.18);
+    border-radius: 10px;
+    min-width: 92px;
+}
+
+.cg-expand-agent-rating-score {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: 600;
+    color: #f5c850;
+    line-height: 1;
+    font-feature-settings: 'tnum';
+}
+
+.cg-expand-agent-rating-label {
+    font-size: 8.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+}
+
+.cg-expand-hero-meta {
+    display: none;
+}
+
+body.light-mode .cg-card.cg-card-expanded .cg-expand-hero {
+    background: linear-gradient(135deg, rgba(245, 200, 80, 0.14), rgba(245, 200, 80, 0.04));
+    border-color: rgba(180, 120, 0, 0.3);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode .cg-card.cg-card-expanded .cg-expand-hero .cg-expand-agent-name {
+    color: rgba(0, 0, 0, 0.85);
+}
+
+body.light-mode .cg-card.cg-card-expanded .cg-expand-hero .cg-expand-agent-category {
+    color: rgba(180, 120, 0, 0.65);
+}
+
+body.light-mode .cg-expand-agent-rating {
+    background: rgba(255, 255, 255, 0.5);
+    border-color: rgba(180, 120, 0, 0.28);
+}
+

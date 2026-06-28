@@ -2,8 +2,9 @@
 import type { AgentConfig } from './creator-agent-types';
 import { DOSING_LABELS } from './creator-agent-types';
 import { BUNDLED_AGENTS } from './creator-agents/index';
-import { openAgentDesigner, renderAgentCard } from './creator-agent-designer';
+import { openAgentDesigner, openAgentPreviewCard, renderAgentCard } from './creator-agent-designer';
 import { settingsStore } from './settings-store';
+import { renderStars, formatScore } from './stars';
 import { escapeHtml as esc } from './utils';
 
 // ── DOM refs ─────────────────────────────────────────────────────────
@@ -81,7 +82,9 @@ function renderGrid(agents: AgentConfig[]): void {
         const agentIdx = parseInt(card.dataset.agentIdx ?? '', 10);
         const agent = agents[agentIdx];
         if (agent) {
-            closeAgentBrowser(() => openAgentDesigner(agent, true, () => openAgentBrowser()));
+            openAgentPreviewCard(agent, {
+                onEdit: () => closeAgentBrowser(() => openAgentDesigner(agent, true, () => openAgentBrowser())),
+            });
         }
     });
 }
@@ -101,6 +104,12 @@ function cardHtml(agent: AgentConfig, idx: number): string {
 
     const dosingIdx = Math.min(4, Math.round(agent.substancePalette.dosingPhilosophy * 4));
     const dosingLabel = DOSING_LABELS[dosingIdx] ?? 'Moderate';
+
+    const efficacy = agent.efficacyScore ?? 0;
+    const starsHtml =
+        efficacy > 0
+            ? `<span class="ab-card-stars" title="Efficacy ${formatScore(efficacy)}/5">${renderStars(efficacy, 'sm')}<span class="ab-card-score">${formatScore(efficacy)}</span></span>`
+            : '';
 
     const isSaved = !bundledIds.has(agent.id);
     const deleteBtn = isSaved
@@ -127,6 +136,7 @@ function cardHtml(agent: AgentConfig, idx: number): string {
             <div class="ab-card-tags">${tags}</div>
             <div class="ab-card-footer">
                 <span class="ab-card-dosing">${esc(dosingLabel)}</span>
+                ${starsHtml}
             </div>
         </div>`;
 }

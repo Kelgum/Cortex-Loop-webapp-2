@@ -6,6 +6,23 @@ Lx.Studio is a prompt-driven pharmacodynamic visualizer. The user describes a de
 
 **Stack:** Vanilla HTML/CSS/TypeScript. Powered by Vite for local development and build. Single-page app served from `index.html`.
 
+## AppDaemon
+
+Before launching a dev server, query AppDaemon:
+
+```sh
+APPDAEMON="/Applications/AppDaemon.app/Contents/MacOS/AppDaemon"
+"$APPDAEMON" --status --cwd "$PWD" --json
+APP_URL="$("$APPDAEMON" --url --cwd "$PWD")"
+```
+
+If the status is `running` or `duplicate`, use the AppDaemon URL for browser
+tests and do not start another Vite server. If the status is `stopped` or
+`port-mismatch`, prefer launching/restarting through AppDaemon, or ask the user
+before running `npm run dev`.
+
+Static fallback URL: `http://lx-studio.localhost:56547/`.
+
 **Files:**
 - `index.html` — Structure (prompt shell, phase chart SVG, top controls, biometric strip UI)
 - `styles.css` — Dark/light theme styling, animations, responsive layout

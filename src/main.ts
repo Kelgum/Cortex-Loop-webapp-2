@@ -2627,6 +2627,11 @@ export function initThemeToggle() {
                 .forEach((img: any) => {
                     img.src = isLight ? img.dataset.srcLight : img.dataset.srcDark;
                 });
+            // Stream cards bake theme-dependent colors into inline styles at render
+            // time (overlay title color via getTitleColor → darkenForLightMode). Re-run
+            // buildCardHtml for each card so the new theme's colors take effect without
+            // requiring a page refresh.
+            refreshStreamCardPresentation();
         });
     }
 }
