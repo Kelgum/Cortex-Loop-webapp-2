@@ -87,6 +87,28 @@ let _beatSlotActive: 'a' | 'b' = 'a';
 let _heroCrossfadeTimer: ReturnType<typeof setTimeout> | null = null;
 let _sourceHeroSvgEl: SVGElement | null = null;
 
+// ── Deferred 3D device init ───────────────────────────────────────
+// The 3D device is heavy: ~10 MB JSON model, ~600 BufferGeometry instances,
+// antialiased Three.js renderer at devicePixelRatio. Initializing it
+// immediately after the FLIP introduces a 250-500ms sync block plus a
+// concurrent render loop competing with the trailer's SVG morph rAFs.
+// We defer creation until the user hovers the device slot OR the panel
+// has been idle long enough that init can happen without disturbing the
+// trailer playback. Tablet reveals that fire before init lands are
+// queued and replayed once the player is ready.
+interface PendingTabletReveal {
+    idx: number;
+    color: string;
+    capsule: boolean;
+    duration: number;
+}
+let _device3DSlotEl: HTMLElement | null = null;
+let _device3DInitArmed = false;
+let _device3DPendingTablets: PendingTabletReveal[] = [];
+let _device3DHoverHandler: (() => void) | null = null;
+let _device3DIdleId: number | null = null;
+let _device3DIdleTimer: ReturnType<typeof setTimeout> | null = null;
+
 // ── Utility ───────────────────────────────────────────────────────
 
 function formatTime(minutes: number): string {
@@ -438,48 +460,19 @@ export function initTrailer(clone: HTMLElement, bundle: any, _cycleId: string): 
     }
     _svgEl = svg;
 
-    // Build the 3D dose.player device inside a reserved slot so the body
-    // layout is stable before async enrichment and trailer startup.
+    // The 3D device is the heaviest piece of post-FLIP work. Don't init it
+    // up front — show a placeholder slot, then bring up Three.js on the
+    // first hover OR after a long idle window. Tablet reveals that fire
+    // before init lands are queued and replayed.
     const panelEl = clone.querySelector('.cg-card-expand-panel');
     if (panelEl) {
-        try {
-            const slotEl = panelEl.querySelector('.cg-trailer-device-slot') as HTMLElement | null;
-            const deviceContainer = document.createElement('div');
-            deviceContainer.className = 'cg-trailer-device';
-
-            const slotWidth = Math.round(slotEl?.getBoundingClientRect().width || 0);
-            const devSize = Math.round(Math.min(560, Math.max(320, slotWidth || 420)) * 1.4);
-            const player = new LxPlayer3D({ width: devSize, height: devSize });
-            const canvas = player.getCanvas();
-            canvas.style.width = '100%';
-            canvas.style.height = '100%';
-            canvas.style.display = 'block';
-            canvas.style.opacity = '0';
-            deviceContainer.appendChild(canvas);
-
-            if (slotEl) {
-                slotEl.replaceChildren(deviceContainer);
-            } else {
-                panelEl.appendChild(deviceContainer);
-            }
-
-            _deviceContainerEl = deviceContainer;
-            _player3d = player;
-
-            // Load model async, hide tablets (will reveal per-step), start spinning
-            void preloadLxPlayerModel('v1').then(parts => {
-                if (!_trailerActive || !_player3d) return;
-                _player3d.loadModel(parts, 'v1');
-                _player3d.prepareTabletsHidden();
-                _player3d.setCameraPreset('isometric');
-                _player3d.startRenderLoop();
-            });
-        } catch {
-            if (_player3d) {
-                _player3d.dispose();
-                _player3d = null;
-            }
-            _deviceContainerEl = null;
+        const slotEl = panelEl.querySelector('.cg-trailer-device-slot') as HTMLElement | null;
+        if (slotEl) {
+            slotEl.classList.add('cg-trailer-device-slot--pending');
+            _device3DSlotEl = slotEl;
+            _device3DInitArmed = true;
+            _device3DPendingTablets = [];
+            _scheduleDeferredDeviceInit(slotEl);
         }
     }
 
@@ -562,6 +555,9 @@ export function stopTrailer(): void {
     _svgEl = null;
     _cloneRef?.removeAttribute('data-trailer-title');
     _sourceHeroSvgEl = null;
+    _clearDevice3DSchedule();
+    _device3DPendingTablets = [];
+    _device3DSlotEl = null;
     if (_player3d) {
         _player3d.stopRenderLoop();
         _player3d.dispose();
@@ -572,6 +568,154 @@ export function stopTrailer(): void {
     _beatStripEl = null;
     _scoreEls = [];
     _cloneRef = null;
+}
+
+interface PathMorphTrack {
+    el: SVGPathElement;
+    from: Array<{ hour: number; value: number }>;
+    to: Array<{ hour: number; value: number }>;
+}
+
+/**
+ * Drive multiple SVG path morphs from one shared rAF callback instead of
+ * spawning a separate rAF chain per effect. Cuts scheduling overhead and
+ * keeps all path writes in a single frame batch.
+ */
+function _runMultiPathMorph(tracks: PathMorphTrack[], durationMs: number): void {
+    if (tracks.length === 0) return;
+    const start = performance.now();
+    const tick = () => {
+        if (!_trailerActive) return;
+        const elapsed = performance.now() - start;
+        const raw = Math.min(1, elapsed / durationMs);
+        const t = easeOutCubic(raw);
+        for (let k = 0; k < tracks.length; k++) {
+            const track = tracks[k];
+            const from = track.from;
+            const to = track.to;
+            const n = Math.min(from.length, to.length);
+            const interp: Array<{ hour: number; value: number }> = new Array(n);
+            for (let i = 0; i < n; i++) {
+                interp[i] = {
+                    hour: from[i].hour + (to[i].hour - from[i].hour) * t,
+                    value: from[i].value + (to[i].value - from[i].value) * t,
+                };
+            }
+            track.el.setAttribute('d', trailerPath(interp));
+        }
+        if (raw < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+}
+
+/**
+ * Wire hover-to-init and a long idle-callback fallback for the 3D device.
+ * The first of the two to fire triggers the actual scene build; the other
+ * is cancelled by stopTrailer or by _ensureDevice3DInit itself.
+ */
+function _scheduleDeferredDeviceInit(slotEl: HTMLElement): void {
+    const fire = () => {
+        if (!_device3DInitArmed) return;
+        _device3DInitArmed = false;
+        _ensureDevice3DInit();
+    };
+    _device3DHoverHandler = fire;
+    slotEl.addEventListener('mouseenter', fire, { once: true });
+    const w = window as unknown as {
+        requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
+    };
+    if (typeof w.requestIdleCallback === 'function') {
+        _device3DIdleId = w.requestIdleCallback(
+            () => {
+                _device3DIdleId = null;
+                fire();
+            },
+            { timeout: 2500 },
+        );
+    } else {
+        _device3DIdleTimer = setTimeout(fire, 1500);
+    }
+}
+
+function _clearDevice3DSchedule(): void {
+    const w = window as unknown as { cancelIdleCallback?: (id: number) => void };
+    if (_device3DIdleId != null && typeof w.cancelIdleCallback === 'function') {
+        w.cancelIdleCallback(_device3DIdleId);
+    }
+    _device3DIdleId = null;
+    if (_device3DIdleTimer != null) {
+        clearTimeout(_device3DIdleTimer);
+        _device3DIdleTimer = null;
+    }
+    if (_device3DSlotEl && _device3DHoverHandler) {
+        _device3DSlotEl.removeEventListener('mouseenter', _device3DHoverHandler);
+    }
+    _device3DHoverHandler = null;
+    _device3DInitArmed = false;
+}
+
+/**
+ * Actually build the Three.js scene and replace the placeholder. Safe to
+ * call multiple times — only the first call does work. Tablet reveals
+ * queued during the deferred window are flushed once the model loads.
+ */
+function _ensureDevice3DInit(): void {
+    if (_player3d) return;
+    const slotEl = _device3DSlotEl;
+    if (!slotEl || !_trailerActive) return;
+    _clearDevice3DSchedule();
+    try {
+        const deviceContainer = document.createElement('div');
+        deviceContainer.className = 'cg-trailer-device';
+
+        const slotWidth = Math.round(slotEl.getBoundingClientRect().width || 0);
+        const devSize = Math.round(Math.min(560, Math.max(320, slotWidth || 420)) * 1.4);
+        const player = new LxPlayer3D({ width: devSize, height: devSize });
+        const canvas = player.getCanvas();
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
+        canvas.style.display = 'block';
+        canvas.style.opacity = '0';
+        deviceContainer.appendChild(canvas);
+
+        slotEl.classList.remove('cg-trailer-device-slot--pending');
+        slotEl.replaceChildren(deviceContainer);
+
+        _deviceContainerEl = deviceContainer;
+        _player3d = player;
+
+        void preloadLxPlayerModel('v1').then(parts => {
+            if (!_trailerActive || !_player3d) return;
+            _player3d.loadModel(parts, 'v1');
+            _player3d.prepareTabletsHidden();
+            _player3d.setCameraPreset('isometric');
+            _player3d.startRenderLoop();
+
+            // Fade the canvas in and start the spin now that the scene is
+            // ready (the trailer's _revealDevice timer fired earlier and
+            // was a no-op while _player3d was null).
+            const c = _player3d.getCanvas();
+            c.animate([{ opacity: 0 }, { opacity: 1 }], {
+                duration: DEVICE_REVEAL_MS,
+                easing: 'ease-out',
+                fill: 'forwards',
+            });
+            _player3d.startSpin(0.3, DEVICE_REVEAL_MS + 250);
+
+            // Flush any tablet reveals that happened before init landed.
+            const pending = _device3DPendingTablets;
+            _device3DPendingTablets = [];
+            for (const t of pending) {
+                _player3d.revealTablet(t.idx, t.color, t.capsule, t.duration);
+            }
+        });
+    } catch {
+        if (_player3d) {
+            (_player3d as LxPlayer3D).dispose();
+            _player3d = null;
+        }
+        _deviceContainerEl = null;
+    }
 }
 
 function _beginHeroCrossfade(): void {
@@ -587,7 +731,7 @@ function _beginHeroCrossfade(): void {
     // Simultaneously morph Lx curves from last-step (matching thumbnail) → baseline.
     // This keeps the crossfade seamless: the trailer SVG starts at the same visual
     // state as the source thumbnail, then "deflates" to baseline before the build-up.
-    const morphStart = performance.now();
+    const tracks: PathMorphTrack[] = [];
     for (let e = 0; e < data.numEffects; e++) {
         const lxEl = _svgEl.querySelector(`[data-trailer-lx="${e}"]`) as SVGPathElement | null;
         if (!lxEl) continue;
@@ -596,26 +740,9 @@ function _beginHeroCrossfade(): void {
         const toPts = data.baselinePoints[e];
         if (!fromPts || !toPts || fromPts.length === 0 || toPts.length === 0) continue;
 
-        const n = Math.min(fromPts.length, toPts.length);
-        const tick = () => {
-            if (!_trailerActive) return;
-            const elapsed = performance.now() - morphStart;
-            const raw = Math.min(1, elapsed / HERO_CROSSFADE_MS);
-            const t = easeOutCubic(raw);
-
-            const interp: Array<{ hour: number; value: number }> = [];
-            for (let i = 0; i < n; i++) {
-                interp.push({
-                    hour: fromPts[i].hour + (toPts[i].hour - fromPts[i].hour) * t,
-                    value: fromPts[i].value + (toPts[i].value - fromPts[i].value) * t,
-                });
-            }
-            lxEl.setAttribute('d', trailerPath(interp));
-
-            if (raw < 1) requestAnimationFrame(tick);
-        };
-        requestAnimationFrame(tick);
+        tracks.push({ el: lxEl, from: fromPts, to: toPts });
     }
+    _runMultiPathMorph(tracks, HERO_CROSSFADE_MS);
 
     if (_heroCrossfadeTimer != null) {
         clearTimeout(_heroCrossfadeTimer);
@@ -664,7 +791,10 @@ function _stepTrailer(): void {
     if (!step) return;
 
     // ── 1. Smooth curve morph (point-by-point interpolation over MORPH_DURATION) ──
+    // Build the per-effect track list, then run all morphs from a single
+    // shared rAF callback rather than N parallel chains.
 
+    const stepTracks: PathMorphTrack[] = [];
     for (let e = 0; e < data.numEffects; e++) {
         const lxEl = _svgEl.querySelector(`[data-trailer-lx="${e}"]`) as SVGPathElement | null;
         if (!lxEl) continue;
@@ -681,29 +811,9 @@ function _stepTrailer(): void {
             continue;
         }
 
-        // rAF-driven interpolation between prevPts and nextPts
-        const morphStart = performance.now();
-        const n = Math.min(prevPts.length, nextPts.length);
-
-        const morphTick = () => {
-            if (!_trailerActive) return;
-            const elapsed = performance.now() - morphStart;
-            const raw = Math.min(1, elapsed / MORPH_DURATION);
-            const t = easeOutCubic(raw);
-
-            const interp: Array<{ hour: number; value: number }> = [];
-            for (let i = 0; i < n; i++) {
-                interp.push({
-                    hour: prevPts[i].hour + (nextPts[i].hour - prevPts[i].hour) * t,
-                    value: prevPts[i].value + (nextPts[i].value - prevPts[i].value) * t,
-                });
-            }
-            lxEl.setAttribute('d', trailerPath(interp));
-
-            if (raw < 1) requestAnimationFrame(morphTick);
-        };
-        requestAnimationFrame(morphTick);
+        stepTracks.push({ el: lxEl, from: prevPts, to: nextPts });
     }
+    _runMultiPathMorph(stepTracks, MORPH_DURATION);
 
     // ── 2. AUC bands — reveal this step's incremental band (previous bands stay visible) ──
 
@@ -726,10 +836,21 @@ function _stepTrailer(): void {
 
     // ── 3. Tablet reveal — load this step's substance into the cartridge ──
     //    Capsule (>300mg) = full-height mesh; tablet (≤300mg) = 1/5 height.
+    //    If the 3D scene hasn't initialized yet (deferred to hover/idle),
+    //    queue the reveal so it plays back once the player is ready.
 
-    if (_player3d && _trailerData) {
+    if (_trailerData) {
         const isCapsule = parseDoseMg(step.dose) > MY_STREAM.capsuleThresholdMg;
-        _player3d.revealTablet(_activeStep, step.substanceColor, isCapsule, 500);
+        if (_player3d) {
+            _player3d.revealTablet(_activeStep, step.substanceColor, isCapsule, 500);
+        } else if (_device3DInitArmed) {
+            _device3DPendingTablets.push({
+                idx: _activeStep,
+                color: step.substanceColor,
+                capsule: isCapsule,
+                duration: 500,
+            });
+        }
     }
 
     // ── 4. Beat strip — single cinematic cross-fade ─────────────────

@@ -30,6 +30,7 @@ import { initSectionOrder } from './mode-switcher';
 import { initBuiltinOverridesStore } from './builtin-overrides-store';
 import { compute7DEffectScores, computeDesignEffectScores, EFFECT_SCORE_FORMULA_VERSION } from './effect-score';
 import { computeProtocolConfidence, CONFIDENCE_FORMULA_VERSION } from './protocol-confidence';
+import { getAgentById } from './creator-agents/index';
 
 let _saveBtn: HTMLButtonElement | null = null;
 let _cycleList: HTMLElement | null = null;
@@ -218,6 +219,23 @@ async function handleSave(): Promise<void> {
     const ivKeys = ivList.map((iv: any) => iv.key).filter(Boolean);
     const confidenceResult = computeProtocolConfidence(ivKeys);
 
+    // Headlining KOL agent — pulled from the agent-match-model bundle stage
+    // so the Stream gallery can render the creator strip without loading
+    // the full bundle.
+    let creatorHandle: string | undefined;
+    let avatarUrl: string | undefined;
+    let creatorName: string | undefined;
+    const matchPayload = bundle.stages?.['agent-match-model']?.payload;
+    const topAgentId: string | undefined = matchPayload?.ranked?.[0]?.agentId;
+    if (topAgentId) {
+        const agent = getAgentById(topAgentId);
+        if (agent) {
+            creatorHandle = agent.meta.creatorHandle;
+            avatarUrl = agent.meta.avatarUrl;
+            creatorName = agent.meta.creatorName || agent.meta.name;
+        }
+    }
+
     const record: SavedCycleRecord = {
         id,
         filename,
@@ -240,6 +258,9 @@ async function handleSave(): Promise<void> {
         effectScoresVersion: effectScores ? EFFECT_SCORE_FORMULA_VERSION : undefined,
         protocolConfidence: confidenceResult?.score,
         confidenceVersion: confidenceResult ? CONFIDENCE_FORMULA_VERSION : undefined,
+        creatorHandle,
+        avatarUrl,
+        creatorName,
         bundle,
     };
 
@@ -522,6 +543,12 @@ function applyLoadedCycleState(): void {
 
 export async function initCycleUi(): Promise<void> {
     await Promise.all([initCycleStore(), initCustomSectionsStore(), initSectionOrder(), initBuiltinOverridesStore()]);
+
+    // Background-fill creator metadata onto any pre-schema cycle entries so
+    // the Stream view can show creator avatars/handles/stars without a manual
+    // resave. Fire-and-forget — the mode-switcher listens for the update
+    // event and re-renders as each batch lands.
+    void import('./cycle-creator-backfill').then(m => m.backfillCreatorMetadata()).catch(() => {});
 
     _saveBtn = document.getElementById('cycle-save-btn') as HTMLButtonElement | null;
     _cycleList = document.getElementById('saved-cycles-list');

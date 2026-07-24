@@ -14,6 +14,23 @@ The demo walks investors through the full Lx.health intelligence pipeline — **
 
 **Stack:** Vanilla TypeScript + Vite. No frameworks. Single-page app. 100% client-side.
 
+## AppDaemon
+
+Before launching a dev server, query AppDaemon:
+
+```sh
+APPDAEMON="/Applications/AppDaemon.app/Contents/MacOS/AppDaemon"
+"$APPDAEMON" --status --cwd "$PWD" --json
+APP_URL="$("$APPDAEMON" --url --cwd "$PWD")"
+```
+
+If the status is `running` or `duplicate`, use the AppDaemon URL for browser
+tests and do not start another Vite server. If the status is `stopped` or
+`port-mismatch`, prefer launching/restarting through AppDaemon, or ask the user
+before running `npm run dev`.
+
+Static fallback URL: `http://lx-studio.localhost:56547/`.
+
 ---
 
 ## Demo Modules

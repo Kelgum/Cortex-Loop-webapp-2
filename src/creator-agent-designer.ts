@@ -11,6 +11,7 @@ import {
 } from './creator-agent-types';
 import { SUBSTANCE_DB } from './substances';
 import { settingsStore } from './settings-store';
+import { renderStars, formatScore } from './stars';
 import { escapeHtml } from './utils';
 
 // ── DOM refs (resolved once during init) ─────────────────────────────
@@ -692,13 +693,39 @@ function syntaxHighlight(json: string): string {
 
 // ── Preview card handler ─────────────────────────────────────────────
 
+let _previewEditCallback: (() => void) | null = null;
+
 function handlePreview(): void {
     const config = serializeAgentForm();
-    previewCard.innerHTML = renderAgentCard(config);
-    previewOverlay.classList.remove('hidden');
+    showPreviewCard(config, { showEdit: false });
 }
 
-export function renderAgentCard(config: AgentConfig): string {
+/**
+ * Open the Preview Card modal as a standalone YouTube-style channel view.
+ * `opts.onEdit` provides a callback for the "Open in Designer" CTA; when
+ * omitted, that secondary CTA is hidden. Used by the agent browser grid.
+ */
+export function openAgentPreviewCard(config: AgentConfig, opts?: { onEdit?: () => void }): void {
+    showPreviewCard(config, { showEdit: !!opts?.onEdit, onEdit: opts?.onEdit });
+}
+
+function showPreviewCard(config: AgentConfig, opts: { showEdit: boolean; onEdit?: () => void }): void {
+    previewCard.innerHTML = renderAgentCard(config, { showEditButton: opts.showEdit });
+    _previewEditCallback = opts.onEdit ?? null;
+    previewOverlay.classList.remove('hidden');
+
+    const editBtn = previewCard.querySelector('.ad-pc-cta-secondary') as HTMLButtonElement | null;
+    if (editBtn) {
+        editBtn.addEventListener('click', () => {
+            previewOverlay.classList.add('hidden');
+            const cb = _previewEditCallback;
+            _previewEditCallback = null;
+            cb?.();
+        });
+    }
+}
+
+export function renderAgentCard(config: AgentConfig, opts?: { showEditButton?: boolean }): string {
     const initial =
         config.meta.creatorName?.charAt(0)?.toUpperCase() || config.meta.name?.charAt(0)?.toUpperCase() || '?';
     const avatarInner = config.meta.avatarUrl
@@ -712,21 +739,55 @@ export function renderAgentCard(config: AgentConfig): string {
 
     const tags = (config.meta.domainTags ?? []).map(t => `<span class="ad-pc-tag">${escapeHtml(t)}</span>`).join('');
 
+    const credentialsHtml = config.meta.credentials
+        ? `<div class="ad-pc-credentials">${escapeHtml(config.meta.credentials)}</div>`
+        : '';
+    const followerHtml = config.meta.followerProxy
+        ? `<div class="ad-pc-followers">
+               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                   <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                   <circle cx="9" cy="7" r="4"/>
+                   <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                   <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+               </svg>
+               <span>${escapeHtml(config.meta.followerProxy)}</span>
+           </div>`
+        : '';
+
+    const efficacy = config.efficacyScore ?? 0;
+    const starsHtml = efficacy > 0 ? renderStars(efficacy, 'lg') : renderStars(0, 'lg');
+    const scoreLabel = efficacy > 0 ? `${formatScore(efficacy)} / 5` : '—';
+
+    const editBtnHtml = opts?.showEditButton
+        ? `<button type="button" class="ad-pc-cta ad-pc-cta-secondary">Open in Designer</button>`
+        : '';
+
     return `
-        <div class="ad-pc-header">
+        <div class="ad-pc-hero">
             <div class="ad-pc-avatar">${avatarInner}</div>
             <div class="ad-pc-identity">
                 <div class="ad-pc-creator-name">${escapeHtml(displayName)}</div>
                 <div class="ad-pc-handle">${escapeHtml(config.meta.creatorHandle)}</div>
+                ${credentialsHtml}
+                ${followerHtml}
             </div>
         </div>
-        <h3 class="ad-pc-name">${escapeHtml(config.meta.name || 'Untitled Agent')}</h3>
-        <p class="ad-pc-tagline">${escapeHtml(config.meta.tagline || 'No tagline')}</p>
-        <div class="ad-pc-tags">${tags || '<span class="ad-pc-tag">No tags</span>'}</div>
+        <div class="ad-pc-rating">
+            <div class="ad-pc-rating-stars">${starsHtml}</div>
+            <div class="ad-pc-rating-meta">
+                <div class="ad-pc-rating-score">${escapeHtml(scoreLabel)}</div>
+                <div class="ad-pc-rating-label">Efficacy</div>
+            </div>
+        </div>
+        <div class="ad-pc-body">
+            <h3 class="ad-pc-name">${escapeHtml(config.meta.name || 'Untitled Agent')}</h3>
+            <p class="ad-pc-tagline">${escapeHtml(config.meta.tagline || 'No tagline')}</p>
+            <div class="ad-pc-tags">${tags || '<span class="ad-pc-tag">No tags</span>'}</div>
+        </div>
         <div class="ad-pc-meta">
             <div class="ad-pc-meta-row">
                 <span class="ad-pc-meta-label">Dosing Philosophy</span>
-                <span class="ad-pc-meta-label">${escapeHtml(dosingLabel)}</span>
+                <span class="ad-pc-meta-value">${escapeHtml(dosingLabel)}</span>
             </div>
             <div class="ad-pc-dosing-bar">
                 <div class="ad-pc-dosing-fill" style="width:${dosingPct}%"></div>
@@ -735,12 +796,11 @@ export function renderAgentCard(config: AgentConfig): string {
                 <span class="ad-pc-meta-label">Domain Match</span>
                 <div class="ad-pc-dosing-bar"><div class="ad-pc-dosing-fill" style="width:72%"></div></div>
             </div>
-            <div class="ad-pc-meta-row">
-                <span class="ad-pc-meta-label">Efficacy Score</span>
-                <span class="ad-pc-stars">&#9733;&#9733;&#9733;&#9734;&#9734;</span>
-            </div>
         </div>
-        <button type="button" class="ad-pc-cta">Select This Agent &rarr;</button>
+        <div class="ad-pc-cta-row">
+            <button type="button" class="ad-pc-cta">Select This Agent &rarr;</button>
+            ${editBtnHtml}
+        </div>
     `;
 }
 

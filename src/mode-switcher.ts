@@ -46,6 +46,8 @@ import { expandCard, collapseExpandedCard } from './card-expander';
 import { isInStream } from './my-stream-store';
 import type { CustomSectionEntry } from './custom-sections-store';
 import { SUBSTANCE_DB } from './substances';
+import { getAgentByHandle } from './creator-agents/index';
+import { formatScore } from './stars';
 import { escapeHtml, clamp } from './utils';
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -262,6 +264,19 @@ export function initModeSwitcher(): void {
                 void handleStreamLoad(id);
             }
         }) as EventListener);
+
+        // Listen for creator-metadata backfill so we can light up the
+        // creator strip + stars on any newly-enriched cards without a
+        // full refresh. Debounce since the backfill fires per-cycle.
+        let _backfillRerenderTimer: ReturnType<typeof setTimeout> | null = null;
+        window.addEventListener('lx:cycle-creator-updated', () => {
+            if (_mode !== 'stream') return;
+            if (_backfillRerenderTimer) clearTimeout(_backfillRerenderTimer);
+            _backfillRerenderTimer = setTimeout(() => {
+                _backfillRerenderTimer = null;
+                rerenderStreamImmediate();
+            }, 350);
+        });
 
         // Drag & drop between sections (edit mode only — handlers gate on _editMode)
         _gridEl.addEventListener('dragstart', handleCardDragStart);
@@ -1449,6 +1464,43 @@ function buildConfidenceHtml(entry: SavedCycleIndexEntry): string {
 
 // ── Card Builder ───────────────────────────────────────────────────────
 
+/**
+ * Bottom footer for a stream card: creator avatar + handle on the left,
+ * compact single-star efficacy rating on the right (App Store style — one
+ * gold star + numeric score, not the full 5-pip set). Returns an empty
+ * string when the entry has no creator metadata.
+ */
+function buildCardFooterHtml(entry: SavedCycleIndexEntry): string {
+    if (!entry.creatorHandle) return '';
+    const agent = getAgentByHandle(entry.creatorHandle);
+    const displayName = entry.creatorName || agent?.meta.creatorName || agent?.meta.name || '';
+    const avatarUrl = entry.avatarUrl || agent?.meta.avatarUrl || '';
+    const initial = (displayName[0] || '?').toUpperCase();
+    const efficacy = agent?.efficacyScore ?? 0;
+
+    const avatarHtml = avatarUrl
+        ? `<img class="cg-card-creator-avatar" src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(displayName)}" onerror="this.outerHTML='<span class=\\'cg-card-creator-avatar cg-card-creator-avatar-fallback\\'>${escapeHtml(initial)}</span>'" />`
+        : `<span class="cg-card-creator-avatar cg-card-creator-avatar-fallback">${escapeHtml(initial)}</span>`;
+
+    const ratingHtml =
+        efficacy > 0
+            ? `<span class="cg-card-rating" title="Efficacy ${escapeHtml(formatScore(efficacy))}/5" aria-label="Efficacy ${escapeHtml(formatScore(efficacy))} out of 5">` +
+              `<span class="cg-card-rating-star" aria-hidden="true">★</span>` +
+              `<span class="cg-card-rating-score">${escapeHtml(formatScore(efficacy))}</span>` +
+              `</span>`
+            : '';
+
+    return (
+        `<div class="cg-card-footer">` +
+        `<div class="cg-card-creator">` +
+        avatarHtml +
+        `<span class="cg-card-creator-handle">${escapeHtml(entry.creatorHandle)}</span>` +
+        `</div>` +
+        ratingHtml +
+        `</div>`
+    );
+}
+
 function buildCardHtml(entry: SavedCycleIndexEntry, activeId: string | null): string {
     const isActive = entry.id === activeId;
     const wide = isWideCard(entry);
@@ -1502,6 +1554,8 @@ function buildCardHtml(entry: SavedCycleIndexEntry, activeId: string | null): st
 
     const draggableAttr = _editMode ? ' draggable="true"' : '';
 
+    const footerHtml = buildCardFooterHtml(entry);
+
     return (
         `<div class="cg-card${isActive ? ' cg-card-active' : ''}${wideClass}${inStreamClass}" data-cycle-id="${escapeHtml(entry.id)}"${draggableAttr}>` +
         cardDeleteHtml +
@@ -1518,6 +1572,7 @@ function buildCardHtml(entry: SavedCycleIndexEntry, activeId: string | null): st
         scoreLineHtml +
         (prompt ? `<p class="cg-card-prompt">${prompt}</p>` : '') +
         (metaStr ? `<div class="cg-card-meta">${metaStr}</div>` : '') +
+        footerHtml +
         `</div>`
     );
 }

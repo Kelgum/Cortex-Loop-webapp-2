@@ -15,9 +15,9 @@ describe('revision model defaults', () => {
 
     it('resolves Grandmaster defaults to the main-tier model for every provider', () => {
         const expectations = [
-            ['anthropic', 'claude-opus-4-7'],
+            ['anthropic', 'claude-opus-4-8'],
             ['openai', 'gpt-5.5'],
-            ['grok', 'grok-4-3'],
+            ['grok', 'grok-4.5'],
             ['gemini', 'gemini-3.5-flash'],
         ] as const;
 

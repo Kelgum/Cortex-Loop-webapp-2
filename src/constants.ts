@@ -94,9 +94,9 @@ export const FAST_MODELS: any = {
 };
 
 export const MAIN_MODELS: any = {
-    anthropic: 'claude-opus-4-7',
+    anthropic: 'claude-opus-4-8',
     openai: 'gpt-5.5',
-    grok: 'grok-4-3',
+    grok: 'grok-4.5',
     gemini: 'gemini-3.5-flash',
 };
 
@@ -161,7 +161,18 @@ export const MODEL_OPTIONS: any = {
             effortFamily: 'anthropic',
             defaultEffort: 'off',
             supportsFastMode: false,
-            isProviderDefaultForTier: true,
+        },
+        {
+            key: 'sonnet5',
+            model: 'claude-sonnet-5',
+            label: 'Sonnet 5',
+            type: 'anthropic',
+            tier: 1,
+            supportsEffort: true,
+            effortFamily: 'anthropic',
+            defaultEffort: 'off',
+            supportsFastMode: false,
+            isProviderDefaultForTier: true, // balanced-tier SOTA (per Backstage registry)
         },
         {
             key: 'opus',
@@ -185,7 +196,19 @@ export const MODEL_OPTIONS: any = {
             effortFamily: 'anthropic',
             defaultEffort: 'adaptive',
             supportsFastMode: false,
-            isProviderDefaultForTier: true,
+        },
+        {
+            key: 'opus48',
+            model: 'claude-opus-4-8',
+            label: 'Opus 4.8',
+            type: 'anthropic',
+            tier: 2,
+            supportsEffort: true,
+            adaptiveOnly: true, // reasoning=adaptive; effort dropdown stays locked like Opus 4.7
+            effortFamily: 'anthropic',
+            defaultEffort: 'adaptive',
+            supportsFastMode: false,
+            isProviderDefaultForTier: true, // frontier-tier SOTA + harness default (per Backstage registry)
         },
     ],
     openai: [
@@ -313,7 +336,18 @@ export const MODEL_OPTIONS: any = {
             effortFamily: 'grok',
             defaultEffort: 'none',
             supportsFastMode: false,
-            isProviderDefaultForTier: true,
+        },
+        {
+            key: '4-5',
+            model: 'grok-4.5',
+            label: '4.5',
+            type: 'openai',
+            tier: 2,
+            supportsEffort: true,
+            effortFamily: 'grok',
+            defaultEffort: 'none',
+            supportsFastMode: false,
+            isProviderDefaultForTier: true, // frontier-tier SOTA (per Backstage registry)
         },
     ],
     gemini: [

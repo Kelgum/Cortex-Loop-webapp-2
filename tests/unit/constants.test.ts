@@ -6,8 +6,8 @@ describe('mapModelAcrossProviders', () => {
     it('maps across providers by nearest tier', () => {
         // Fast tier (Haiku) → Fast tier OpenAI (5.5 Instant)
         expect(mapModelAcrossProviders('anthropic', 'haiku', 'openai')).toBe('5.5-instant');
-        // Main tier OpenAI (5.5) → Main tier Anthropic (Opus 4.7)
-        expect(mapModelAcrossProviders('openai', '5.5', 'anthropic')).toBe('opus47');
+        // Main tier OpenAI (5.5) → Main tier Anthropic (Opus 4.8, the SOTA frontier default)
+        expect(mapModelAcrossProviders('openai', '5.5', 'anthropic')).toBe('opus48');
         // Main tier Grok (4.3) → Main tier Gemini (3.5 Flash, post-I/O 2026)
         expect(mapModelAcrossProviders('grok', '4-3', 'gemini')).toBe('flash-35');
     });

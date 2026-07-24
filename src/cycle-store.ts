@@ -81,6 +81,16 @@ export interface SavedCycleIndexEntry {
     hasRxTwin?: boolean;
     /** 7D gap-closure % per curve for the Rx-SOC twin (aligned to curveEffects). */
     rxEffectScores?: number[];
+    /**
+     * Headlining KOL agent for this protocol — populated from the
+     * agent-match-model bundle stage at save time so the Stream gallery can
+     * render the creator strip without loading the full bundle.
+     */
+    creatorHandle?: string;
+    /** Avatar URL for the headlining agent (mirrors AgentMeta.avatarUrl). */
+    avatarUrl?: string;
+    /** Display name for the headlining agent (mirrors AgentMeta.creatorName). */
+    creatorName?: string;
 }
 
 export interface SavedCycleRecord extends SavedCycleIndexEntry {
@@ -169,6 +179,9 @@ export async function patchCycle(
         protocolConfidence?: number;
         confidenceVersion?: number;
         rxTwin?: RxSocTwin | null;
+        creatorHandle?: string;
+        avatarUrl?: string;
+        creatorName?: string;
     },
 ): Promise<void> {
     const res = await fetch(`/__cycles/${encodeURIComponent(id)}`, {
@@ -203,6 +216,9 @@ export async function patchCycle(
                 entry.hasRxTwin = !!patch.rxTwin;
                 entry.rxEffectScores = patch.rxTwin?.effectScores;
             }
+            if (typeof patch.creatorHandle === 'string') entry.creatorHandle = patch.creatorHandle;
+            if (typeof patch.avatarUrl === 'string') entry.avatarUrl = patch.avatarUrl;
+            if (typeof patch.creatorName === 'string') entry.creatorName = patch.creatorName;
         }
     }
 }

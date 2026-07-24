@@ -108,9 +108,11 @@ const STAGE_TIER: Record<string, 0 | 1 | 2> = {
 
 // Per-provider model key per tier slot. Mid-tier defaults are the new addition.
 const TIER_DEFAULT_KEYS: Record<string, Record<0 | 1 | 2, string>> = {
-    anthropic: { 0: 'haiku', 1: 'sonnet', 2: 'opus47' },
+    // Mid/frontier tiers track the SOTA picks from the Backstage model registry
+    // (Sonnet 5 balanced, Opus 4.8 frontier; Grok 4.5 frontier).
+    anthropic: { 0: 'haiku', 1: 'sonnet5', 2: 'opus48' },
     openai: { 0: '5.5-instant', 1: '5.4-mini', 2: '5.5' },
-    grok: { 0: 'fast', 1: '4-20', 2: '4-3' },
+    grok: { 0: 'fast', 1: '4-20', 2: '4-5' },
     // Gemini 3.5 Flash (May 2026 release) is now the Main default: Intelligence
     // Index 55, ~4× faster than comparable frontier models, beats 3.1 Pro on
     // coding/agentic benchmarks at $1.50/$9 per Mt.
@@ -280,7 +282,9 @@ export function switchStageProvider(stage: string, newProvider: string) {
 export function switchStageModel(stage: string, newModelKey: string) {
     const provider = AppState.stageProviders[stage];
     const opts = MODEL_OPTIONS[provider] || [];
-    const resolved = opts.some((o: any) => o.key === newModelKey) ? newModelKey : getDefaultStageModelKey(stage, provider);
+    const resolved = opts.some((o: any) => o.key === newModelKey)
+        ? newModelKey
+        : getDefaultStageModelKey(stage, provider);
 
     AppState.stageModels[stage] = resolved;
     settingsStore.setString(stageModelKey(stage), resolved);
@@ -511,9 +515,7 @@ export function getStageModel(stage: any) {
     }
 
     const entry = opts.find((o: any) => o.key === resolvedKey) || opts[0] || { model: 'unknown', type: 'openai' };
-    const effort = entry?.supportsEffort
-        ? AppState.stageEfforts[stage] || defaultEffortForModel(entry)
-        : '';
+    const effort = entry?.supportsEffort ? AppState.stageEfforts[stage] || defaultEffortForModel(entry) : '';
     const fastMode = entry?.supportsFastMode ? !!AppState.stageFastMode[stage] : false;
     return {
         model: entry.model,
