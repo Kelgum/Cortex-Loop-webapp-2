@@ -1473,7 +1473,12 @@ export default defineConfig({
         // LAN access by hostname: Vite 6+ blocks unknown Host headers (a DNS-rebinding
         // guard). This box serves Studio to the MacBook as perrys-mac-mini[.local], so
         // allow those. (Sibling Backstage escapes this only by still being on Vite 5.)
-        allowedHosts: ['perrys-mac-mini', 'perrys-mac-mini.local'],
+        // studio.biostaq.com is a public A record → the mini's Tailscale IP
+        // (100.83.58.81): Backstage's strategist node frames Studio under that name
+        // DELIBERATELY — a cross-SITE hostname puts the iframe in its own Chrome
+        // process, so Studio's ~1 GB never lands inside Backstage's renderer and is
+        // fully reclaimed when the tab closes (same-site :5173 would ratchet it).
+        allowedHosts: ['perrys-mac-mini', 'perrys-mac-mini.local', 'studio.biostaq.com'],
         watch: {
             ignored: [
                 '**/.cortex-debug/**',
